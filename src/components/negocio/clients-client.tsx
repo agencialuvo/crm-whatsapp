@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Eye, History, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Eye, History, Pencil, Plus, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ClientDialog } from "@/components/negocio/client-dialog";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -43,6 +44,7 @@ export function ClientsClient({
   const [bulkRemoving, setBulkRemoving] = useState(false);
   const [historyId, setHistoryId] = useState<string | null>(null);
   // `undefined`: cerrado · `null`: alta de un cliente nuevo · texto: la ficha de ese cliente.
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [openId, setOpenId] = useState<string | null | undefined>(undefined);
   // El ojo abre la ficha en solo lectura; el lápiz, directo en edición.
   const [openView, setOpenView] = useState(false);
@@ -162,15 +164,21 @@ export function ClientsClient({
             className="pl-9"
           />
         </div>
-        <Button
-          onClick={() => {
-            setOpenView(false);
-            setOpenId(null);
-          }}
-        >
-          <Plus className="h-4 w-4" aria-hidden />
-          Nuevo cliente
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            <Upload className="h-4 w-4" aria-hidden />
+            Carga masiva
+          </Button>
+          <Button
+            onClick={() => {
+              setOpenView(false);
+              setOpenId(null);
+            }}
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            Nuevo cliente
+          </Button>
+        </div>
       </div>
 
       {data && clients.length > 0 && (
@@ -432,6 +440,10 @@ export function ClientsClient({
             </nav>
           )}
         </>
+      )}
+
+      {bulkOpen && (
+        <BulkImportDialog module="clientes" onClose={() => setBulkOpen(false)} onImported={() => void load(query)} />
       )}
 
       {openId !== undefined && (

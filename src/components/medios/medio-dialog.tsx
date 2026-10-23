@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Download, Trash2 } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, Download, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +22,8 @@ export function MedioDialog({
   onClose,
   onPrev,
   onNext,
+  copiado,
+  onCopy,
   onRenamed,
   onDelete,
 }: {
@@ -31,6 +33,9 @@ export function MedioDialog({
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
+  /** «URL copiada» reciente: el botón lo confirma un momento. */
+  copiado: boolean;
+  onCopy: () => void;
   onRenamed: (medio: MedioDto) => void;
   onDelete: () => void;
 }) {
@@ -155,13 +160,19 @@ export function MedioDialog({
         </form>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-          <a
-            href={`${medio.ruta}?descargar=1`}
-            className="inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Download className="h-4 w-4" aria-hidden />
-            Descargar
-          </a>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={onCopy} disabled={busy}>
+              {copiado ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+              {copiado ? "¡URL copiada!" : "Copiar URL"}
+            </Button>
+            <a
+              href={`${medio.ruta}?descargar=1`}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Download className="h-4 w-4" aria-hidden />
+              Descargar
+            </a>
+          </div>
           <Button
             type="button"
             variant="outline"

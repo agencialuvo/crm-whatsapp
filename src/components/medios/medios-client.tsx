@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ImageIcon, Loader2, Play, Search, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, ImageIcon, Loader2, Play, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog } from "@/components/negocio/modal";
+import { absoluteMediaUrl, copyText } from "@/components/medios/copy-url";
 import { MedioDialog } from "@/components/medios/medio-dialog";
 import { subirArchivo } from "@/components/medios/upload";
 import {
@@ -48,6 +49,9 @@ export function MediosClient() {
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const contador = useRef(0);
+  // Aviso de «URL copiada» (tarjeta o ventana), que se apaga solo.
+  const [copiado, setCopiado] = useState<string | null>(null);
+  const copiadoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cargar = useCallback(async () => {
     setLoadError(null);
@@ -61,7 +65,30 @@ export function MediosClient() {
 
   useEffect(() => {
     void cargar();
+    return () => {
+      if (copiadoTimer.current) clearTimeout(copiadoTimer.current);
+    };
   }, [cargar]);
+
+  async function copiar(m: MedioDto) {
+    const ok = await copyText(absoluteMediaUrl(m.ruta));
+    if (!ok) {
+      setEnvios((e) => [
+        ...e,
+        {
+          key: `copy-${Date.now()}`,
+          nombre: m.nombre,
+          estado: "error",
+          progreso: 0,
+          error: "Tu navegador no dejó copiar la URL. Inténtalo de nuevo o usa otro navegador.",
+        },
+      ]);
+      return;
+    }
+    setCopiado(m.id);
+    if (copiadoTimer.current) clearTimeout(copiadoTimer.current);
+    copiadoTimer.current = setTimeout(() => setCopiado(null), 2000);
+  }
 
   const visibles = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -426,6 +453,18 @@ export function MediosClient() {
               </label>
               <button
                 type="button"
+                onClick={() => void copiar(m)}
+                aria-label={copiado === m.id ? "URL copiada" : `Copiar URL de ${m.nombre}`}
+                title={copiado === m.id ? "¡URL copiada!" : "Copiar URL"}
+                className={cn(
+                  "absolute right-12 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition-opacity hover:bg-black/80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                  copiado === m.id ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                )}
+              >
+                {copiado === m.id ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+              </button>
+              <button
+                type="button"
                 onClick={() => setBorrando([m])}
                 aria-label={`Borrar ${m.nombre}`}
                 title="Borrar"
@@ -465,6 +504,8 @@ export function MediosClient() {
             const siguiente = visibles[indiceViendo + 1];
             if (siguiente) setViendo(siguiente.id);
           }}
+          copiado={copiado === medioViendo.id}
+          onCopy={() => void copiar(medioViendo)}
           onRenamed={(nuevo) =>
             setMedios((prev) => (prev ?? []).map((x) => (x.id === nuevo.id ? nuevo : x)))
           }

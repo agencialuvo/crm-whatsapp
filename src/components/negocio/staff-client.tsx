@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarClock, Pencil, Percent, Plus, Trash2, Users } from "lucide-react";
+import { CalendarClock, Pencil, Percent, Plus, Trash2, Upload, Users } from "lucide-react";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
 import { StaffDialog } from "@/components/negocio/staff-dialog";
 import { StaffScheduleDialog } from "@/components/negocio/staff-schedule-dialog";
@@ -33,6 +34,7 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   // Solo para las comisiones por servicio del diálogo de configuración.
   const [services, setServices] = useState<ServiceDto[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [removal, setRemoval] = useState<StaffDto | null>(null);
@@ -99,10 +101,16 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
           Quienes atienden a tus clientes. Cada uno es una silla en la agenda, con su horario y su
           comisión.
         </p>
-        <Button onClick={() => setDialog({ kind: "edit", item: null })}>
-          <Plus className="h-4 w-4" aria-hidden />
-          Nuevo profesional
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            <Upload className="h-4 w-4" aria-hidden />
+            Carga masiva
+          </Button>
+          <Button onClick={() => setDialog({ kind: "edit", item: null })}>
+            <Plus className="h-4 w-4" aria-hidden />
+            Nuevo profesional
+          </Button>
+        </div>
       </div>
 
       {actionError && (
@@ -244,6 +252,10 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
             </tbody>
           </table>
         </div>
+      )}
+
+      {bulkOpen && (
+        <BulkImportDialog module="equipo" onClose={() => setBulkOpen(false)} onImported={() => void load()} />
       )}
 
       {dialog?.kind === "edit" && (

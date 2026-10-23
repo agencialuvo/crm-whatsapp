@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Eye, ImageIcon, Pencil, Plus, Scissors, Tag, Trash2 } from "lucide-react";
+import { Eye, ImageIcon, Pencil, Plus, Scissors, Tag, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ComboDialog } from "@/components/negocio/combo-dialog";
 import { ItemViewDialog } from "@/components/negocio/item-view-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -41,6 +42,7 @@ export function CatalogClient({ currency }: { currency: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [removal, setRemoval] = useState<Removal | null>(null);
   const [viewing, setViewing] = useState<Removal | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -120,14 +122,20 @@ export function CatalogClient({ currency }: { currency: string }) {
             Ofertas
           </TabButton>
         </div>
-        <Button
-          onClick={() =>
-            setDialog(tab === "servicios" ? { kind: "service", item: null } : { kind: "combo", item: null })
-          }
-        >
-          <Plus className="h-4 w-4" aria-hidden />
-          {tab === "servicios" ? "Nuevo servicio" : "Nueva oferta"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            <Upload className="h-4 w-4" aria-hidden />
+            Carga masiva
+          </Button>
+          <Button
+            onClick={() =>
+              setDialog(tab === "servicios" ? { kind: "service", item: null } : { kind: "combo", item: null })
+            }
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            {tab === "servicios" ? "Nuevo servicio" : "Nueva oferta"}
+          </Button>
+        </div>
       </div>
 
       {tab === "combos" && (
@@ -314,6 +322,10 @@ export function CatalogClient({ currency }: { currency: string }) {
           }}
         />
       )}
+      {bulkOpen && (
+        <BulkImportDialog module="servicios" onClose={() => setBulkOpen(false)} onImported={() => void load()} />
+      )}
+
       {dialog?.kind === "combo" && (
         <ComboDialog
           item={dialog.item}

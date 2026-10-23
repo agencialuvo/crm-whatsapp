@@ -11,6 +11,20 @@ imagen `ghcr.io/kevinrivm/vocero-crm:X.Y.Z`.
 - **Panel sin segundo scroll ni espacio vacío**: la tabla oculta para lectores de pantalla de los gráficos quedaba posicionada fuera del área con scroll y alargaba toda la página. El área de contenido ahora es `relative`, así que nada oculto puede ensanchar el documento (comprobado en Panel, Resultados, Caja, Clientes y Citas).
 - **Barra lateral**: en escritorio, si la ventana es baja y el menú no cabe, ahora se desplaza (antes lo cortaba y no se llegaba a Ajustes ni a cerrar sesión).
 
+### Carga masiva desde Excel y «Copiar URL» en Medios (módulo SALON)
+
+- **Carga masiva:** botón «Carga masiva» junto a «Nuevo…» en Servicios y ofertas, Equipo y Clientes. La ventana
+  baja la plantilla `.xlsx` del módulo (encabezados exactos, filas de ejemplo y hoja de instrucciones), recibe el
+  archivo (arrastrar o elegir) y muestra cuántas filas entraron y cuáles no, con su fila y columna.
+- **Reglas:** cada fila se valida con el MISMO esquema Zod del formulario; las filas válidas entran en lotes dentro
+  de una transacción y una fila mala no frena a las demás. Máx. 500 filas y 2 MB por archivo. Lo que ya existe se
+  omite (mismo nombre en servicios, ofertas y equipo; mismo celular en clientes: si ya es contacto pasa a cliente
+  sin duplicarse, y no se registra ninguna venta). Solo dueño o administrador.
+- **Imágenes:** `imagen_url` / `foto_url` aceptan la URL copiada desde Medios; solo valen imágenes de la biblioteca
+  de la propia organización.
+- **Medios:** vuelve «Copiar URL» (en la tarjeta y en la ventana del archivo) con aviso «¡URL copiada!».
+- API: `POST /api/negocio/carga-masiva?modulo=` y `GET /api/negocio/carga-masiva/plantilla?modulo=`. Nueva dependencia: `exceljs`.
+
 ### Auditoría de seguridad y limpieza
 
 - **Seguridad:** `POST /api/negocio/ventas` ya no deja que un miembro del equipo fije una comisión distinta ni
