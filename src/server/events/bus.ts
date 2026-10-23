@@ -26,6 +26,8 @@ export type SseEvent =
     }
   /** 015 — algo cambió en la agenda: la pantalla de Citas se refresca sola. */
   | { type: "booking.updated"; data: { bookingId: string } }
+  /** Una notificación nueva para el equipo: la campanita se refresca sola. */
+  | { type: "notification.new"; data: { notificationId: string } }
   | {
       type: "lab.run";
       data: {

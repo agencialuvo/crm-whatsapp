@@ -477,6 +477,7 @@ export async function registerServiceSale(
       id,
       createdAt: createdAt.toISOString(),
       customerName,
+      contactId,
       staffId: member.id,
       staffName: member.name,
       itemKind: first.kind,
@@ -577,6 +578,7 @@ export async function getSalesReport(
         id: sale.id,
         createdAt: sale.createdAt,
         customerName: sale.customerName,
+        contactId: sale.contactId,
         staffId: sale.staffId,
         staffName: schema.staff.name,
         serviceName: schema.service.name,
@@ -712,6 +714,7 @@ export async function getSalesReport(
         id: r.id,
         createdAt: r.createdAt.toISOString(),
         customerName: r.customerName,
+        contactId: r.contactId,
         staffId: r.staffId,
         staffName: r.staffName,
         itemKind: items[0]!.kind,
@@ -791,6 +794,9 @@ export async function updateSaleDate(
 
 /** La venta como quedó (o como era), en la forma que guarda la auditoría. */
 type SaleSnapshot = {
+  customerName: string;
+  /** Cuándo ocurrió la venta (ISO). */
+  soldAt: string;
   staffId: string;
   staffName: string;
   amountCents: number;
@@ -810,8 +816,11 @@ type SaleSnapshot = {
  * Corrige una venta ya registrada: los ítems, quién atendió y el monto cobrado.
  * Se recalcula el reparto (ítems y comisión) con las reglas de hoy, y TODO ocurre
  * en una transacción con la venta bloqueada: o queda corregida y con su rastro de
- * auditoría (la venta antes y después, quién y cuándo), o no cambia nada. El
- * cliente, la fecha, el método de pago y la cita no se tocan. Como la ficha del
+ * auditoría (la venta antes y después, quién y cuándo), o no cambia nada. Puede
+ * cambiar también el cliente (otro contacto de la organización, que pasa a ser
+ * cliente del salón) y la fecha y hora (en la zona del negocio; el cambio de
+ * momento deja además su fila de auditoría de fecha). El método de pago y la
+ * cita no se tocan. Como la ficha del
  * cliente y el Panel leen de las ventas, se actualizan solos. Sin cambios reales
  * no se escribe nada (ni auditoría).
  */
@@ -821,6 +830,7 @@ export async function updateSale(
   input: SaleEditInput,
   actorUserId: string
 ): Promise<{ id: string; changed: boolean }> {
+  const tz = input.soldOn ? await businessTimezone(organizationId) : null;
   const result = await getDb().transaction(async (tx) => {
     const sale = schema.serviceSale;
     const [current] = await tx
@@ -853,13 +863,45 @@ export async function updateSale(
       .from(schema.staff)
       .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, current.staffId)))
       .limit(1);
+    // Otro cliente: debe ser un contacto de esta organización.
+    let nextContactId = current.contactId;
+    let nextCustomerName = current.customerName;
+    if (input.contactId && input.contactId !== current.contactId) {
+      const [c] = await tx
+        .select({ id: schema.contact.id, name: schema.contact.name })
+        .from(schema.contact)
+        .where(
+          scoped(schema.contact.organizationId, organizationId, eq(schema.contact.id, input.contactId))
+        )
+        .limit(1);
+      if (!c) throw new SalonError("contact_not_found", 404, "El cliente no existe");
+      nextContactId = c.id;
+      nextCustomerName = c.name;
+    }
+
+    // Nueva fecha y hora: el instante de esa hora de pared en la zona del negocio
+    // (a la precisión del minuto, que es lo que se edita).
+    let nextAt = current.createdAt;
+    if (input.soldOn && input.soldTime && tz) {
+      const at = zonedWallClockToUtc(input.soldOn, input.soldTime, tz);
+      if (!at) throw new SalonError("invalid_date", 400, "Fecha u hora no válida");
+      const sameMinute =
+        Math.floor(at.getTime() / 60_000) === Math.floor(current.createdAt.getTime() / 60_000);
+      if (!sameMinute) nextAt = at;
+    }
+    const dateChanged = nextAt.getTime() !== current.createdAt.getTime();
+
     const snapshotOf = (
       staff: { id: string; name: string },
       amountCents: number,
       commission: number,
       net: number,
-      items: SaleItemDto[]
+      items: SaleItemDto[],
+      customerName: string,
+      soldAt: Date
     ): SaleSnapshot => ({
+      customerName,
+      soldAt: soldAt.toISOString(),
       staffId: staff.id,
       staffName: staff.name,
       amountCents,
@@ -879,7 +921,9 @@ export async function updateSale(
       current.amountCents,
       current.staffCommissionCents,
       current.businessNetCents,
-      before
+      before,
+      current.customerName,
+      current.createdAt
     );
 
     // Los ítems que ya estaban y siguen con el mismo profesional no se vuelven a exigir.
@@ -902,7 +946,9 @@ export async function updateSale(
       input.amountCents,
       split.staffCommissionCents,
       split.businessNetCents,
-      lines.map((l, i) => lineToDto(l, split.amounts[i]!))
+      lines.map((l, i) => lineToDto(l, split.amounts[i]!)),
+      nextCustomerName,
+      nextAt
     );
     if (JSON.stringify(beforeSnap) === JSON.stringify(afterSnap)) return { id, changed: false };
 
@@ -918,11 +964,32 @@ export async function updateSale(
         staffId: member.id,
         serviceId: first.serviceId,
         comboId: first.comboId,
+        contactId: nextContactId,
+        customerName: nextCustomerName,
+        createdAt: nextAt,
         amountCents: input.amountCents,
         staffCommissionCents: split.staffCommissionCents,
         businessNetCents: split.businessNetCents,
       })
       .where(scoped(sale.organizationId, organizationId, eq(sale.id, id)));
+    // Quien compra es cliente del salón (también si lo habían quitado de Clientes).
+    if (nextContactId && nextContactId !== current.contactId) {
+      await tx
+        .update(schema.contact)
+        .set({ salonClient: true, updatedAt: new Date() })
+        .where(scoped(schema.contact.organizationId, organizationId, eq(schema.contact.id, nextContactId)));
+    }
+    if (dateChanged) {
+      await tx.insert(schema.serviceSaleDateChange).values({
+        id: newId("serviceSaleDateChange"),
+        organizationId,
+        saleId: id,
+        previousAt: current.createdAt,
+        newAt: nextAt,
+        changedByUserId: actorUserId,
+        changedByLabel: actor ? `${actor.name} <${actor.email}>` : actorUserId,
+      });
+    }
     await tx
       .delete(schema.serviceSaleItem)
       .where(scoped(schema.serviceSaleItem.organizationId, organizationId, eq(schema.serviceSaleItem.saleId, id)));
@@ -976,6 +1043,7 @@ export async function getSaleOptions(organizationId: string): Promise<SaleOption
         id: schema.service.id,
         name: schema.service.name,
         priceCents: schema.service.priceCents,
+        durationMinutes: schema.service.durationMinutes,
       })
       .from(schema.service)
       .where(
@@ -992,6 +1060,7 @@ export async function getSaleOptions(organizationId: string): Promise<SaleOption
         id: schema.combo.id,
         name: schema.combo.name,
         priceCents: schema.combo.priceCents,
+        durationMinutes: schema.combo.durationMinutes,
       })
       .from(schema.combo)
       .where(scoped(schema.combo.organizationId, organizationId, eq(schema.combo.active, true)))

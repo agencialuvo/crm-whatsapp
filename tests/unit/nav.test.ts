@@ -19,15 +19,15 @@ const labels = (groups: { items: { label: string }[] }[]) =>
   groups.map((g) => g.items.map((i) => i.label));
 
 describe("barra lateral agrupada (v1.0)", () => {
-  it("con todo apagado y como miembro: solo Trabajo, con Contactos y Medios", () => {
+  it("con todo apagado y como miembro: solo Trabajo, con Contactos, Medios y Notificaciones", () => {
     const groups = appNavGroups({ role: "member" });
     expect(groups.map((g) => g.title)).toEqual(["Trabajo"]);
-    expect(labels(groups)).toEqual([["Contactos", "Medios"]]);
+    expect(labels(groups)).toEqual([["Contactos", "Medios", "Notificaciones"]]);
   });
 
   it("AGENDA añade Citas en su lugar: antes de Contactos", () => {
     const [trabajo] = appNavGroups({ agenda: true, role: "member" });
-    expect(trabajo!.items.map((i) => i.label)).toEqual(["Citas", "Contactos", "Medios"]);
+    expect(trabajo!.items.map((i) => i.label)).toEqual(["Citas", "Contactos", "Medios", "Notificaciones"]);
   });
 
   it("la v1.0 oculta Bandeja, Pipeline y todo el bloque Agente; las rutas siguen existiendo", () => {

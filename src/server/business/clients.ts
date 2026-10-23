@@ -1,5 +1,6 @@
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { normalizeMx } from "@/lib/meta/client";
 import type { ClientCreateInput, ClientInput } from "@/lib/salon/schemas";
@@ -529,4 +530,59 @@ export async function removeSalonClient(
   const { removed } = await removeSalonClients(organizationId, [contactId]);
   if (removed === 0)
     throw new SalonError("client_not_found", 404, "El cliente no existe");
+}
+
+/**
+ * «Crear cliente rápido» desde Citas: un contacto con solo nombre y celular, para
+ * poder agendarle sin salir de la agenda. Si el celular ya es un contacto, se
+ * devuelve ese (la misma persona nunca queda en dos fichas). No es cliente del
+ * salón todavía: lo será con su primera venta en Caja.
+ */
+export async function quickCreateContact(
+  organizationId: string,
+  input: { name: string; phone: string },
+): Promise<{ id: string; name: string; phone: string; existing: boolean }> {
+  const phone = normalizeMx(input.phone);
+  const db = getDb();
+  const find = async () => {
+    const [found] = await db
+      .select({ id: schema.contact.id, name: schema.contact.name })
+      .from(schema.contact)
+      .where(
+        scoped(
+          schema.contact.organizationId,
+          organizationId,
+          eq(schema.contact.channel, "whatsapp"),
+          or(eq(schema.contact.waIdentity, phone), eq(schema.contact.phone, phone)),
+        ),
+      )
+      .limit(1);
+    return found;
+  };
+  const existing = await find();
+  if (existing) return { ...existing, phone, existing: true };
+
+  const [created] = await db
+    .insert(schema.contact)
+    .values({
+      id: newId("contact"),
+      organizationId,
+      name: input.name,
+      nameSource: "manual",
+      phone,
+      waIdentity: phone,
+      source: "conocido",
+    })
+    .onConflictDoNothing({
+      target: [schema.contact.organizationId, schema.contact.channel, schema.contact.waIdentity],
+    })
+    .returning({ id: schema.contact.id, name: schema.contact.name });
+  if (created) return { ...created, phone, existing: false };
+
+  // Otro registro del mismo celular ganó la carrera: se reutiliza ese contacto.
+  const winner = await find();
+  if (!winner) {
+    throw new SalonError("contact_not_found", 409, "No se pudo registrar al cliente. Intenta de nuevo.");
+  }
+  return { ...winner, phone, existing: true };
 }

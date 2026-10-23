@@ -296,9 +296,9 @@ describe("asignar profesional", () => {
 });
 
 describe("newBoardBookingSchema — agendar cita desde la agenda por sillas", () => {
-  const ok = { contactId: "ct_1", startUtc: "2026-10-19T15:00:00.000Z" };
+  const ok = { contactId: "ct_1", serviceId: "srv_1", startUtc: "2026-10-19T15:00:00.000Z" };
 
-  it("acepta cliente + hora, con profesional opcional", () => {
+  it("acepta cliente + hora + servicio, con profesional opcional", () => {
     expect(newBoardBookingSchema.parse(ok)).toEqual({ ...ok, staffId: null, notes: null });
     expect(newBoardBookingSchema.parse({ ...ok, staffId: "stf_1", notes: " corte y barba " })).toEqual({
       ...ok,
@@ -312,6 +312,14 @@ describe("newBoardBookingSchema — agendar cita desde la agenda por sillas", ()
     expect(newBoardBookingSchema.safeParse({ ...ok, contactId: "" }).success).toBe(false);
     expect(newBoardBookingSchema.safeParse({ ...ok, startUtc: "mañana" }).success).toBe(false);
     expect(newBoardBookingSchema.safeParse({ contactId: "ct_1" }).success).toBe(false);
+  });
+
+  it("exige el servicio u oferta, uno solo", () => {
+    const { serviceId: _s, ...sinItem } = ok;
+    void _s;
+    expect(newBoardBookingSchema.safeParse(sinItem).success).toBe(false);
+    expect(newBoardBookingSchema.safeParse({ ...sinItem, comboId: "cmb_1" }).success).toBe(true);
+    expect(newBoardBookingSchema.safeParse({ ...ok, comboId: "cmb_1" }).success).toBe(false);
   });
 
   it("notas vacías son null y más de 500 caracteres se rechazan", () => {

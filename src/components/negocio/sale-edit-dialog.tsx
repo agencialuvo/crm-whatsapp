@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/date-picker";
+import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { ContactMatchPanel, useContactMatches } from "@/components/negocio/contact-match";
 import { Field, fieldErrors } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
 import {
@@ -12,25 +16,28 @@ import {
   SaleItemsField,
   useSaleCart,
 } from "@/components/negocio/sale-cart";
-import { centsToInput } from "@/lib/salon/format";
+import { centsToInput, formatPeruPhone, wallClockInTz } from "@/lib/salon/format";
 import { saleEditSchema } from "@/lib/salon/schemas";
 import { staffForItems } from "@/lib/salon/staff-for-item";
-import type { SaleOptionsDto, SaleRowDto } from "@/lib/salon/types";
+import type { ContactMatchDto, SaleOptionsDto, SaleRowDto } from "@/lib/salon/types";
 
 /**
  * Módulo SALON — «Editar venta» (solo dueño/administrador): corrige los ítems
- * vendidos, quién atendió y el monto cobrado. El cliente, la fecha y el método
- * de pago no cambian. El servidor guarda la venta antes y después (quién y
+ * vendidos, quién atendió, el monto cobrado, el cliente y la fecha y hora. El
+ * método de pago no cambia. El servidor guarda la venta antes y después (quién y
  * cuándo) y la ficha del cliente y el Panel se actualizan solos.
  */
 export function SaleEditDialog({
   sale,
   currency,
+  timezone,
   onClose,
   onSaved,
 }: {
   sale: SaleRowDto;
   currency: string;
+  /** Zona del negocio: la fecha y la hora se leen y se escriben en ella. */
+  timezone: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -38,6 +45,18 @@ export function SaleEditDialog({
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [staffId, setStaffId] = useState(sale.staffId);
   const [customPct, setCustomPct] = useState("");
+  const initialAt = wallClockInTz(sale.createdAt, timezone);
+  const [soldOn, setSoldOn] = useState(initialAt.date);
+  const [soldTime, setSoldTime] = useState(initialAt.time);
+  // Otro cliente: se busca por nombre o celular entre los contactos.
+  const [pickedClient, setPickedClient] = useState<ContactMatchDto | null>(null);
+  const [changingClient, setChangingClient] = useState(false);
+  const [clientQuery, setClientQuery] = useState("");
+  const matches = useContactMatches({
+    enabled: changingClient && !pickedClient,
+    name: /^\d/.test(clientQuery.trim()) ? "" : clientQuery,
+    phone: /^\d/.test(clientQuery.trim()) ? clientQuery.replace(/\D/g, "").replace(/^51(?=\d{9})/, "") : "",
+  });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -88,6 +107,9 @@ export function SaleEditDialog({
       staffId,
       amountCents: cart.amountCents(),
       customCommissionPercentage: customPct.trim() !== "" ? Number(customPct) : null,
+      contactId: pickedClient?.id ?? null,
+      soldOn: soldOn || null,
+      soldTime: soldTime || null,
     });
     if (!parsed.success) {
       setErrors(fieldErrors(parsed.error.issues));
@@ -109,7 +131,7 @@ export function SaleEditDialog({
   return (
     <Modal
       title="Editar venta"
-      description={`Venta de ${sale.customerName}. Cada cambio queda registrado: la venta anterior, la nueva, quién y cuándo.`}
+      description={`Venta de ${pickedClient?.name ?? sale.customerName}. Cada cambio queda registrado: la venta anterior, la nueva, quién y cuándo.`}
       onClose={onClose}
       busy={busy}
     >
@@ -128,6 +150,85 @@ export function SaleEditDialog({
         </div>
       ) : (
         <form onSubmit={submit} noValidate className="space-y-4">
+          <Field label="Cliente" htmlFor="sale-edit-client" error={errors.contactId}>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 rounded-md border bg-subtle px-3 py-1.5 text-sm">
+                <UserRound className="h-4 w-4 shrink-0 text-text-3" aria-hidden />
+                <span className="truncate font-medium">{pickedClient?.name ?? sale.customerName}</span>
+                {pickedClient && (
+                  <span className="shrink-0 text-xs tabular-nums text-text-2">
+                    {formatPeruPhone(pickedClient.phone)}
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-7"
+                  disabled={busy}
+                  onClick={() => {
+                    setChangingClient((v) => !v);
+                    setClientQuery("");
+                  }}
+                >
+                  {changingClient ? "Cancelar cambio" : "Cambiar cliente"}
+                </Button>
+              </div>
+              {changingClient && (
+                <>
+                  <Input
+                    id="sale-edit-client"
+                    value={clientQuery}
+                    maxLength={80}
+                    autoComplete="off"
+                    placeholder="Busca por nombre o celular…"
+                    onChange={(e) => {
+                      setClientQuery(e.target.value);
+                      setPickedClient(null);
+                    }}
+                    disabled={busy}
+                  />
+                  <ContactMatchPanel
+                    matches={matches}
+                    onPick={(m) => {
+                      setPickedClient(m);
+                      setChangingClient(false);
+                      setClientQuery("");
+                    }}
+                  />
+                </>
+              )}
+              {!changingClient && pickedClient && pickedClient.id !== sale.contactId && (
+                <p className="text-xs text-text-3">
+                  La venta pasará a este cliente{pickedClient.salonClient ? "" : " (hasta ahora solo un contacto de WhatsApp: pasa a ser cliente)"}.
+                </p>
+              )}
+            </div>
+          </Field>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Fecha de atención" htmlFor="sale-edit-sold-on" error={errors.soldOn}>
+              <DatePicker
+                id="sale-edit-sold-on"
+                value={soldOn}
+                onChange={setSoldOn}
+                disabled={busy}
+                invalid={!!errors.soldOn}
+                className="w-full"
+              />
+            </Field>
+            <Field label="Hora" htmlFor="sale-edit-sold-time" error={errors.soldTime}>
+              <Input
+                id="sale-edit-sold-time"
+                type="time"
+                value={soldTime}
+                onChange={(e) => setSoldTime(e.target.value)}
+                disabled={busy}
+                aria-invalid={!!errors.soldTime}
+              />
+            </Field>
+          </div>
+
           <Field label="Atendió" htmlFor="sale-edit-staff" error={errors.staffId}>
             <SearchSelect
               id="sale-edit-staff"

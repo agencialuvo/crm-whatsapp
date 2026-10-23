@@ -1,4 +1,5 @@
 import {
+  Bell,
   CalendarDays,
   ChartColumn,
   FlaskConical,
@@ -101,6 +102,7 @@ export function appNavGroups({
         ]
       : []),
     { href: "/medios", label: "Medios", icon: Images },
+    { href: "/notificaciones", label: "Notificaciones", icon: Bell },
   ];
   const groups: NavGroup[] = [{ title: "Trabajo", items: trabajo }];
   if (!NAV_V2) return groups;

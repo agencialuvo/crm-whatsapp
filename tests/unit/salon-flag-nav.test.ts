@@ -71,6 +71,7 @@ describe("menú", () => {
         "/servicios",
         "/equipo",
         "/medios",
+        "/notificaciones",
       ]);
     }
   });

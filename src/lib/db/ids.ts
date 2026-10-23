@@ -47,6 +47,8 @@ const prefixes = {
   serviceSaleItem: "sli",
   serviceSaleDateChange: "sdc",
   serviceSaleEdit: "sed",
+  // Notificaciones del equipo (campanita y /notificaciones)
+  notification: "ntf",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

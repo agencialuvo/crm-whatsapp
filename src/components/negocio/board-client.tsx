@@ -16,7 +16,7 @@ import { useEvents } from "@/components/use-events";
 import { durationLabel, money } from "@/lib/salon/format";
 import type { BoardBooking, BoardDto, BoardSlot, RegisteredSaleDto } from "@/lib/salon/types";
 import { longDayLabel } from "@/lib/time/calendar";
-import { addDaysISO, overlaps } from "@/lib/time/slots";
+import { addDaysISO, overlaps, timeInTz } from "@/lib/time/slots";
 import { cn } from "@/lib/utils";
 import { SearchSelect } from "@/components/ui/search-select";
 
@@ -41,6 +41,7 @@ export function BoardClient({
   today,
   initialDate,
   openNewOnLoad = false,
+  openBookingId,
   canManage,
 }: {
   currency: string;
@@ -50,6 +51,8 @@ export function BoardClient({
   initialDate?: string;
   /** Llega desde «Agendar cita» del calendario: abre el formulario al cargar. */
   openNewOnLoad?: boolean;
+  /** Llega desde una notificación: abre esa cita en cuanto la agenda carga. */
+  openBookingId?: string;
   canManage: boolean;
 }) {
   const [date, setDate] = useState(initialDate ?? today);
@@ -58,6 +61,7 @@ export function BoardClient({
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const pendingOpen = useRef<string | null>(openBookingId ?? null);
   const [chargeFor, setChargeFor] = useState<BoardBooking | null>(null);
   // «Agendar cita»: abierto desde el botón (vacío) o desde una celda libre (hora y silla puestas).
   const [newBooking, setNewBooking] = useState<{ startUtc?: string; staffId?: string } | null>(
@@ -127,6 +131,18 @@ export function BoardClient({
   const unassigned = useMemo(() => sessions.filter((b) => !b.staffId), [sessions]);
   const showUnassigned = !!board && (unassigned.length > 0 || board.chairs.length === 0);
 
+  const blocks = useMemo(() => board?.bookings.filter((b) => b.kind === "block") ?? [], [board]);
+
+  // Qué pinta cada columna en cada franja (las citas largas abarcan varias).
+  const plans = useMemo(() => {
+    const byChair = new Map<string, ReturnType<typeof planColumn>>();
+    if (!board) return { byChair, unassigned: planColumn([], []) };
+    for (const c of board.chairs) {
+      byChair.set(c.id, planColumn(board.slots, sessions.filter((b) => b.staffId === c.id)));
+    }
+    return { byChair, unassigned: planColumn(board.slots, unassigned) };
+  }, [board, sessions, unassigned]);
+
   const stats = useMemo(() => {
     if (!board) return null;
     const upcoming = board.slots.filter((s) => !s.past);
@@ -140,6 +156,15 @@ export function BoardClient({
             (s) => Date.parse(s.startUtc) <= nowMs && nowMs < Date.parse(s.endUtc)
           ) ?? null);
     return { free, capacity, current };
+  }, [board]);
+
+  // La cita de una notificación se abre una sola vez, cuando ya está en el tablero.
+  useEffect(() => {
+    const id = pendingOpen.current;
+    if (id && board?.bookings.some((b) => b.id === id)) {
+      pendingOpen.current = null;
+      setSelectedId(id);
+    }
   }, [board]);
 
   const selected = board?.bookings.find((b) => b.id === selectedId) ?? null;
@@ -309,15 +334,18 @@ export function BoardClient({
                   </tr>
                 </thead>
                 <tbody>
-                  {board.slots.map((slot) => (
+                  {board.slots.map((slot, rowIndex) => (
                     <SlotRow
                       key={slot.startUtc}
                       slot={slot}
+                      rowIndex={rowIndex}
                       chairs={board.chairs}
-                      sessions={sessions}
-                      blocks={board.bookings.filter((b) => b.kind === "block")}
+                      plans={plans.byChair}
+                      unassignedPlan={plans.unassigned}
+                      blocks={blocks}
                       showUnassigned={showUnassigned}
                       isNow={stats?.current?.startUtc === slot.startUtc}
+                      timezone={board.timezone}
                       onOpen={setSelectedId}
                       onBook={(startUtc, staffId) => setNewBooking({ startUtc, staffId })}
                     />
@@ -347,6 +375,7 @@ export function BoardClient({
       {newBooking && board && (
         <NewBookingDialog
           board={board}
+          currency={currency}
           initialStartUtc={newBooking.startUtc}
           initialStaffId={newBooking.staffId}
           onClose={() => setNewBooking(null)}
@@ -378,28 +407,78 @@ export function BoardClient({
 
 /* ------------------------------ una franja ------------------------------ */
 
+/** Una cita dentro de una columna: cuántas franjas abarca y si solo continúa la de arriba. */
+type CellEntry = { booking: BoardBooking; span: number; continues: boolean };
+
+/** Lo que una columna (un profesional o «sin asignar») pinta por franja. */
+type ColumnPlan = {
+  /** Franja → las citas que EMPIEZAN a pintarse ahí. */
+  starts: Map<number, CellEntry[]>;
+  /** Franjas que ya cubre la tarjeta de una cita larga (la celda no se pinta). */
+  covered: Set<number>;
+};
+
+/**
+ * Reparte las citas de una columna entre las franjas. Una cita que dura más que
+ * una franja se pinta UNA vez, con la altura de todas las que abarca (`rowSpan`),
+ * así un servicio de 60 o 90 min se ve tan largo como dura. Si en la misma columna
+ * hay otra cita encima en el tiempo (datos viejos o sin asignar), no se funden:
+ * cada franja muestra su cita, la continuación en pequeño.
+ */
+function planColumn(slots: BoardSlot[], bookings: BoardBooking[]): ColumnPlan {
+  const starts = new Map<number, CellEntry[]>();
+  const covered = new Set<number>();
+  const push = (row: number, entry: CellEntry) => {
+    const list = starts.get(row);
+    if (list) list.push(entry);
+    else starts.set(row, [entry]);
+  };
+  for (const b of bookings) {
+    const rows: number[] = [];
+    slots.forEach((s, i) => {
+      if (overlaps(s.startUtc, s.endUtc, b.startUtc, b.endUtc)) rows.push(i);
+    });
+    if (rows.length === 0) continue;
+    const alone = !bookings.some(
+      (o) => o.id !== b.id && overlaps(b.startUtc, b.endUtc, o.startUtc, o.endUtc)
+    );
+    if (alone) {
+      push(rows[0]!, { booking: b, span: rows.length, continues: false });
+      rows.slice(1).forEach((r) => covered.add(r));
+    } else {
+      rows.forEach((r, k) => push(r, { booking: b, span: 1, continues: k > 0 }));
+    }
+  }
+  return { starts, covered };
+}
+
 function SlotRow({
   slot,
+  rowIndex,
   chairs,
-  sessions,
+  plans,
+  unassignedPlan,
   blocks,
   showUnassigned,
   isNow,
+  timezone,
   onOpen,
   onBook,
 }: {
   slot: BoardSlot;
+  rowIndex: number;
   chairs: BoardDto["chairs"];
-  sessions: BoardBooking[];
+  plans: Map<string, ColumnPlan>;
+  unassignedPlan: ColumnPlan;
   blocks: BoardBooking[];
   showUnassigned: boolean;
   isNow: boolean;
+  timezone: string;
   onOpen: (id: string) => void;
   onBook: (startUtc: string, staffId: string) => void;
 }) {
-  const inSlot = (b: BoardBooking) => overlaps(slot.startUtc, slot.endUtc, b.startUtc, b.endUtc);
-  const here = sessions.filter(inSlot);
-  const blockHere = blocks.find(inSlot);
+  const blockHere = blocks.find((b) => overlaps(slot.startUtc, slot.endUtc, b.startUtc, b.endUtc));
+  const rowSpanOf = (entries: CellEntry[]) => (entries.length === 1 ? entries[0]!.span : 1);
 
   return (
     <tr
@@ -417,20 +496,32 @@ function SlotRow({
       </th>
 
       {chairs.map((chair) => {
-        const mine = here.filter((b) => b.staffId === chair.id);
+        const plan = plans.get(chair.id);
+        if (plan?.covered.has(rowIndex)) return null;
+        const entries = plan?.starts.get(rowIndex) ?? [];
         const offShift = !slot.workingStaffIds.includes(chair.id);
+        const span = rowSpanOf(entries);
         return (
           <td
             key={chair.id}
+            rowSpan={span}
             className={cn(
               "border-l px-2 py-1.5 align-top",
-              mine.length === 0 && (slot.blocked || offShift) && "booking-hatch"
+              span > 1 && "h-px",
+              entries.length === 0 && (slot.blocked || offShift) && "booking-hatch"
             )}
           >
-            {mine.length > 0 ? (
-              <div className="space-y-1">
-                {mine.map((b) => (
-                  <Chip key={b.id} booking={b} slot={slot} onOpen={onOpen} />
+            {entries.length > 0 ? (
+              <div className={cn("space-y-1", span > 1 && "h-full")}>
+                {entries.map((e) => (
+                  <Chip
+                    key={`${e.booking.id}-${e.continues}`}
+                    booking={e.booking}
+                    span={e.span}
+                    continues={e.continues}
+                    timezone={timezone}
+                    onOpen={onOpen}
+                  />
                 ))}
               </div>
             ) : slot.blocked ? (
@@ -449,22 +540,39 @@ function SlotRow({
         );
       })}
 
-      {showUnassigned && (
-        <td className="border-l px-2 py-1.5 align-top">
-          <div className="space-y-1">
-            {here
-              .filter((b) => !b.staffId)
-              .map((b) => (
-                <Chip key={b.id} booking={b} slot={slot} onOpen={onOpen} />
-              ))}
-            {blockHere && (
-              <p className="booking-hatch rounded-sm px-2 py-1 text-xs text-text-2">
-                Bloqueo{blockHere.notes ? `: ${blockHere.notes}` : ""}
-              </p>
+      {showUnassigned &&
+        (unassignedPlan.covered.has(rowIndex) ? null : (
+          <td
+            rowSpan={rowSpanOf(unassignedPlan.starts.get(rowIndex) ?? [])}
+            className={cn(
+              "border-l px-2 py-1.5 align-top",
+              rowSpanOf(unassignedPlan.starts.get(rowIndex) ?? []) > 1 && "h-px"
             )}
-          </div>
-        </td>
-      )}
+          >
+            <div
+              className={cn(
+                "space-y-1",
+                rowSpanOf(unassignedPlan.starts.get(rowIndex) ?? []) > 1 && "h-full"
+              )}
+            >
+              {(unassignedPlan.starts.get(rowIndex) ?? []).map((e) => (
+                <Chip
+                  key={`${e.booking.id}-${e.continues}`}
+                  booking={e.booking}
+                  span={e.span}
+                  continues={e.continues}
+                  timezone={timezone}
+                  onOpen={onOpen}
+                />
+              ))}
+              {blockHere && (
+                <p className="booking-hatch rounded-sm px-2 py-1 text-xs text-text-2">
+                  Bloqueo{blockHere.notes ? `: ${blockHere.notes}` : ""}
+                </p>
+              )}
+            </div>
+          </td>
+        ))}
 
       <td className="border-l px-3 py-2 text-right align-top">
         {slot.blocked ? (
@@ -519,30 +627,39 @@ function FreeCell({
   );
 }
 
-/** Una cita dentro de una celda: completa en su primera franja, compacta en las siguientes. */
+/**
+ * Una cita dentro de una columna. Si abarca varias franjas (`span > 1`) la tarjeta
+ * ocupa toda esa altura y dice de qué hora a qué hora va; la continuación de una
+ * cita encimada se pinta compacta.
+ */
 function Chip({
   booking,
-  slot,
+  span,
+  continues,
+  timezone,
   onOpen,
 }: {
   booking: BoardBooking;
-  slot: BoardSlot;
+  span: number;
+  continues: boolean;
+  timezone: string;
   onOpen: (id: string) => void;
 }) {
   const name = booking.contact?.name ?? "Sin nombre";
-  const continues = Date.parse(booking.startUtc) < Date.parse(slot.startUtc);
+  const endTime = timeInTz(booking.endUtc, timezone);
 
   return (
     <button
       type="button"
       onClick={() => onOpen(booking.id)}
-      aria-label={`${name}, ${booking.time}, ${durationLabel(booking.durationMinutes)}${booking.sold ? ", cobrada" : ""}`}
+      aria-label={`${name}, ${booking.time} a ${endTime}, ${durationLabel(booking.durationMinutes)}${booking.itemName ? `, ${booking.itemName}` : ""}${booking.sold ? ", cobrada" : ""}`}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-sm border px-2 text-left transition-colors",
+        "flex w-full items-start gap-1.5 rounded-sm border px-2 text-left transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         booking.sold || booking.status === "realizada"
           ? "border-success-soft bg-success-tint text-success-text"
           : "border-brand-soft bg-brand-tint text-brand-text hover:border-brand",
+        span > 1 && "h-full",
         continues ? "py-0.5 text-[11px] opacity-80" : "py-1.5 text-xs"
       )}
     >
@@ -552,8 +669,9 @@ function Chip({
         <>
           <span className="min-w-0 flex-1">
             <span className="block truncate font-semibold">{name}</span>
+            {booking.itemName && <span className="block truncate text-[11px]">{booking.itemName}</span>}
             <span className="block text-[11px] opacity-80">
-              {booking.time} · {durationLabel(booking.durationMinutes)}
+              {booking.time}–{endTime} · {durationLabel(booking.durationMinutes)}
             </span>
           </span>
           {booking.source === "ai" && <Bot className="h-3.5 w-3.5 shrink-0" aria-label="Agendada por el agente" />}

@@ -503,19 +503,40 @@ export const clientBulkDeleteSchema = z.object({
 });
 
 /**
- * Corregir una venta ya registrada: los ítems vendidos, quién atendió y el monto
- * cobrado. El cliente, la fecha y el método de pago no se editan aquí.
+ * Corregir una venta ya registrada: los ítems vendidos, quién atendió, el monto
+ * cobrado y, si hace falta, el cliente y la fecha y hora. El método de pago no
+ * se edita aquí. `contactId`, `soldOn` y `soldTime` son opcionales: sin ellos, el
+ * cliente y el momento de la venta quedan como estaban.
  */
-export const saleEditSchema = z.object({
-  items: z
-    .array(saleItemSchema, { required_error: "Agrega al menos un servicio u oferta" })
-    .min(1, "Agrega al menos un servicio u oferta")
-    .max(20, "Máximo 20 ítems por venta"),
-  staffId: z.string({ required_error: "Elige quién atendió" }).min(1, "Elige quién atendió"),
-  amountCents: cents,
-  /** Porcentaje puntual para esta venta; sin él manda la regla de siempre. */
-  customCommissionPercentage: percentage.nullish(),
-});
+export const saleEditSchema = z
+  .object({
+    items: z
+      .array(saleItemSchema, { required_error: "Agrega al menos un servicio u oferta" })
+      .min(1, "Agrega al menos un servicio u oferta")
+      .max(20, "Máximo 20 ítems por venta"),
+    staffId: z.string({ required_error: "Elige quién atendió" }).min(1, "Elige quién atendió"),
+    amountCents: cents,
+    /** Porcentaje puntual para esta venta; sin él manda la regla de siempre. */
+    customCommissionPercentage: percentage.nullish(),
+    /** Otro cliente (contacto de la organización); sin él, el de siempre. */
+    contactId: z.string().min(1, "Elige al cliente").nullish(),
+    /** Día de la venta (AAAA-MM-DD, del negocio); va junto con `soldTime`. */
+    soldOn: z.string().regex(ISO_DATE, "Fecha no válida").nullish(),
+    /** Hora de la venta (HH:MM, del negocio). */
+    soldTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora no válida (HH:MM)")
+      .nullish(),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.soldOn !== !v.soldTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [v.soldOn ? "soldTime" : "soldOn"],
+        message: "Indica la fecha y la hora",
+      });
+    }
+  });
 export type SaleEditInput = z.infer<typeof saleEditSchema>;
 
 /** Corregir el día de una venta registrada con fecha equivocada. */
@@ -534,8 +555,12 @@ export const boardQuerySchema = z.object({
 
 /** Asignar (o quitar con `null`) el profesional de una cita. */
 /** Agendar una cita desde la agenda por sillas: cliente + hora + profesional. */
-export const newBoardBookingSchema = z.object({
+export const newBoardBookingSchema = z
+  .object({
   contactId: z.string({ required_error: "Elige al cliente" }).min(1, "Elige al cliente"),
+  /** El servicio u oferta (uno solo): de él salen la duración y quién puede atender. */
+  serviceId: z.string().min(1).nullish(),
+  comboId: z.string().min(1).nullish(),
   startUtc: z
     .string({ required_error: "Elige la hora" })
     .refine((v) => !Number.isNaN(Date.parse(v)), "La hora no es válida"),
@@ -546,7 +571,26 @@ export const newBoardBookingSchema = z.object({
     .max(500, "Admite hasta 500 caracteres")
     .nullish()
     .transform((v) => (v ? v : null)),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.serviceId === !v.comboId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["serviceId"],
+        message: "Elige el servicio u oferta",
+      });
+    }
+  });
+
+/** «Crear cliente rápido» desde Citas: solo nombre y celular. */
+export const quickContactSchema = z.object({
+  name: staffName,
+  phone: z
+    .string({ required_error: "Escribe el celular" })
+    .trim()
+    .regex(/^51\d{9}$/, "El celular debe tener exactamente 9 dígitos, solo números"),
 });
+export type QuickContactInput = z.infer<typeof quickContactSchema>;
 export type NewBoardBookingInput = z.infer<typeof newBoardBookingSchema>;
 
 export const assignStaffSchema = z.object({

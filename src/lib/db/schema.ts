@@ -1239,6 +1239,9 @@ export const booking = pgTable(
      * la cita queda sin asignar en vez de desaparecer.
      */
     staffId: text("staff_id").references(() => staff.id, { onDelete: "set null" }),
+    /** Módulo SALON: el servicio u oferta para el que se agendó (uno de los dos, o ninguno). */
+    serviceId: text("service_id").references(() => service.id, { onDelete: "set null" }),
+    comboId: text("combo_id").references(() => combo.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -1658,5 +1661,32 @@ export const dispatch = pgTable(
     ),
     // La consulta del worker: pendientes cuya ventana ya venció.
     index("dispatch_status_notbefore_idx").on(t.status, t.notBefore),
+  ]
+);
+
+/**
+ * Notificaciones del equipo (la campanita y `/notificaciones`): una fila por cosa
+ * que pasó en el negocio — una cita agendada o cancelada, una venta, un contacto
+ * nuevo por WhatsApp. Son de la ORGANIZACIÓN (todas las personas del equipo ven las
+ * mismas), siempre se leen y se marcan filtrando por `organization_id`. `link` es
+ * la ruta interna a la que lleva (la cita, la venta).
+ */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(), // prefix: 'ntf'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    category: text("category", { enum: ["cita", "venta", "whatsapp", "sistema"] }).notNull(),
+    isRead: boolean("is_read").notNull().default(false),
+    link: text("link"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("notifications_org_created_idx").on(t.organizationId, t.createdAt),
+    index("notifications_org_unread_idx").on(t.organizationId, t.isRead),
   ]
 );

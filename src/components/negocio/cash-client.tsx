@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Download, Eye, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
 import { presets } from "@/components/negocio/report-sections";
 import { SaleDialog } from "@/components/negocio/sale-dialog";
+import { SaleDetailDialog } from "@/components/negocio/sale-detail-dialog";
 import { SaleEditDialog } from "@/components/negocio/sale-edit-dialog";
 import { Section, Subhead } from "@/components/results/section";
 import { RangePicker, type Range } from "@/components/results/range-picker";
@@ -43,12 +45,19 @@ export function CashClient({
   currency,
   timezone,
   today,
+  initialDay,
+  openSaleId,
 }: {
   currency: string;
   timezone: string;
   today: string;
+  /** Llega desde una notificación: el día de la venta. */
+  initialDay?: string;
+  /** Llega desde una notificación: abre el detalle de esa venta al cargar. */
+  openSaleId?: string;
 }) {
-  const [range, setRange] = useState<Range>({ from: today, to: today });
+  const [range, setRange] = useState<Range>({ from: initialDay ?? today, to: initialDay ?? today });
+  const pendingSale = useRef<string | null>(openSaleId ?? null);
   const [report, setReport] = useState<SalesReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +65,9 @@ export function CashClient({
   const [saleOpen, setSaleOpen] = useState(false);
   const [voiding, setVoiding] = useState<SaleRowDto | null>(null);
   const [editing, setEditing] = useState<SaleRowDto | null>(null);
+  const [viewing, setViewing] = useState<SaleRowDto | null>(null);
+  // La ficha del cliente de una venta (si el contacto sigue existiendo).
+  const [fichaId, setFichaId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
 
@@ -86,6 +98,16 @@ export function CashClient({
     return () => ctrlRef.current?.abort();
   }, [range, load]);
 
+  // La venta de una notificación se abre una sola vez, cuando ya está en la lista.
+  useEffect(() => {
+    const id = pendingSale.current;
+    const row = id ? report?.rows.find((r) => r.id === id) : undefined;
+    if (row) {
+      pendingSale.current = null;
+      setViewing(row);
+    }
+  }, [report]);
+
   function onSaved(result: RegisteredSaleDto) {
     setSaleOpen(false);
     const { sale } = result;
@@ -105,13 +127,13 @@ export function CashClient({
 
   function exportCsv() {
     if (!report) return;
-    const header = ["Fecha", "Cliente", "Profesional", "Servicio u oferta", "Pago", "Monto", "Comisión", "Neto"];
+    const header = ["Fecha", "Cliente", "Servicio u oferta", "Profesional", "Pago", "Monto", "Comisión", "Neto"];
     const lines = report.rows.map((r) =>
       [
         dateTimeLabel(r.createdAt, timezone),
         r.customerName,
-        r.staffName,
         r.itemName,
+        r.staffName,
         PAYMENT_LABELS[r.paymentMethod],
         (r.amountCents / 100).toFixed(2),
         (r.staffCommissionCents / 100).toFixed(2),
@@ -218,7 +240,147 @@ export function CashClient({
       {/* Si la carga falla y no hay nada que enseñar, basta el aviso de arriba. */}
       {(report || !error) && (
         <>
-          <div className="grid gap-5">
+          <Section
+            title="Ventas"
+            hint="De la más reciente a la más antigua."
+            loading={loading}
+            hasData={report !== null}
+            empty={report?.rows.length === 0}
+            emptyText="Todavía no hay ventas en este periodo. Usa «Registrar venta» para cobrar una."
+          >
+            {report && (
+              <>
+                {report.truncated && (
+                  <p className="mb-3 rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-xs text-warning-text">
+                    Se muestran las {report.rows.length} ventas más recientes. Los totales de arriba
+                    incluyen todas; acota el rango para ver el detalle completo.
+                  </p>
+                )}
+                <Subhead>
+                  {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
+                </Subhead>
+                {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
+                del scroll y ensancha la página en el teléfono. */}
+            <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
+                  <table className="w-full min-w-[820px] text-sm">
+                    <thead>
+                      <tr className="border-y bg-subtle text-left text-xs font-semibold text-text-2">
+                        <th scope="col" className="px-4 py-2 sm:pl-5">
+                          Fecha
+                        </th>
+                        <th scope="col" className="px-2 py-2">
+                          Cliente
+                        </th>
+                        <th scope="col" className="px-2 py-2">
+                          Servicio / oferta
+                        </th>
+                        <th scope="col" className="px-2 py-2">
+                          Profesional
+                        </th>
+                        <th scope="col" className="px-2 py-2">
+                          Pago
+                        </th>
+                        <th scope="col" className="px-2 py-2 text-right">
+                          Monto
+                        </th>
+                        <th scope="col" className="px-2 py-2 text-right">
+                          Comisión
+                        </th>
+                        <th scope="col" className="px-2 py-2 text-right">
+                          Neto
+                        </th>
+                        <th scope="col" className="px-2 py-2 sm:pr-5">
+                          <span className="sr-only">Acciones</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.rows.slice(0, shown).map((r) => (
+                        <tr key={r.id} className="border-b last:border-0 hover:bg-row-hover">
+                          <td className="whitespace-nowrap px-4 py-2 text-text-2 sm:pl-5">
+                            {dateTimeLabel(r.createdAt, timezone)}
+                          </td>
+                          <td className="max-w-[10rem] truncate px-2 py-2">
+                            <button
+                              type="button"
+                              onClick={() => (r.contactId ? setFichaId(r.contactId) : setViewing(r))}
+                              title={r.contactId ? "Ver la ficha del cliente" : "Ver el detalle de la venta"}
+                              className="max-w-full truncate rounded-sm text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              {r.customerName}
+                            </button>
+                          </td>
+                          <td className="max-w-[12rem] truncate px-2 py-2">
+                            <button
+                              type="button"
+                              onClick={() => setViewing(r)}
+                              title="Ver el detalle de la venta"
+                              className="max-w-full truncate rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              {r.itemName}
+                            </button>
+                            {r.itemKind === "combo" && (
+                              <span className="ml-1.5 text-[11px] text-text-3">oferta</span>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2">{r.staffName}</td>
+                          <td className="whitespace-nowrap px-2 py-2 text-text-2">
+                            {PAYMENT_LABELS[r.paymentMethod]}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2 text-right font-medium tabular-nums">
+                            {money(r.amountCents, currency)}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-text-2">
+                            {money(r.staffCommissionCents, currency)}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2 text-right font-semibold tabular-nums">
+                            {money(r.businessNetCents, currency)}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-1 text-right sm:pr-5">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Ver el detalle de la venta de ${r.customerName}`}
+                              title="Ver detalle"
+                              onClick={() => setViewing(r)}
+                            >
+                              <Eye className="h-4 w-4" aria-hidden />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Editar la venta de ${r.customerName}`}
+                              title="Editar venta"
+                              onClick={() => setEditing(r)}
+                            >
+                              <Pencil className="h-4 w-4" aria-hidden />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Anular la venta de ${r.customerName}`}
+                              onClick={() => setVoiding(r)}
+                            >
+                              <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {shown < report.rows.length && (
+                  <div className="mt-3 flex justify-center">
+                    <Button variant="outline" size="sm" onClick={() => setShown((n) => n + PAGE)}>
+                      Mostrar más ({report.rows.length - shown} restantes)
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </Section>
+
+          <div className="grid w-full gap-5 md:w-1/2">
             <Section
               title="Cuadre de caja por método de pago"
               hint="Lo cobrado, para contrastar con el efectivo y las billeteras."
@@ -257,121 +419,6 @@ export function CashClient({
               )}
             </Section>
           </div>
-
-          <Section
-            title="Ventas"
-            hint="De la más reciente a la más antigua."
-            loading={loading}
-            hasData={report !== null}
-            empty={report?.rows.length === 0}
-            emptyText="Todavía no hay ventas en este periodo. Usa «Registrar venta» para cobrar una."
-          >
-            {report && (
-              <>
-                {report.truncated && (
-                  <p className="mb-3 rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-xs text-warning-text">
-                    Se muestran las {report.rows.length} ventas más recientes. Los totales de arriba
-                    incluyen todas; acota el rango para ver el detalle completo.
-                  </p>
-                )}
-                <Subhead>
-                  {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
-                </Subhead>
-                {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
-                del scroll y ensancha la página en el teléfono. */}
-            <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
-                  <table className="w-full min-w-[820px] text-sm">
-                    <thead>
-                      <tr className="border-y bg-subtle text-left text-xs font-semibold text-text-2">
-                        <th scope="col" className="px-4 py-2 sm:pl-5">
-                          Fecha
-                        </th>
-                        <th scope="col" className="px-2 py-2">
-                          Cliente
-                        </th>
-                        <th scope="col" className="px-2 py-2">
-                          Profesional
-                        </th>
-                        <th scope="col" className="px-2 py-2">
-                          Servicio / oferta
-                        </th>
-                        <th scope="col" className="px-2 py-2">
-                          Pago
-                        </th>
-                        <th scope="col" className="px-2 py-2 text-right">
-                          Monto
-                        </th>
-                        <th scope="col" className="px-2 py-2 text-right">
-                          Comisión
-                        </th>
-                        <th scope="col" className="px-2 py-2 text-right">
-                          Neto
-                        </th>
-                        <th scope="col" className="px-2 py-2 sm:pr-5">
-                          <span className="sr-only">Acciones</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.rows.slice(0, shown).map((r) => (
-                        <tr key={r.id} className="border-b last:border-0 hover:bg-row-hover">
-                          <td className="whitespace-nowrap px-4 py-2 text-text-2 sm:pl-5">
-                            {dateTimeLabel(r.createdAt, timezone)}
-                          </td>
-                          <td className="max-w-[10rem] truncate px-2 py-2">{r.customerName}</td>
-                          <td className="whitespace-nowrap px-2 py-2">{r.staffName}</td>
-                          <td className="max-w-[12rem] truncate px-2 py-2">
-                            {r.itemName}
-                            {r.itemKind === "combo" && (
-                              <span className="ml-1.5 text-[11px] text-text-3">oferta</span>
-                            )}
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-text-2">
-                            {PAYMENT_LABELS[r.paymentMethod]}
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-right font-medium tabular-nums">
-                            {money(r.amountCents, currency)}
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-text-2">
-                            {money(r.staffCommissionCents, currency)}
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-right font-semibold tabular-nums">
-                            {money(r.businessNetCents, currency)}
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-1 text-right sm:pr-5">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Editar la venta de ${r.customerName}`}
-                              title="Editar venta"
-                              onClick={() => setEditing(r)}
-                            >
-                              <Pencil className="h-4 w-4" aria-hidden />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Anular la venta de ${r.customerName}`}
-                              onClick={() => setVoiding(r)}
-                            >
-                              <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {shown < report.rows.length && (
-                  <div className="mt-3 flex justify-center">
-                    <Button variant="outline" size="sm" onClick={() => setShown((n) => n + PAGE)}>
-                      Mostrar más ({report.rows.length - shown} restantes)
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </Section>
         </>
       )}
 
@@ -385,10 +432,33 @@ export function CashClient({
         />
       )}
 
+      {fichaId && (
+        <ClientHistoryDialog
+          clientId={fichaId}
+          currency={currency}
+          timezone={timezone}
+          onClose={() => setFichaId(null)}
+        />
+      )}
+
+      {viewing && (
+        <SaleDetailDialog
+          sale={viewing}
+          currency={currency}
+          timezone={timezone}
+          onClose={() => setViewing(null)}
+          onEdit={() => {
+            setEditing(viewing);
+            setViewing(null);
+          }}
+        />
+      )}
+
       {editing && (
         <SaleEditDialog
           sale={editing}
           currency={currency}
+          timezone={timezone}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);

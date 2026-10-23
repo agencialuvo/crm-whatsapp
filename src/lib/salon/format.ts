@@ -163,3 +163,23 @@ export function formatPeruPhone(phone: string | null | undefined): string {
   const m = /^51(\d{3})(\d{3})(\d{3})$/.exec(phone);
   return m ? `+51 ${m[1]} ${m[2]} ${m[3]}` : `+${phone}`;
 }
+
+/** Día (AAAA-MM-DD) y hora (HH:MM) de un instante EN LA ZONA DEL NEGOCIO. */
+export function wallClockInTz(iso: string, timezone: string): { date: string; time: string } {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    time: `${get("hour")}:${get("minute")}`,
+  };
+}

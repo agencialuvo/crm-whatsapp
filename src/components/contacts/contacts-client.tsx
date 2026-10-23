@@ -30,6 +30,7 @@ import { NewContactDialog } from "./new-contact-dialog";
 import { StartConversation } from "./start-conversation";
 import { DialogCloseButton } from "@/components/ui/dialog-close";
 import { SearchSelect } from "@/components/ui/search-select";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 
 export function ContactsClient() {
   const router = useRouter();
@@ -95,7 +96,7 @@ export function ContactsClient() {
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="order-1 flex flex-wrap items-center gap-2">
           <h2 className="text-[17px] font-bold tracking-tight">Contactos</h2>
           <Button size="sm" onClick={() => setCreando(true)}>
             <UserPlus className="mr-1.5 h-4 w-4" strokeWidth={1.8} />
@@ -106,7 +107,7 @@ export function ContactsClient() {
             Importar
           </Button>
         </div>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
+        <div className="order-3 flex w-full flex-wrap items-center gap-2 sm:order-2 sm:w-auto sm:gap-3">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
@@ -141,6 +142,9 @@ export function ContactsClient() {
               className="w-full pl-8 sm:w-72"
             />
           </div>
+        </div>
+        <div className="order-2 ml-auto sm:order-3 sm:ml-0">
+          <NotificationBell />
         </div>
       </header>
 

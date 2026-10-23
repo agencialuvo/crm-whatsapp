@@ -22,7 +22,7 @@ oferta en Meta o TikTok y reconocerla cuando el cliente escribe.
 
 ## Qué entrega
 
-Tres páginas propias con su entrada en el menú debajo de Citas (solo con `SALON=on`): `/servicios`, `/equipo` y `/caja`; y la **agenda por sillas como vista principal de Citas** (`/citas`, pestañas «Vista por sillas» y «Calendario y bloqueos»).
+Tres páginas propias con su entrada en el menú debajo de Citas (solo con `SALON=on`): `/servicios`, `/equipo` y `/caja`; y la **agenda por sillas como vista principal de Citas** (`/citas`, pestañas «Por barberos» y «Calendario general»).
 
 | Pantalla | Quién | Qué hace |
 |---|---|---|

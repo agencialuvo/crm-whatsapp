@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 export type CitasTab = "sillas" | "calendario";
 
 const TABS: { id: CitasTab; label: string }[] = [
-  { id: "sillas", label: "Vista por sillas" },
-  { id: "calendario", label: "Calendario y bloqueos" },
+  { id: "sillas", label: "Por barberos" },
+  { id: "calendario", label: "Calendario general" },
 ];
 
 /**

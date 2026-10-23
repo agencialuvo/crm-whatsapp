@@ -31,6 +31,7 @@ import { agendaEnabled } from "@/server/agenda/flag";
 import { bookSlot, offerSlots } from "@/server/agenda/agent";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { salonEnabled } from "@/server/business/flag";
+import { notifyHandoff } from "@/server/notifications/service";
 import { getComboTriggerInstruction } from "@/server/ai/barbershop-context";
 
 /**
@@ -500,6 +501,7 @@ export async function applyHandoff(
       conversation: { id: conversationId, handoffReason: reason },
     },
   });
+  await notifyHandoff(organizationId, conversationId, reason);
 }
 
 async function moveLeadToStage(

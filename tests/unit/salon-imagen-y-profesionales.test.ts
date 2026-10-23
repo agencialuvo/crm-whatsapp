@@ -122,11 +122,11 @@ describe("previsualización: quién da el servicio u oferta", () => {
 describe("caja: quién puede cobrar qué", () => {
   const options: SaleOptionsDto = {
     services: [
-      { id: "s1", name: "Corte", priceCents: 2500, staffIds: [A, B] },
-      { id: "s2", name: "Barba", priceCents: 1500, staffIds: [] },
-      { id: "s3", name: "Tinte", priceCents: 9000, staffIds: [C] },
+      { id: "s1", name: "Corte", priceCents: 2500, durationMinutes: 30, staffIds: [A, B] },
+      { id: "s2", name: "Barba", priceCents: 1500, durationMinutes: 30, staffIds: [] },
+      { id: "s3", name: "Tinte", priceCents: 9000, durationMinutes: 30, staffIds: [C] },
     ],
-    combos: [{ id: "c1", name: "Oferta Fresh", priceCents: 4000, staffIds: [B] }],
+    combos: [{ id: "c1", name: "Oferta Fresh", priceCents: 4000, durationMinutes: 30, staffIds: [B] }],
     staff: [
       { id: A, name: "Ana" },
       { id: B, name: "Beto" },

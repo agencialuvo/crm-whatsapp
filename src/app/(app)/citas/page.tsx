@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { BookingsClient } from "@/components/bookings/bookings-client";
 import { BoardClient } from "@/components/negocio/board-client";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import { CitasTabs, type CitasTab } from "@/components/negocio/citas-tabs";
 import { canConfigure } from "@/lib/auth/roles";
 import { getSessionOrNull } from "@/lib/auth/session";
@@ -20,6 +21,8 @@ type Params = {
   hasta?: string;
   pestana?: string;
   agendar?: string;
+  /** Una cita a abrir al cargar (desde una notificación). */
+  cita?: string;
 };
 
 /**
@@ -87,7 +90,10 @@ export default async function BookingsPage({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="border-b px-4 pt-3 sm:px-6 sm:pt-4">
-        <h2 className="text-[17px] font-bold tracking-tight">Citas</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[17px] font-bold tracking-tight">Citas</h2>
+          <NotificationBell />
+        </div>
         <CitasTabs active={tab} />
       </header>
       {tab === "calendario" ? (
@@ -100,6 +106,7 @@ export default async function BookingsPage({
             today={todayInTz(new Date(), settings.timezone)}
             initialDate={isIsoDate(params.fecha) ? params.fecha : undefined}
             openNewOnLoad={params.agendar === "1"}
+            openBookingId={params.cita}
             canManage={canConfigure(session.role)}
           />
         </div>

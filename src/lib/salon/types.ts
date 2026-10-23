@@ -56,8 +56,8 @@ export type StaffDto = {
 /** Lo mínimo para armar una venta: SIN comisiones (lo ve todo el equipo). */
 export type SaleOptionsDto = {
   /** `staffIds` vacío = lo da todo el equipo. */
-  services: { id: string; name: string; priceCents: number; staffIds: string[] }[];
-  combos: { id: string; name: string; priceCents: number; staffIds: string[] }[];
+  services: { id: string; name: string; priceCents: number; durationMinutes: number; staffIds: string[] }[];
+  combos: { id: string; name: string; priceCents: number; durationMinutes: number; staffIds: string[] }[];
   staff: { id: string; name: string }[];
 };
 
@@ -78,6 +78,8 @@ export type SaleRowDto = {
   /** Instante UTC (ISO). */
   createdAt: string;
   customerName: string;
+  /** El contacto de la venta (puede no haber, o haberse borrado). */
+  contactId: string | null;
   staffId: string;
   staffName: string;
   /** El primer ítem de la venta. */
@@ -148,6 +150,8 @@ export type BoardBooking = {
   contact: { id: string; name: string } | null;
   staffId: string | null;
   notes: string | null;
+  /** El servicio u oferta para el que se agendó (si se indicó). */
+  itemName: string | null;
   /** Ya se cobró: no se vuelve a cobrar. */
   sold: boolean;
 };

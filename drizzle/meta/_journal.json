@@ -232,6 +232,20 @@
       "when": 1792527273616,
       "tag": "0032_auditoria_edicion_de_venta",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792770531714,
+      "tag": "0033_cita_con_servicio",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792771663930,
+      "tag": "0034_notificaciones",
+      "breakpoints": true
     }
   ]
 }

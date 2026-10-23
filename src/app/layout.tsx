@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Archivo, IBM_Plex_Mono, Instrument_Serif } from "next/font/google";
 import { DEFAULT_BRANDING } from "@/lib/branding";
-import { tabIconHref } from "@/lib/favicon-default";
+import { DEFAULT_FAVICON_SRC, tabIconHref } from "@/lib/favicon-default";
+import { getSessionOrNull } from "@/lib/auth/session";
 import { getBranding } from "@/server/branding";
 import { enabledChannels } from "@/server/channels/enabled";
 import { productName } from "@/lib/channels";
@@ -30,16 +31,26 @@ const plexMono = IBM_Plex_Mono({
 
 export const dynamic = "force-dynamic";
 
+const AGENCY_NAME = "Agencia Luvo";
+
 export async function generateMetadata(): Promise<Metadata> {
   const branding = await getBranding().catch(() => DEFAULT_BRANDING);
   const producto = productName([...enabledChannels()]);
+  // Sin sesión (inicio de sesión, recuperación) la pestaña lleva siempre el
+  // nombre de la agencia; dentro del sistema, la marca de la organización.
+  const session = await getSessionOrNull();
+  const marcaBranding = session
+    ? await getBranding(session.organizationId).catch(() => branding)
+    : branding;
+  const marca = session ? marcaBranding.name : AGENCY_NAME;
   return {
-    title: `${branding.name} | ${producto}`,
+    title: `${marca} | ${producto}`,
     description: `${producto} con agente de IA y Laboratorio de auto-evaluación`,
     // Sin logo propio, el icono de Agencia Luvo; con uno subido en Ajustes → Marca,
     // ese. El `?v=` cambia con la marca: los navegadores guardan el favicon con
     // una insistencia notable y, sin eso, el logo nuevo tarda días en aparecer.
-    icons: { icon: tabIconHref(branding) },
+    // Sin sesión, siempre el de la agencia; con sesión, el de la marca (si lo hay).
+    icons: { icon: session ? tabIconHref(marcaBranding) : DEFAULT_FAVICON_SRC },
   };
 }
 

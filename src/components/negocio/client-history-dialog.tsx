@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Modal } from "@/components/negocio/modal";
-import { dateNumeric, money } from "@/lib/salon/format";
+import { birthdayLabel, dateNumeric, formatPeruPhone, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS } from "@/lib/salon/schemas";
 import type { SalonClientDetailDto } from "@/lib/salon/types";
 
 /**
- * Módulo SALON — la línea de tiempo de un cliente: cada atención con su fecha
+ * Módulo SALON — la ficha de un cliente: sus datos (celular, cumpleaños, notas) y la línea de tiempo: cada atención con su fecha
  * (DD/MM/AAAA, sin hora), lo que se hizo, quién atendió, cómo pagó y cuánto. Se
  * abre desde el número de «Visitas» de la lista; es solo lectura.
  */
@@ -39,7 +39,7 @@ export function ClientHistoryDialog({
   const client = detail?.client;
   return (
     <Modal
-      title={client ? `Historial de ${client.name}` : "Historial"}
+      title={client ? `Ficha de ${client.name}` : "Ficha del cliente"}
       description={
         client
           ? `${client.visits} visita${client.visits === 1 ? "" : "s"} · ${money(client.totalCents, currency)} invertidos`
@@ -61,7 +61,30 @@ export function ClientHistoryDialog({
             <div key={i} className="h-9 animate-pulse rounded-md bg-subtle" />
           ))}
         </div>
-      ) : detail.history.length === 0 ? (
+      ) : null}
+      {detail && (
+        <dl className="mb-3 grid gap-x-6 gap-y-1.5 rounded-md border bg-subtle/50 px-3 py-2.5 text-sm sm:grid-cols-3">
+          <div>
+            <dt className="text-xs text-text-3">Celular</dt>
+            <dd className="tabular-nums">{formatPeruPhone(client?.phone)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-3">Cumpleaños</dt>
+            <dd>{birthdayLabel(client?.birthdayDay ?? null, client?.birthdayMonth ?? null)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-3">Cliente desde</dt>
+            <dd className="tabular-nums">{client ? dateNumeric(client.registeredAt, timezone) : "—"}</dd>
+          </div>
+          {client?.notes && (
+            <div className="sm:col-span-3">
+              <dt className="text-xs text-text-3">Notas</dt>
+              <dd>{client.notes}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {error ? null : !detail ? null : detail.history.length === 0 ? (
         <p className="rounded-md border border-dashed px-3 py-4 text-sm text-text-2">
           Todavía no tiene atenciones registradas.
         </p>

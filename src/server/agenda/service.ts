@@ -2,7 +2,7 @@ import { and, asc, eq, gte, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import { labelInTz } from "@/lib/time/slots";
+import { dayIsoInTz, labelInTz } from "@/lib/time/slots";
 import { CONNECTOR_META, type ConnectorId } from "@/lib/agenda-connectors";
 import {
   computeAvailability,
@@ -24,6 +24,7 @@ import {
 import { ConnectorError } from "@/server/agenda/connectors/types";
 import { moveLeadToStage } from "@/server/leads/stage-history";
 import { publish } from "@/server/events/bus";
+import { notify } from "@/server/notifications/service";
 
 /**
  * 015 — Ciclo de vida de la cita y las dos reglas INNEGOCIABLES:
@@ -90,6 +91,10 @@ export async function createSessionBooking(input: {
   contactId?: string | null;
   /** Módulo SALON: el profesional («silla») que atiende; nulo = sin asignar. */
   staffId?: string | null;
+  /** Módulo SALON: el servicio u oferta de la cita y cuánto dura (si no, una franja). */
+  serviceId?: string | null;
+  comboId?: string | null;
+  durationMinutes?: number;
   notes?: string | null;
   /**
    * true ⇒ exige que el instante figure entre los ofrecidos a la conversación
@@ -194,12 +199,14 @@ export async function createSessionBooking(input: {
         conversationId: input.conversationId ?? null,
         leadId: leadRows[0]?.id ?? null,
         scheduledAt: new Date(slot.startUtc),
-        durationMinutes: settings.slotMinutes,
+        durationMinutes: input.durationMinutes ?? settings.slotMinutes,
         // Copia histórica: si el negocio cambia de conector, esta cita conserva
         // el que le tocó y sigue hablando con él al moverse o cancelarse.
         connector: settings.connector,
         isTest,
         staffId: input.staffId ?? null,
+        serviceId: input.serviceId ?? null,
+        comboId: input.comboId ?? null,
         notes: input.notes ?? null,
       })
       .returning();
@@ -244,12 +251,29 @@ export async function createSessionBooking(input: {
     data: { bookingId: delivered.id },
   });
 
+  // Aviso al equipo solo cuando la agenda el agente de IA: la cita que agenda una
+  // persona del equipo ya la conoce quien la agendó (y las de prueba no cuentan).
+  if (input.source === "ai" && !isTest) {
+    await notify(input.organizationId, {
+      title: "Cita agendada por el agente",
+      message: `${contactName} · ${labelInTz(slot.startUtc, settings.timezone)}`,
+      category: "cita",
+      link: bookingLink(slot.startUtc, settings.timezone, delivered.id),
+    });
+  }
+
   return {
     booking: delivered,
     meetingLink: delivered.meetingLink,
     linkPending: delivered.linkPending,
     label: labelInTz(slot.startUtc, settings.timezone),
   };
+}
+
+/** A dónde lleva el aviso de una cita: la agenda de ese día, con la cita abierta. */
+function bookingLink(startUtc: string | Date, timezone: string, bookingId: string): string {
+  const day = dayIsoInTz(new Date(startUtc), timezone);
+  return `/citas?pestana=sillas&fecha=${day}&cita=${bookingId}`;
 }
 
 export async function createBlock(input: {
