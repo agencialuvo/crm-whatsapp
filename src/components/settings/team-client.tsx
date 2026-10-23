@@ -84,7 +84,7 @@ export function TeamClient() {
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="team-name">Nombre</Label>
+              <Label htmlFor="team-name" required>Nombre</Label>
               <Input
                 id="team-name"
                 value={name}
@@ -92,7 +92,7 @@ export function TeamClient() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="team-email">Correo</Label>
+              <Label htmlFor="team-email" required>Correo</Label>
               <Input
                 id="team-email"
                 type="email"
@@ -102,7 +102,7 @@ export function TeamClient() {
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="team-password">Contraseña temporal</Label>
+            <Label htmlFor="team-password" required>Contraseña temporal</Label>
             <div className="flex gap-2">
               <Input
                 id="team-password"

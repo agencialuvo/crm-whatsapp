@@ -207,7 +207,7 @@ export function SaleEditDialog({
           </Field>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Fecha de atención" htmlFor="sale-edit-sold-on" error={errors.soldOn}>
+            <Field label="Fecha de atención" required htmlFor="sale-edit-sold-on" error={errors.soldOn}>
               <DatePicker
                 id="sale-edit-sold-on"
                 value={soldOn}
@@ -217,7 +217,7 @@ export function SaleEditDialog({
                 className="w-full"
               />
             </Field>
-            <Field label="Hora" htmlFor="sale-edit-sold-time" error={errors.soldTime}>
+            <Field label="Hora" required htmlFor="sale-edit-sold-time" error={errors.soldTime}>
               <Input
                 id="sale-edit-sold-time"
                 type="time"
@@ -229,7 +229,7 @@ export function SaleEditDialog({
             </Field>
           </div>
 
-          <Field label="Atendió" htmlFor="sale-edit-staff" error={errors.staffId}>
+          <Field label="Atendió" required htmlFor="sale-edit-staff" error={errors.staffId}>
             <SearchSelect
               id="sale-edit-staff"
               value={staffId}

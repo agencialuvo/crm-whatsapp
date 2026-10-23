@@ -242,7 +242,7 @@ export function SaleDialog({
                 label="Nombre del cliente"
                 htmlFor="sale-customer"
                 error={errors.customerName}
-                hint="Solo letras y espacios. Vacío: cliente de mostrador."
+                hint="Solo letras y espacios"
               >
                 <Input
                   id="sale-customer"
@@ -273,10 +273,10 @@ export function SaleDialog({
                 />
               </Field>
               <Field
-                label="Número celular"
+                label="Número de celular"
                 htmlFor="sale-phone"
                 error={errors.customerPhone}
-                hint="9 dígitos. Si ya existe, se reutiliza su ficha."
+                hint="9 dígitos, solo números."
               >
                 <PhoneInput
                   id="sale-phone"
@@ -318,18 +318,20 @@ export function SaleDialog({
                 value={birthdayDay}
                 onChange={setBirthdayDay}
                 options={DAY_OPTIONS}
-                placeholder="Día"
+                placeholder="Elige el día"
                 searchPlaceholder="Buscar día…"
                 emptyLabel="Sin definir"
+                  emptyShowsPlaceholder
                 disabled={busy}
               />
               <SearchSelect
                 value={birthdayMonth}
                 onChange={setBirthdayMonth}
                 options={MONTH_OPTIONS}
-                placeholder="Mes"
+                placeholder="Elige el mes"
                 searchPlaceholder="Buscar mes…"
                 emptyLabel="Sin definir"
+                  emptyShowsPlaceholder
                 disabled={busy}
               />
             </div>
@@ -342,7 +344,7 @@ export function SaleDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
-              label="Atendió"
+              label="Atendió" required
               htmlFor="sale-staff"
               error={errors.staffId}
               hint={

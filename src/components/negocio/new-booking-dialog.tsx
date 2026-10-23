@@ -308,7 +308,7 @@ export function NewBookingDialog({
       ) : (
         <form onSubmit={submit} className="space-y-4" noValidate>
           <Field
-            label="Cliente"
+            label="Nombre del cliente" required
             htmlFor="nb-customer"
             error={errors.contactId}
             hint={contact || quick ? undefined : "Busca por nombre o celular."}
@@ -349,7 +349,7 @@ export function NewBookingDialog({
                   </button>
                 </p>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Nombre" htmlFor="nb-quick-name" error={errors.quickName}>
+                  <Field label="Nombre" required htmlFor="nb-quick-name" error={errors.quickName}>
                     <Input
                       id="nb-quick-name"
                       value={quick.name}
@@ -361,7 +361,7 @@ export function NewBookingDialog({
                       aria-invalid={!!errors.quickName}
                     />
                   </Field>
-                  <Field label="Celular" htmlFor="nb-quick-phone" error={errors.quickPhone}>
+                  <Field label="Celular" required htmlFor="nb-quick-phone" error={errors.quickPhone}>
                     <PhoneInput
                       id="nb-quick-phone"
                       digits={quick.phone}
@@ -429,7 +429,7 @@ export function NewBookingDialog({
             )}
           </Field>
 
-          <Field label="Hora" htmlFor="nb-time" error={errors.startUtc}>
+          <Field label="Hora" required htmlFor="nb-time" error={errors.startUtc}>
             {bookable.length === 0 ? (
               <p className="rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-sm text-warning-text">
                 {item
@@ -453,7 +453,7 @@ export function NewBookingDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
-              label="Servicio / oferta"
+              label="Servicio / oferta" required
               htmlFor="nb-item"
               error={errors.serviceId ?? errors.comboId}
               hint={item ? `Dura ${durationLabel(item.durationMinutes)}.` : undefined}

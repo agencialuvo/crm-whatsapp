@@ -166,7 +166,7 @@ export function AdsClient() {
           ) : null}
 
           <div className="space-y-1.5">
-            <Label htmlFor="capi-dataset">ID del dataset</Label>
+            <Label htmlFor="capi-dataset" required>ID del dataset</Label>
             <Input
               id="capi-dataset"
               value={datasetId}

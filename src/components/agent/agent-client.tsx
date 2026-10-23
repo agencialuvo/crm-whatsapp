@@ -198,7 +198,7 @@ function ProfileSection({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="agent-name">Nombre del agente</Label>
+          <Label htmlFor="agent-name" required>Nombre del agente</Label>
           <Input
             id="agent-name"
             value={form.name}

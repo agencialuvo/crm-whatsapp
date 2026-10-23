@@ -243,7 +243,7 @@ export function AgendaClient() {
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="slot">Duración de la cita (min)</Label>
+            <Label htmlFor="slot" required>Duración de la cita (min)</Label>
             <Input
               id="slot"
               type="number"
@@ -254,7 +254,7 @@ export function AgendaClient() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="buffer">Respiro entre citas (min)</Label>
+            <Label htmlFor="buffer" required>Respiro entre citas (min)</Label>
             <Input
               id="buffer"
               type="number"
@@ -265,7 +265,7 @@ export function AgendaClient() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="notice">Aviso mínimo (horas)</Label>
+            <Label htmlFor="notice" required>Aviso mínimo (horas)</Label>
             <Input
               id="notice"
               type="number"
@@ -276,7 +276,7 @@ export function AgendaClient() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="ahead">Agenda abierta (días)</Label>
+            <Label htmlFor="ahead" required>Agenda abierta (días)</Label>
             <Input
               id="ahead"
               type="number"
@@ -287,7 +287,7 @@ export function AgendaClient() {
             />
           </div>
           <div className="col-span-2 space-y-1.5">
-            <Label htmlFor="tz">Zona horaria</Label>
+            <Label htmlFor="tz" required>Zona horaria</Label>
             <Input
               id="tz"
               value={settings.timezone}

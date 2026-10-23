@@ -88,7 +88,7 @@ export function ZernioConnect({
   return (
     <div className="space-y-4">
       <div className="space-y-1.5 sm:max-w-md">
-        <Label htmlFor={`${idPrefix}-token`}>API key de Zernio</Label>
+        <Label htmlFor={`${idPrefix}-token`} required>API key de Zernio</Label>
         <Input
           id={`${idPrefix}-token`}
           type="password"
@@ -105,7 +105,7 @@ export function ZernioConnect({
 
       {manual && (
         <div className="space-y-1.5 sm:max-w-md">
-          <Label htmlFor={`${idPrefix}-account`}>accountId de la cuenta en Zernio</Label>
+          <Label htmlFor={`${idPrefix}-account`} required>accountId de la cuenta en Zernio</Label>
           <Input
             id={`${idPrefix}-account`}
             value={accountRef}

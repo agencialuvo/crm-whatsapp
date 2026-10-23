@@ -286,7 +286,7 @@ export function AiClient() {
 
           <form onSubmit={guardar} className="space-y-3">
             <div className="space-y-1.5">
-              <Label htmlFor="ai-provider">Proveedor</Label>
+              <Label htmlFor="ai-provider" required>Proveedor</Label>
               <SearchSelect
                 id="ai-provider"
                 value={provider}
@@ -326,7 +326,7 @@ export function AiClient() {
             )}
 
             <div className="space-y-1.5">
-              <Label htmlFor="ai-model">Modelo</Label>
+              <Label htmlFor="ai-model" required>Modelo</Label>
               <div className="flex gap-2">
                 <Input
                   id="ai-model"
@@ -361,7 +361,7 @@ export function AiClient() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="ai-token">
+              <Label htmlFor="ai-token" required={!cred}>
                 {cred ? "Reemplazar la llave" : "Llave del proveedor"}
               </Label>
               <Input

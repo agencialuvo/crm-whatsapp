@@ -114,7 +114,7 @@ export function BrandingClient({
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-1.5">
-            <Label htmlFor="brand-name">Nombre</Label>
+            <Label htmlFor="brand-name" required>Nombre</Label>
             <Input
               id="brand-name"
               maxLength={30}

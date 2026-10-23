@@ -99,7 +99,7 @@ export function TemplateSender({
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
-        <Label htmlFor="template-select">Plantilla aprobada</Label>
+        <Label htmlFor="template-select" required>Plantilla aprobada</Label>
         <SearchSelect
           id="template-select"
           value={selectedId}
@@ -123,7 +123,7 @@ export function TemplateSender({
       )}
       {values.map((value, i) => (
         <div key={i} className="space-y-1.5">
-          <Label htmlFor={`template-variable-${i + 1}`}>
+          <Label htmlFor={`template-variable-${i + 1}`} required>
             Valor de {`{{${i + 1}}}`}
           </Label>
           <Input

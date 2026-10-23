@@ -435,7 +435,7 @@ function CreateForm({
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="tpl-name">Nombre interno</Label>
+            <Label htmlFor="tpl-name" required>Nombre interno</Label>
             <Input
               id="tpl-name"
               placeholder="seguimiento_cotizacion"
@@ -448,7 +448,7 @@ function CreateForm({
             </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="tpl-lang">Idioma del mensaje</Label>
+            <Label htmlFor="tpl-lang" required>Idioma del mensaje</Label>
             <SearchSelect
               id="tpl-lang"
               value={language}
@@ -494,7 +494,7 @@ function CreateForm({
 
         <div className="space-y-1.5">
           <div className="flex items-end justify-between gap-2">
-            <Label htmlFor="tpl-body">Mensaje</Label>
+            <Label htmlFor="tpl-body" required>Mensaje</Label>
             <Button type="button" variant="ghost" size="sm" onClick={insertVariable}>
               <Plus className="h-3.5 w-3.5" />
               Insertar variable {`{{${countVariables(body) + 1}}}`}

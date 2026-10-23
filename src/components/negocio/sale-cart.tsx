@@ -142,7 +142,7 @@ export function SaleItemsField({
   const noteMissing = error === NOTE_REQUIRED;
   return (
     <Field
-      label="Servicios y ofertas"
+      label="Servicios y ofertas" required
       htmlFor={`${idPrefix}-item`}
       error={error}
       hint={
@@ -238,7 +238,7 @@ export function SaleAmountField({
 }) {
   return (
     <Field
-      label="Monto cobrado"
+      label="Monto cobrado" required
       htmlFor={`${idPrefix}-amount`}
       error={error}
       hint={
@@ -289,7 +289,13 @@ export function PaymentMethodField({
 }) {
   return (
     <fieldset>
-      <legend className="mb-1.5 text-sm font-medium">Método de pago</legend>
+      <legend className="mb-1.5 text-sm font-medium">
+        Método de pago
+        <span aria-hidden className="ml-0.5 font-semibold text-danger-text">
+          *
+        </span>
+        <span className="sr-only"> (obligatorio)</span>
+      </legend>
       <div role="radiogroup" aria-label="Método de pago" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {PAYMENT_METHODS.map((m) => (
           <button

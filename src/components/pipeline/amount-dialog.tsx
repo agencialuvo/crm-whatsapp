@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatMoneyCents, parseMoneyToCents } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { PriorityPicker } from "./priority-picker";
 import type { PriorityValue } from "@/lib/types";
 import { DialogCloseButton } from "@/components/ui/dialog-close";
@@ -57,9 +58,7 @@ export function AmountDialog({
         <h3 className="pr-8 font-semibold">Monto y prioridad</h3>
         <p className="mt-0.5 text-xs text-text-3">{leadName}</p>
 
-        <label className="mt-3 block text-xs font-medium" htmlFor="monto">
-          Cuánto vale este trato ({currency})
-        </label>
+        <Label htmlFor="monto" className="mt-3 block text-xs font-medium" required>Cuánto vale este trato ({currency})</Label>
         <Input
           id="monto"
           value={texto}

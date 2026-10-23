@@ -39,6 +39,7 @@ export function SearchSelect({
   placeholder = "Elige…",
   searchPlaceholder = "Buscar…",
   emptyLabel,
+  emptyShowsPlaceholder = false,
   ariaLabel,
   disabled,
   invalid,
@@ -54,6 +55,8 @@ export function SearchSelect({
   searchPlaceholder?: string;
   /** Si se da, añade al inicio la opción «sin elegir» (valor `""`) con este texto. */
   emptyLabel?: string;
+  /** Sin nada elegido, el botón muestra el `placeholder` (la opción vacía solo sirve para limpiar). */
+  emptyShowsPlaceholder?: boolean;
   /** Nombre accesible cuando no hay `<label>` visible. */
   ariaLabel?: string;
   disabled?: boolean;
@@ -197,7 +200,11 @@ export function SearchSelect({
         )}
       >
         <span className={cn("truncate", !selected || selected.value === "" ? "text-text-3" : "")}>
-          {selected && selected.value !== "" ? selected.label : (selected?.label ?? placeholder)}
+          {selected && selected.value !== ""
+            ? selected.label
+            : emptyShowsPlaceholder
+              ? placeholder
+              : (selected?.label ?? placeholder)}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
       </button>

@@ -12,6 +12,7 @@ export function Field({
   htmlFor,
   error,
   hint,
+  required,
   className,
   children,
 }: {
@@ -19,12 +20,16 @@ export function Field({
   htmlFor: string;
   error?: string;
   hint?: string;
+  /** Campo obligatorio: la etiqueta lleva un asterisco rojo. */
+  required?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <Label htmlFor={htmlFor} required={required}>
+        {label}
+      </Label>
       {children}
       {error ? (
         <p role="alert" className="text-xs text-danger-text">

@@ -225,7 +225,7 @@ export function InstagramClient() {
             <>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="ig-user-id">ID de la cuenta de Instagram</Label>
+                  <Label htmlFor="ig-user-id" required>ID de la cuenta de Instagram</Label>
                   <Input
                     id="ig-user-id"
                     value={igUserId}
@@ -235,7 +235,7 @@ export function InstagramClient() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="ig-token">Token de acceso</Label>
+                  <Label htmlFor="ig-token" required>Token de acceso</Label>
                   <Input
                     id="ig-token"
                     type="password"

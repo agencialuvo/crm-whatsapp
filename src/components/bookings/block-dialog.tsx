@@ -107,11 +107,11 @@ export function BlockDialog({
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label htmlFor="bloqueo-dia">Día</Label>
+            <Label htmlFor="bloqueo-dia" required>Día</Label>
             <DatePicker id="bloqueo-dia" value={day} onChange={setDay} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="bloqueo-hora">Hora</Label>
+            <Label htmlFor="bloqueo-hora" required>Hora</Label>
             <Input
               id="bloqueo-hora"
               type="time"
@@ -124,7 +124,7 @@ export function BlockDialog({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="bloqueo-duracion">Duración</Label>
+          <Label htmlFor="bloqueo-duracion" required>Duración</Label>
           <SearchSelect
             id="bloqueo-duracion"
             value={String(minutes)}

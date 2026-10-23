@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SOURCE_LABELS } from "@/server/contact-source";
 import { priorityRank } from "@/server/leads/priority";
@@ -353,9 +354,7 @@ function EditDialog({
         <h3 className="mb-4 pr-8 font-semibold">Editar contacto</h3>
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="edit-name">
-              Nombre
-            </label>
+            <Label htmlFor="edit-name" required>Nombre</Label>
             <Input
               id="edit-name"
               value={name}

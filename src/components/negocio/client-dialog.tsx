@@ -194,7 +194,7 @@ export function ClientDialog({
   function pickExisting(c: ContactMatchDto) {
     setLinked(c);
     setName(c.name);
-    setPhone(c.phone.slice(2));
+    setPhone((c.phone ?? "").slice(2));
     // Lo que ya estaba mal (o a medias) deja de estarlo al elegir a la persona.
     setErrors({});
     setDay(c.birthdayDay != null ? String(c.birthdayDay) : "");
@@ -530,10 +530,10 @@ export function ClientDialog({
           <form onSubmit={save} noValidate className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field
-                label="Nombre"
+                label="Nombre del cliente" required={!creating}
                 htmlFor="client-name"
                 error={errors.name}
-                hint="Solo letras y espacios."
+                hint="Solo letras y espacios"
               >
                 <Input
                   id="client-name"
@@ -559,7 +559,7 @@ export function ClientDialog({
                 />
               </Field>
               <Field
-                label="Celular"
+                label="Número de celular"
                 htmlFor="client-phone"
                 error={errors.phone}
                 hint="9 dígitos, solo números."
@@ -638,18 +638,20 @@ export function ClientDialog({
                   value={day}
                   onChange={setDay}
                   options={DAY_OPTIONS}
-                  placeholder="Día"
+                  placeholder="Elige el día"
                   searchPlaceholder="Buscar día…"
                   emptyLabel="Sin definir"
+                  emptyShowsPlaceholder
                   disabled={busy}
                 />
                 <SearchSelect
                   value={month}
                   onChange={setMonth}
                   options={MONTH_OPTIONS}
-                  placeholder="Mes"
+                  placeholder="Elige el mes"
                   searchPlaceholder="Buscar mes…"
                   emptyLabel="Sin definir"
+                  emptyShowsPlaceholder
                   disabled={busy}
                 />
               </div>
@@ -674,7 +676,7 @@ export function ClientDialog({
                 <>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field
-                      label="Atendió"
+                      label="Atendió" required
                       htmlFor="client-staff"
                       error={errors.staffId}
                       hint={

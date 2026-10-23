@@ -32,9 +32,9 @@ export const POST = withAuth(async (session, req: Request) => {
   const body = await parseBody(req, clientCreateSchema);
   if (!body.ok) return body.response;
   try {
-    return Response.json(await createSalonClient(session.organizationId, body.data), {
-      status: 201,
-    });
+    // Sin nombre ni celular es una venta de mostrador: no hay ficha que devolver.
+    const client = await createSalonClient(session.organizationId, body.data);
+    return Response.json(client ?? { client: null, counterSale: true }, { status: 201 });
   } catch (err) {
     return salonErrorResponse(err);
   }

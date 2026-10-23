@@ -109,7 +109,7 @@ export function ServiceDialog({
           error={errors.imageMediaId}
         />
 
-        <Field label="Nombre" htmlFor="srv-name" error={errors.name}>
+        <Field label="Nombre" required htmlFor="srv-name" error={errors.name}>
           <Input
             id="srv-name"
             value={name}
@@ -143,7 +143,7 @@ export function ServiceDialog({
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Precio" htmlFor="srv-price" error={errors.priceCents}>
+          <Field label="Precio" required htmlFor="srv-price" error={errors.priceCents}>
             <MoneyInput
               id="srv-price"
               value={price}
@@ -154,7 +154,7 @@ export function ServiceDialog({
             />
           </Field>
           <Field
-            label="Duración"
+            label="Duración" required
             htmlFor="srv-duration"
             error={errors.durationMinutes}
             hint="Horas y minutos: 00:30 es media hora."

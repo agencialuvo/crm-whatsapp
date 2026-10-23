@@ -253,10 +253,12 @@ describe("venta", () => {
     const base = { ...ok, customerName: "María" };
     expect(saleInputSchema.safeParse({ ...base, customerPhone: "51987654321" }).success).toBe(true);
     expect(saleInputSchema.safeParse({ ...base, customerPhone: "98765" }).success).toBe(false);
-    // Con celular hace falta el nombre (salvo que ya sea un contacto).
+    // Nombre y celular son opcionales, juntos o por separado (sin ninguno: cliente de mostrador).
     expect(
       saleInputSchema.safeParse({ ...ok, customerName: "", customerPhone: "51987654321" }).success
-    ).toBe(false);
+    ).toBe(true);
+    expect(saleInputSchema.safeParse({ ...ok, customerName: "", customerPhone: null }).success).toBe(true);
+    expect(saleInputSchema.safeParse(ok).success).toBe(true);
     expect(saleInputSchema.safeParse({ ...base, birthdayDay: 29, birthdayMonth: 2 }).success).toBe(true);
     expect(saleInputSchema.safeParse({ ...base, birthdayDay: 31, birthdayMonth: 4 }).success).toBe(false);
     expect(saleInputSchema.safeParse({ ...base, birthdayDay: 10 }).success).toBe(false);

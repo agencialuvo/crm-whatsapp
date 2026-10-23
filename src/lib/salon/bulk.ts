@@ -299,6 +299,11 @@ export function parseClientRow(row: number, c: Cells): ParsedRow<ClientRowData> 
   }
   if (errors.length > 0 || !parsed.success) return { ok: false, row, errors };
   const d = parsed.data;
+  // En la carga masiva el nombre y el celular siguen siendo obligatorios (una fila sin ellos no se puede identificar).
+  if (!d.name || !d.phone) {
+    if (!d.name) errors.push({ row, column: "nombre", message: "Escribe el nombre" });
+    return { ok: false, row, errors };
+  }
   return {
     ok: true,
     row,

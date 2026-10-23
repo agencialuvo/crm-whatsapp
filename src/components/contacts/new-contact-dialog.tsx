@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { SourceValue, StageDto } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DialogCloseButton } from "@/components/ui/dialog-close";
 import { SearchSelect } from "@/components/ui/search-select";
@@ -134,9 +135,7 @@ export function NewContactDialog({
 
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="nc-name">
-              Nombre
-            </label>
+            <Label htmlFor="nc-name" required>Nombre</Label>
             <Input
               id="nc-name"
               value={name}
@@ -161,9 +160,7 @@ export function NewContactDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="nc-phone">
-              Celular
-            </label>
+            <Label htmlFor="nc-phone" required>Celular</Label>
             <PhoneInput
               id="nc-phone"
               digits={phone}

@@ -98,7 +98,7 @@ export function StaffDialog({
         />
 
         <Field
-          label="Nombre"
+          label="Nombre" required
           htmlFor="stf-name"
           error={errors.name}
           hint="Solo letras y espacios."

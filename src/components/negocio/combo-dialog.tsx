@@ -106,7 +106,7 @@ export function ComboDialog({
           error={errors.imageMediaId}
         />
 
-        <Field label="Nombre" htmlFor="cmb-name" error={errors.name}>
+        <Field label="Nombre" required htmlFor="cmb-name" error={errors.name}>
           <Input
             id="cmb-name"
             value={name}
@@ -127,7 +127,7 @@ export function ComboDialog({
           error={errors.staffIds}
         />
 
-        <Field label="Qué incluye" htmlFor="cmb-desc" error={errors.description}>
+        <Field label="Qué incluye" required htmlFor="cmb-desc" error={errors.description}>
           <Textarea
             id="cmb-desc"
             rows={3}
@@ -140,7 +140,7 @@ export function ComboDialog({
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Precio de la oferta" htmlFor="cmb-price" error={errors.priceCents}>
+          <Field label="Precio de la oferta" required htmlFor="cmb-price" error={errors.priceCents}>
             <MoneyInput
               id="cmb-price"
               value={price}
@@ -151,7 +151,7 @@ export function ComboDialog({
             />
           </Field>
           <Field
-            label="Duración"
+            label="Duración" required
             htmlFor="cmb-duration"
             error={errors.durationMinutes}
             hint="Horas y minutos: 01:00 es una hora."

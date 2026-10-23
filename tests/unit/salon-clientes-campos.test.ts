@@ -26,9 +26,17 @@ describe("cliente: celular de Perú, exactamente 9 dígitos", () => {
   });
 
   it("rechaza menos o más dígitos, letras y otros países", () => {
-    for (const phone of ["5191234567", "519123456789", "51912345abc", "912345678", "34912345678", ""]) {
+    for (const phone of ["5191234567", "519123456789", "51912345abc", "912345678", "34912345678"]) {
       expect(clientInputSchema.safeParse({ ...base, phone }).success, phone).toBe(false);
     }
+  });
+
+  it("el celular es opcional: vacío o ausente se vuelve null", () => {
+    expect(clientInputSchema.parse({ ...base, phone: "" }).phone).toBeNull();
+    expect(clientInputSchema.parse({ ...base, phone: null }).phone).toBeNull();
+    const { phone: _p, ...sinCelular } = base;
+    void _p;
+    expect(clientInputSchema.parse(sinCelular).phone).toBeNull();
   });
 });
 
@@ -57,6 +65,19 @@ describe("cliente: alta con la atención", () => {
     ).toBe(false);
     expect(clientCreateSchema.safeParse({ ...alta, customCommissionPercentage: 30 }).success).toBe(true);
     expect(clientCreateSchema.safeParse({ ...alta, customCommissionPercentage: 130 }).success).toBe(false);
+  });
+
+  it("el alta no exige nombre ni celular (sin ninguno, es una venta de mostrador)", () => {
+    const { name: _n, phone: _p, ...sinDatos } = alta;
+    void _n;
+    void _p;
+    const r = clientCreateSchema.parse(sinDatos);
+    expect(r.name).toBeNull();
+    expect(r.phone).toBeNull();
+    expect(clientCreateSchema.parse({ ...sinDatos, name: "  ", phone: "" }).name).toBeNull();
+    // Si se escriben, siguen validándose.
+    expect(clientCreateSchema.safeParse({ ...sinDatos, name: "A1" }).success).toBe(false);
+    expect(clientCreateSchema.safeParse({ ...sinDatos, phone: "5191" }).success).toBe(false);
   });
 
   it("la fecha de atención no admite hora", () => {

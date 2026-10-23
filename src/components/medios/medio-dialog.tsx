@@ -128,7 +128,7 @@ export function MedioDialog({
         </div>
 
         <form onSubmit={(e) => void guardar(e)} noValidate className="space-y-1.5">
-          <Label htmlFor="medio-nombre">Nombre</Label>
+          <Label htmlFor="medio-nombre" required>Nombre</Label>
           <div className="flex items-start gap-2">
             <Input
               id="medio-nombre"

@@ -225,7 +225,7 @@ export function MessengerClient() {
             <>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="fb-page-id">ID de la página</Label>
+                  <Label htmlFor="fb-page-id" required>ID de la página</Label>
                   <Input
                     id="fb-page-id"
                     value={pageId}
@@ -235,7 +235,7 @@ export function MessengerClient() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="fb-token">Token de la página</Label>
+                  <Label htmlFor="fb-token" required>Token de la página</Label>
                   <Input
                     id="fb-token"
                     type="password"

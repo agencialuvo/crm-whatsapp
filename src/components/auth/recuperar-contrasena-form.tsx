@@ -175,7 +175,7 @@ export function RecuperarContrasenaForm() {
         <CardContent>
           <form onSubmit={onSubmitReset} className="space-y-4" noValidate>
             <div className="space-y-1.5">
-              <Label htmlFor="code">Código</Label>
+              <Label htmlFor="code" required>Código</Label>
               <Input
                 id="code"
                 inputMode="numeric"
@@ -189,7 +189,7 @@ export function RecuperarContrasenaForm() {
               {fieldErrors.code && <p className="text-xs text-destructive">{fieldErrors.code}</p>}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="new-password">Contraseña nueva</Label>
+              <Label htmlFor="new-password" required>Contraseña nueva</Label>
               <Input
                 id="new-password"
                 type="password"
@@ -203,7 +203,7 @@ export function RecuperarContrasenaForm() {
               )}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="confirm-password">Repite la contraseña</Label>
+              <Label htmlFor="confirm-password" required>Repite la contraseña</Label>
               <Input
                 id="confirm-password"
                 type="password"
@@ -267,7 +267,7 @@ export function RecuperarContrasenaForm() {
       <CardContent>
         <form onSubmit={onSubmitEmail} className="space-y-4" noValidate>
           <div className="space-y-1.5">
-            <Label htmlFor="email">Correo</Label>
+            <Label htmlFor="email" required>Correo</Label>
             <Input
               id="email"
               type="email"

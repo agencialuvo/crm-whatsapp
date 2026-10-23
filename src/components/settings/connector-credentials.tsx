@@ -181,7 +181,7 @@ export function ConnectorCredentials({
         <div className="space-y-3">
           {fields.map((f) => (
             <div key={f.name} className="space-y-1.5">
-              <Label htmlFor={`${connector}-${f.name}`}>{f.label}</Label>
+              <Label htmlFor={`${connector}-${f.name}`} required>{f.label}</Label>
               <Input
                 id={`${connector}-${f.name}`}
                 type={f.secret ? "password" : "text"}

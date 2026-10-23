@@ -329,7 +329,7 @@ function ConnectForm({
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="waba-id">WABA ID</Label>
+            <Label htmlFor="waba-id" required>WABA ID</Label>
             <Input
               id="waba-id"
               placeholder="ID de la cuenta de WhatsApp Business"
@@ -338,7 +338,7 @@ function ConnectForm({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="phone-number-id">Phone Number ID</Label>
+            <Label htmlFor="phone-number-id" required>Phone Number ID</Label>
             <Input
               id="phone-number-id"
               placeholder="ID del número de teléfono"
@@ -348,7 +348,7 @@ function ConnectForm({
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="token">Token de acceso</Label>
+          <Label htmlFor="token" required>Token de acceso</Label>
           <Input
             id="token"
             type="password"

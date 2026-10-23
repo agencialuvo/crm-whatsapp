@@ -414,13 +414,6 @@ export const saleInputSchema = z
       }
     }
     checkBirthday(v, ctx);
-    if (v.customerPhone && !v.contactId && !v.customerName?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["customerName"],
-        message: "Escribe el nombre del cliente",
-      });
-    }
   });
 export type SaleInput = z.infer<typeof saleInputSchema>;
 
@@ -438,14 +431,31 @@ export function saleItemsOf(input: SaleInput): SaleItemInput[] {
   ];
 }
 
+/** Nombre opcional: vacío ⇒ `null`; si se escribe, las mismas reglas que el de un profesional. */
+const optionalPersonName = z
+  .string()
+  .nullish()
+  .transform((v) => (v?.trim() ? v : null))
+  .pipe(staffName.nullable());
+
+/** Celular de Perú opcional: vacío ⇒ `null`; si se escribe, 51 + exactamente 9 dígitos. */
+const optionalPeruPhone = z
+  .string()
+  .trim()
+  .nullish()
+  .transform((v) => (v ? v : null))
+  .pipe(
+    z
+      .string()
+      .regex(/^51\d{9}$/, "El celular debe tener exactamente 9 dígitos, solo números")
+      .nullable()
+  );
+
 const clientFields = {
     // Solo letras y espacios (mismas reglas que el nombre de un profesional).
     name: staffName,
-    // Celular de Perú: 51 + exactamente 9 dígitos.
-    phone: z
-      .string({ required_error: "Escribe el celular" })
-      .trim()
-      .regex(/^51\d{9}$/, "El celular debe tener exactamente 9 dígitos, solo números"),
+    // Celular de Perú: 51 + exactamente 9 dígitos. Opcional: sin él, el cliente no tiene WhatsApp.
+    phone: optionalPeruPhone,
     birthdayDay: birthdayDay.nullish().transform((v) => v ?? null),
     birthdayMonth: birthdayMonth.nullish().transform((v) => v ?? null),
     notes: z
@@ -475,6 +485,8 @@ export type ClientInput = z.input<typeof clientInputSchema>;
 export const clientCreateSchema = z
   .object({
     ...clientFields,
+    // En el alta, el nombre también es opcional: sin nombre ni celular es una venta de mostrador.
+    name: optionalPersonName,
     items: z
       .array(saleItemSchema, { required_error: "Agrega al menos un servicio u oferta" })
       .min(1, "Agrega al menos un servicio u oferta")

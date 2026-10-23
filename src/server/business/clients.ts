@@ -272,13 +272,33 @@ export async function getSalonClient(
 export async function createSalonClient(
   organizationId: string,
   input: ClientCreateInput,
-): Promise<SalonClientDetailDto> {
+): Promise<SalonClientDetailDto | null> {
   const db = getDb();
-  const phone = normalizeMx(input.phone);
+  const name = input.name?.trim() || null;
+  const phone = input.phone ? normalizeMx(input.phone) : null;
+
+  // Sin nombre ni celular no hay a quién fichar: es una venta de mostrador y no
+  // se crea ningún contacto (no hay cliente que devolver).
+  let contactId: string | null = null;
+  if (!phone && name) {
+    // Solo nombre: una ficha sin WhatsApp. Su identidad es interna (`manual:…`),
+    // única por contacto, para no chocar con ningún celular.
+    contactId = newId("contact");
+    await db.insert(c).values({
+      id: contactId,
+      organizationId,
+      name,
+      nameSource: "manual",
+      waIdentity: `manual:${contactId}`,
+      phone: null,
+      source: "conocido",
+    });
+  }
 
   // La venta crea (o reutiliza) el contacto, lo marca cliente y guarda el cumpleaños.
   const { sale } = await registerServiceSale(organizationId, {
-    customerName: input.name,
+    contactId,
+    customerName: name,
     customerPhone: phone,
     birthdayDay: input.birthdayDay ?? null,
     birthdayMonth: input.birthdayMonth ?? null,
@@ -301,22 +321,22 @@ export async function createSalonClient(
       ),
     )
     .limit(1);
-  const contactId = created?.id;
-  if (!contactId)
-    throw new SalonError("client_not_found", 404, "El cliente no existe");
+  const savedId = created?.id;
+  if (!savedId) return null;
 
   // El nombre y las notas que se escribieron aquí mandan sobre los del contacto.
-  await db
-    .update(c)
-    .set({
-      name: input.name,
-      nameSource: "manual",
-      archivedAt: null,
-      updatedAt: new Date(),
-      ...(input.notes ? { notes: input.notes } : {}),
-    })
-    .where(scoped(c.organizationId, organizationId, eq(c.id, contactId)));
-  return getSalonClient(organizationId, contactId);
+  if (name || input.notes) {
+    await db
+      .update(c)
+      .set({
+        ...(name ? { name, nameSource: "manual" as const } : {}),
+        archivedAt: null,
+        updatedAt: new Date(),
+        ...(input.notes ? { notes: input.notes } : {}),
+      })
+      .where(scoped(c.organizationId, organizationId, eq(c.id, savedId)));
+  }
+  return getSalonClient(organizationId, savedId);
 }
 
 /** Edición completa de un cliente (nombre, celular, cumpleaños y notas). */
@@ -345,15 +365,16 @@ export async function updateSalonClient(
   if (!current)
     throw new SalonError("client_not_found", 404, "El cliente no existe");
 
-  const phone = normalizeMx(input.phone);
-  const phoneChanged = phone !== current.phone;
+  // Celular vacío: no se toca el que ya tiene (y un cliente sin celular sigue sin él).
+  const phone = input.phone ? normalizeMx(input.phone) : current.phone;
+  const phoneChanged = !!input.phone && phone !== current.phone;
   // La identidad de WhatsApp es el celular normalizado: si el contacto se
   // identificaba por él, el cambio la mueve también. Una identidad de otro tipo
   // (BSUID, otro canal) no se toca.
   const identityFollowsPhone =
     current.channel === "whatsapp" && current.waIdentity === current.phone;
 
-  if (phoneChanged) {
+  if (phoneChanged && phone) {
     const [clash] = await db
       .select({ id: c.id })
       .from(c)
@@ -382,7 +403,7 @@ export async function updateSalonClient(
         name: input.name,
         nameSource: "manual",
         phone,
-        ...(phoneChanged && identityFollowsPhone ? { waIdentity: phone } : {}),
+        ...(phoneChanged && phone && identityFollowsPhone ? { waIdentity: phone } : {}),
         birthdayDay: input.birthdayDay ?? null,
         birthdayMonth: input.birthdayMonth ?? null,
         notes: input.notes ?? null,
