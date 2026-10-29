@@ -6,6 +6,7 @@ import {
   Images,
   Inbox,
   Kanban,
+  Receipt,
   LayoutDashboard,
   ListChecks,
   Scissors,
@@ -91,7 +92,12 @@ export function appNavGroups({
           { href: "/pipeline", label: "Pipeline", icon: Kanban },
         ]
       : []),
-    ...(salonManager ? [{ href: "/caja", label: "Caja", icon: Wallet }] : []),
+    ...(salonManager
+      ? [
+          { href: "/caja", label: "Caja", icon: Wallet },
+          { href: "/gastos", label: "Gastos", icon: Receipt },
+        ]
+      : []),
     ...(agenda ? [{ href: "/citas", label: "Citas", icon: CalendarDays }] : []),
     ...(salonManager ? [{ href: "/clientes", label: "Clientes", icon: UserCheck }] : []),
     { href: "/contactos", label: "Contactos", icon: Users },

@@ -134,6 +134,13 @@ export function SearchSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // La primera vez, el panel se monta un instante DESPUÉS de abrir (hasta medir el botón no
+  // tiene posición): el foco del efecto de arriba no lo encuentra. Aquí se le da al montarse.
+  const placed = place !== null;
+  useEffect(() => {
+    if (open && placed) searchRef.current?.focus();
+  }, [open, placed]);
+
   // La opción activa siempre a la vista.
   useEffect(() => {
     if (!open) return;

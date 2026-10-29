@@ -1,0 +1,1 @@
+ALTER TABLE "expense_item" ADD COLUMN "presentation" text;

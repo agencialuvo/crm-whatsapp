@@ -1,0 +1,2 @@
+ALTER TABLE "expense_item" ADD COLUMN "units_per_package" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "expense_item" ADD CONSTRAINT "expense_item_units_pos" CHECK ("expense_item"."units_per_package" > 0);

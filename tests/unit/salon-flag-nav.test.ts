@@ -51,7 +51,7 @@ describe("menú", () => {
   const hrefs = (o: Parameters<typeof appNavGroups>[0]) =>
     appNavGroups(o).flatMap((g) => g.items.map((i) => i.href));
 
-  const TRES = ["/panel", "/servicios", "/equipo", "/caja", "/clientes"];
+  const TRES = ["/panel", "/servicios", "/equipo", "/caja", "/gastos", "/clientes"];
 
   it("sin la bandera no hay Servicios, Equipo ni Caja para nadie", () => {
     for (const o of [{ role: "owner" }, { role: "owner", agenda: true }]) {
@@ -65,6 +65,7 @@ describe("menú", () => {
       expect(g.items.map((i) => i.href)).toEqual([
         "/panel",
         "/caja",
+        "/gastos",
         "/citas",
         "/clientes",
         "/contactos",

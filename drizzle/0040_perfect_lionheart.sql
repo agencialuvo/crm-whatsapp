@@ -1,0 +1,1 @@
+ALTER TABLE "expense_item" ADD COLUMN "unit_name" text DEFAULT 'unidad' NOT NULL;

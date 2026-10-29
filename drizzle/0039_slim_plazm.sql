@@ -1,0 +1,2 @@
+ALTER TABLE "expense_item" ADD COLUMN "inventory_item_id" text;--> statement-breakpoint
+ALTER TABLE "expense_item" ADD CONSTRAINT "expense_item_inventory_item_id_inventory_item_id_fk" FOREIGN KEY ("inventory_item_id") REFERENCES "public"."inventory_item"("id") ON DELETE set null ON UPDATE no action;

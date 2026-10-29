@@ -452,6 +452,45 @@ export const serviceSaleEdit = pgTable(
   ]
 );
 
+
+/* ============================================================
+ * Módulo de Egresos y Gastos Operativos (Módulo SALON / Finanzas)
+ * ============================================================ */
+
+/**
+ * Registro detallado de cada gasto, compra o entrega de herramientas/insumos
+ */
+export const expenseItem = pgTable(
+  "expense_item",
+  {
+    id: text("id").primaryKey(), // prefix: 'exi'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    // Identificador si es un gasto fijo (Alquiler, Luz, etc.) o variable/insumo
+    isFixed: boolean("is_fixed").notNull().default(false),
+
+    name: text("name").notNull(), // Ej: "Cuchillas de afeitar", "Recibo de Luz", "Alquiler Local"
+    // Detalle de la compra, solo de referencia (opcional; un gasto fijo no lo lleva): cuántos
+    // paquetes/bultos (o unidades sueltas) y cuántas unidades trae cada paquete.
+    quantity: integer("quantity"),
+    presentation: text("presentation"), // 'units' | 'package' | 'dozen'
+    unitsPerPackage: integer("units_per_package"), // null = unidades; 12 en docena
+    totalPriceCents: integer("total_price_cents").notNull(), // Lo realmente pagado (no se multiplica por la cantidad)
+    
+    notes: text("notes"), // Notas adicionales o detalle
+    expenseDate: timestamp("expense_date").notNull().defaultNow(), // Fecha del gasto
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("expense_item_org_date_idx").on(t.organizationId, t.expenseDate),
+    check("expense_item_qty_pos", sql`${t.quantity} > 0`),
+    check("expense_item_units_pos", sql`${t.unitsPerPackage} > 0`),
+    check("expense_item_total_price_nonneg", sql`${t.totalPriceCents} >= 0`),
+  ]
+);
+
 /* ============================================================
  * Dominio (toda tabla lleva organization_id NOT NULL + índice org-first)
  * ============================================================ */

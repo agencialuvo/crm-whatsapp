@@ -49,6 +49,8 @@ const prefixes = {
   serviceSaleEdit: "sed",
   // Notificaciones del equipo (campanita y /notificaciones)
   notification: "ntf",
+  // Egresos y gastos operativos
+  expenseItem: "exi",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

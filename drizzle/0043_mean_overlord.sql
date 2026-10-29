@@ -1,0 +1,1 @@
+ALTER TABLE "expense_item" DROP COLUMN "unit_name";
