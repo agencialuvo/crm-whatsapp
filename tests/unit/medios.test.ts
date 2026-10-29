@@ -5,7 +5,7 @@ import {
   nombreLegible,
   validarMedio,
 } from "@/lib/medios";
-import { detectarFormato } from "@/server/medios/sniff";
+import { detectarFormato, revisarSvg } from "@/server/medios/sniff";
 
 const MB = 1024 * 1024;
 
@@ -122,5 +122,32 @@ describe("nombres y pesos legibles", () => {
     expect(formatBytes(2048)).toBe("2 KB");
     expect(formatBytes(1.5 * MB)).toBe("1,5 MB");
     expect(formatBytes(25 * MB)).toBe("25 MB");
+  });
+});
+
+describe("SVG (solo iconos)", () => {
+  const SVG = bytes('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><path d="M0 0h8v8z"/></svg>');
+
+  it("solo se reconoce y acepta cuando el selector de iconos lo pide", () => {
+    expect(detectarFormato(SVG)).toBeNull();
+    expect(detectarFormato(SVG, { svg: true })?.ext).toBe("svg");
+    expect(validarMedio("tijera.svg", "image/svg+xml", 500).ok).toBe(false);
+    expect(validarMedio("tijera.svg", "image/svg+xml", 500, { svg: true }).ok).toBe(true);
+    expect(validarMedio("tijera.svg", "image/svg+xml", 300 * 1024, { svg: true }).ok).toBe(false);
+  });
+
+  it("un HTML no pasa por SVG", () => {
+    expect(detectarFormato(bytes("<html><svg></svg></html>"), { svg: true })).toBeNull();
+  });
+
+  it("revisa el contenido: acepta el limpio y rechaza guiones y recursos externos", () => {
+    expect(revisarSvg(SVG)).toBeNull();
+    expect(revisarSvg(bytes('<svg><use href="#a"/><path fill="url(#g)"/></svg>'))).toBeNull();
+    expect(revisarSvg(bytes("<svg><script>alert(1)</script></svg>"))).not.toBeNull();
+    expect(revisarSvg(bytes('<svg onload="x()"></svg>'))).not.toBeNull();
+    expect(revisarSvg(bytes('<svg><a href="javascript:x()"/></svg>'))).not.toBeNull();
+    expect(revisarSvg(bytes('<svg><image href="https://e.com/a.png"/></svg>'))).not.toBeNull();
+    expect(revisarSvg(bytes('<svg><foreignObject/></svg>'))).not.toBeNull();
+    expect(revisarSvg(bytes('<svg><style>@import "https://e.com/x.css";</style></svg>'))).not.toBeNull();
   });
 });

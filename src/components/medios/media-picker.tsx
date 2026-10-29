@@ -10,8 +10,10 @@ import { apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog, Modal, ModalFooter } from "@/components/negocio/modal";
 import { EnviosList, useImageUpload } from "@/components/medios/image-upload";
 import {
+  ACCEPT_ICONOS,
   ACCEPT_IMAGENES,
   formatBytes,
+  resumenDeLimitesIcono,
   resumenDeLimitesImagen,
   type MedioDto,
 } from "@/lib/medios";
@@ -39,6 +41,7 @@ export function MediaImageField({
   disabled,
   error,
   label = "Imagen (opcional)",
+  permitirSvg = false,
 }: {
   id: string;
   /** El título del campo; por defecto «Imagen (opcional)». */
@@ -47,12 +50,12 @@ export function MediaImageField({
   onChange: (value: ImagenElegida | null) => void;
   disabled?: boolean;
   error?: string;
+  /** Admite también SVG (iconos, como el de los sellos). */
+  permitirSvg?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [arrastrando, setArrastrando] = useState(false);
-  const { envios, subir, descartar, subiendo } = useImageUpload((m) =>
-    onChange({ id: m.id, url: m.ruta })
-  );
+  const { envios, subir, descartar, subiendo } = useImageUpload((m) => onChange({ id: m.id, url: m.ruta }), { svg: permitirSvg });
   const bloqueado = disabled || subiendo;
 
   return (
@@ -141,7 +144,7 @@ export function MediaImageField({
         )}
       </div>
 
-      <p className="text-xs text-text-3">{resumenDeLimitesImagen()}</p>
+      <p className="text-xs text-text-3">{permitirSvg ? resumenDeLimitesIcono() : resumenDeLimitesImagen()}</p>
       <EnviosList envios={envios} onDismiss={descartar} />
       {error && (
         <p role="alert" className="text-xs text-danger-text">
@@ -152,6 +155,7 @@ export function MediaImageField({
         createPortal(
           <MediaPickerDialog
             selectedId={value?.id ?? null}
+            permitirSvg={permitirSvg}
             onClose={() => setOpen(false)}
             // Borrada de la galería = ya no existe: la previsualización se quita al instante.
             onDeleted={(borrada) => {
@@ -179,8 +183,10 @@ function MediaPickerDialog({
   onPick,
   onClose,
   onDeleted,
+  permitirSvg = false,
 }: {
   selectedId: string | null;
+  permitirSvg?: boolean;
   onPick: (medio: MedioDto) => void;
   onClose: () => void;
   /** Se borró una imagen de la galería (para que quien la usa se entere). */
@@ -205,7 +211,7 @@ function MediaPickerDialog({
     // Lo recién subido es lo que se quiere usar.
     setSelected(medio.id);
     setExito(`«${medio.nombre}» se subió y quedó seleccionada.`);
-  });
+  }, { svg: permitirSvg });
 
   const cargar = useCallback(async () => {
     setLoadError(null);
@@ -301,14 +307,14 @@ function MediaPickerDialog({
             <kbd className="rounded border bg-subtle px-1">Ctrl</kbd> +{" "}
             <kbd className="rounded border bg-subtle px-1">V</kbd></>}
           </span>
-          <span className="text-xs text-text-3">{resumenDeLimitesImagen()}</span>
+          <span className="text-xs text-text-3">{permitirSvg ? resumenDeLimitesIcono() : resumenDeLimitesImagen()}</span>
         </button>
         {/* El input real, oculto: solo lo activa el botón de arriba. Sin `capture`:
             eso forzaría la cámara y quitaría la galería. */}
         <input
           ref={inputRef}
           type="file"
-          accept={ACCEPT_IMAGENES}
+          accept={permitirSvg ? ACCEPT_ICONOS : ACCEPT_IMAGENES}
           className="sr-only"
           tabIndex={-1}
           aria-hidden

@@ -39,7 +39,7 @@ export function withAuth<Args extends unknown[]>(
 /** Parsea el body JSON con un esquema Zod; inválido → Response 422. */
 export async function parseBody<T>(
   req: Request,
-  schema: z.ZodType<T>
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>
 ): Promise<{ ok: true; data: T } | { ok: false; response: Response }> {
   let raw: unknown;
   try {

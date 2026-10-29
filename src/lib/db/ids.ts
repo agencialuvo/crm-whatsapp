@@ -51,6 +51,10 @@ const prefixes = {
   notification: "ntf",
   // Egresos y gastos operativos
   expenseItem: "exi",
+  // Fidelización virtual
+  loyaltySettings: "lgs",
+  customerLoyaltyCard: "clc",
+  loyaltyTransaction: "ltr",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

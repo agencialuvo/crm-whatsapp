@@ -22,7 +22,8 @@ export type Envio = {
  * quien la usa con cada imagen subida. Lo comparten el campo «Imagen» (que
  * acepta arrastrar encima) y la ventana de la galería (que además acepta pegar).
  */
-export function useImageUpload(onUploaded: (medio: MedioDto) => void) {
+export function useImageUpload(onUploaded: (medio: MedioDto) => void, opts: { svg?: boolean } = {}) {
+  const svg = opts.svg === true;
   const [envios, setEnvios] = useState<Envio[]>([]);
   const contador = useRef(0);
   // El que llama puede cambiar de función en cada render; se usa siempre la última.
@@ -33,7 +34,7 @@ export function useImageUpload(onUploaded: (medio: MedioDto) => void) {
     if (archivos.length === 0) return;
     const lote = archivos.map((file) => {
       contador.current += 1;
-      const v = validarMedio(file.name, file.type, file.size);
+      const v = validarMedio(file.name, file.type, file.size, { svg });
       return { file, key: `up-${contador.current}`, v, esVideo: v.ok && v.formato.tipo === "video" };
     });
     setEnvios((prev) => [
@@ -60,7 +61,8 @@ export function useImageUpload(onUploaded: (medio: MedioDto) => void) {
           file,
           (f) => setEnvios((prev) => prev.map((e) => (e.key === key ? { ...e, progreso: f } : e))),
           // El servidor también lo exige: la pantalla sola no es una barrera.
-          "image"
+          "image",
+          svg
         );
         setEnvios((prev) => prev.filter((e) => e.key !== key));
         alSubir.current(medio);
@@ -71,7 +73,7 @@ export function useImageUpload(onUploaded: (medio: MedioDto) => void) {
         );
       }
     }
-  }, []);
+  }, [svg]);
 
   const descartar = useCallback(
     (key: string) => setEnvios((prev) => prev.filter((e) => e.key !== key)),

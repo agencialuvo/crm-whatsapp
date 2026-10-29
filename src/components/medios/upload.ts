@@ -9,11 +9,13 @@ export function subirArchivo(
   file: File,
   onProgress: (fraccion: number) => void,
   /** Si se da, el servidor solo acepta ese tipo (el selector de imagen pide `image`). */
-  soloTipo?: "image" | "video"
+  soloTipo?: "image" | "video",
+  /** Admite SVG (solo el selector de iconos). */
+  icono?: boolean
 ): Promise<MedioDto> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", soloTipo ? `/api/medios?tipo=${soloTipo}` : "/api/medios");
+    xhr.open("POST", soloTipo ? `/api/medios?tipo=${soloTipo}${icono ? "&icono=1" : ""}` : "/api/medios");
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };

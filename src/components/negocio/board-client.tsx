@@ -14,6 +14,7 @@ import { SaleDialog } from "@/components/negocio/sale-dialog";
 import { StatCard } from "@/components/results/stat-card";
 import { useEvents } from "@/components/use-events";
 import { durationLabel, money } from "@/lib/salon/format";
+import { loyaltyNotice } from "@/lib/loyalty";
 import type { BoardBooking, BoardDto, BoardSlot, RegisteredSaleDto } from "@/lib/salon/types";
 import { longDayLabel } from "@/lib/time/calendar";
 import { addDaysISO, overlaps, timeInTz } from "@/lib/time/slots";
@@ -177,7 +178,7 @@ export function BoardClient({
     setChargeFor(null);
     setSelectedId(null);
     setNotice(
-      `Cobrado: ${result.sale.customerName} · ${money(result.sale.amountCents, currency)} (${result.sale.itemName}).`
+      `Cobrado: ${result.sale.customerName} · ${money(result.sale.amountCents, currency)} (${result.sale.itemName}).${loyaltyNotice(result)}`
     );
     refresh();
   }

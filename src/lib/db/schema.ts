@@ -491,6 +491,122 @@ export const expenseItem = pgTable(
   ]
 );
 
+
+/* ============================================================
+ * Módulo de Fidelización Virtual (Apple Wallet / Google Wallet)
+ * ============================================================ */
+
+/**
+ * Estructura TypeScript para los hitos/premios de fidelización.
+ */
+export type LoyaltyMilestone = {
+  stamps: number;          // Número de sello en el que se activa (ej: 4, 8)
+  title: string;           // Título corto (ej: "20% Descuento", "Corte Gratis")
+  rewardType: "service_free" | "percentage_discount" | "product_free";
+  discountPercentage?: number; // Opcional si es porcentaje
+  serviceIdRestriction?: string; // Opcional si aplica a un servicio específico
+};
+
+
+/**
+ * Configuración de la tarjeta de fidelidad de la organización.
+ * Permite al negocio personalizar su programa a su total libertad.
+ */
+export const loyaltySettings = pgTable(
+  "loyalty_settings",
+  {
+    id: text("id").primaryKey(), // prefix: 'lgs'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    
+    // Nombre y diseño visual de los pases (Apple / Google Wallet)
+    cardTitle: text("card_title").notNull().default("Tarjeta VIP"),
+    brandColor: text("brand_color").notNull().default("#111827"), // Color HEX para el pase
+    logoMediaId: text("logo_media_id").references(() => mediaLibraryItem.id, { onDelete: "set null" }),
+    
+    /** Imagen o icono personalizado para los sellos (ej: tijera, navaja) */
+    stampIconMediaId: text("stamp_icon_media_id").references(() => mediaLibraryItem.id, { onDelete: "set null" }),
+
+    /** 
+     * Hitos o premios configurados por el negocio (Multi-recompensas).
+     * Ejemplo: [{ stamps: 4, title: "20% Descuento", rewardType: "percentage_discount", discountPercentage: 20 }, 
+     *           { stamps: 8, title: "Corte Gratis", rewardType: "service_free" }]
+     */
+    milestones: jsonb("milestones").$type<LoyaltyMilestone[]>().notNull().default([
+      { stamps: 10, title: "Corte de cabello gratis", rewardType: "service_free" }
+    ]),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("loyalty_settings_org_uq").on(t.organizationId),
+  ]
+);
+
+/**
+ * Tarjeta de fidelización digital activa de un contacto/cliente.
+ */
+export const customerLoyaltyCard = pgTable(
+  "customer_loyalty_card",
+  {
+    id: text("id").primaryKey(), // prefix: 'clc'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    
+    currentStamps: integer("current_stamps").notNull().default(0),
+    totalStampsEarned: integer("total_stamps_earned").notNull().default(0),
+    totalRewardsRedeemed: integer("total_rewards_redeemed").notNull().default(0),
+    
+    // Identificadores únicos para sincronización con Apple Wallet / Google Wallet pases
+    walletPassIdentifier: text("wallet_pass_identifier").unique(),
+    
+    lastStampedAt: timestamp("last_stamped_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("customer_loyalty_card_org_contact_uq").on(t.organizationId, t.contactId),
+    index("customer_loyalty_card_org_idx").on(t.organizationId),
+    check("clc_current_stamps_nonneg", sql`${t.currentStamps} >= 0`),
+  ]
+);
+
+/**
+ * Historial de transacciones de sellos (ganados, canjeados, bloqueados por cumpleaños o ajustados).
+ */
+export const loyaltyTransaction = pgTable(
+  "loyalty_transaction",
+  {
+    id: text("id").primaryKey(), // prefix: 'ltr'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    cardId: text("card_id")
+      .notNull()
+      .references(() => customerLoyaltyCard.id, { onDelete: "cascade" }),
+    saleId: text("sale_id").references(() => serviceSale.id, { onDelete: "set null" }), // Relacionado opcionalmente a una venta de caja
+    
+    type: text("type", { enum: ["earned", "redeemed", "birthday_excluded", "adjusted"] }).notNull(),
+    stampsChange: integer("stamps_change").notNull(), // +1 para ganado, -10 para canjeado, 0 para cumpleaños
+    notes: text("notes"), // Ej: "Sello por corte clásico", "Bloqueado por descuento de cumpleaños 20%"
+    
+    staffId: text("staff_id").references(() => staff.id, { onDelete: "set null" }), // Quién aplicó el sello en caja
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("loyalty_transaction_org_card_idx").on(t.organizationId, t.cardId),
+    index("loyalty_transaction_org_created_idx").on(t.organizationId, t.createdAt),
+  ]
+);
+
+
+
 /* ============================================================
  * Dominio (toda tabla lleva organization_id NOT NULL + índice org-first)
  * ============================================================ */

@@ -1,6 +1,7 @@
 import { asc, desc, eq, gte, inArray, lt, or, sql, type AnyColumn } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import { normalizeMx } from "@/lib/meta/client";
 import { scoped } from "@/lib/db/tenant";
 import {
@@ -29,6 +30,7 @@ import { businessTimezone, type ResolvedPeriod } from "@/server/analytics/period
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
 import { catalogStaffMaps, staffGivesItem } from "@/server/business/catalog-staff";
 import { publish } from "@/server/events/bus";
+import { reverseSaleStamp, stampSale } from "@/server/loyalty/actions";
 
 /**
  * Módulo SALON — caja: ventas, reparto con el profesional y reporte.
@@ -459,6 +461,29 @@ export async function registerServiceSale(
       }))
     );
 
+    // Fidelización: +1 sello, o constancia sin sello si hubo descuento de cumpleaños.
+    // Va en esta transacción (cobro y sello juntos) y nunca bloquea el cobro.
+    let loyalty: SaleLoyaltyDto | null = null;
+    if (contactId) {
+      const stamped = await stampSale(tx, {
+        organizationId,
+        contactId,
+        saleId: id,
+        staffId: member.id,
+        birthdayDiscount: input.birthdayDiscount === true,
+      });
+      if (stamped) {
+        loyalty = {
+          type: input.birthdayDiscount === true ? "birthday_excluded" : "earned",
+          currentStamps: stamped.card.currentStamps,
+          stampsRequired: stamped.stampsRequired,
+          rewardReady: stamped.rewardReady,
+          rewardJustUnlocked: stamped.rewardJustUnlocked,
+          unlockedTitle: stamped.unlocked[stamped.unlocked.length - 1]?.title ?? null,
+        };
+      }
+    }
+
     if (input.bookingId) {
       await tx
         .update(schema.booking)
@@ -489,7 +514,7 @@ export async function registerServiceSale(
       businessNetCents,
       bookingId: input.bookingId ?? null,
     };
-    return { sale, commissionPercentage: percentage, commissionSource: source };
+    return { sale, commissionPercentage: percentage, commissionSource: source, loyalty };
   });
 
   // Después del commit (contrato del bus): la agenda abierta se refresca sola.
@@ -1021,13 +1046,17 @@ export async function updateSale(
 
 /** Anular una venta (un cobro mal registrado). La cita, si la hubo, queda como estaba. */
 export async function deleteSale(organizationId: string, id: string): Promise<void> {
-  const rows = await getDb()
-    .delete(schema.serviceSale)
-    .where(
-      scoped(schema.serviceSale.organizationId, organizationId, eq(schema.serviceSale.id, id))
-    )
-    .returning({ id: schema.serviceSale.id });
-  if (rows.length === 0) throw new SalonError("not_found", 404, "La venta no existe");
+  await getDb().transaction(async (tx) => {
+    // Su sello de fidelidad se retira en la misma transacción (antes de borrar la venta).
+    await reverseSaleStamp(tx, organizationId, id);
+    const rows = await tx
+      .delete(schema.serviceSale)
+      .where(
+        scoped(schema.serviceSale.organizationId, organizationId, eq(schema.serviceSale.id, id))
+      )
+      .returning({ id: schema.serviceSale.id });
+    if (rows.length === 0) throw new SalonError("not_found", 404, "La venta no existe");
+  });
 }
 
 /**

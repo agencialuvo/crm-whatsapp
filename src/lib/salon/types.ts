@@ -1,3 +1,4 @@
+import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import type { CommissionSource } from "@/lib/salon/commission";
 import type { PaymentMethod, ScheduleDay } from "@/lib/salon/schemas";
 
@@ -100,6 +101,8 @@ export type RegisteredSaleDto = {
   sale: SaleRowDto;
   commissionPercentage: number;
   commissionSource: CommissionSource;
+  /** El sello de fidelidad de esta venta; `null` si no hubo cliente identificado o no se pudo sellar. */
+  loyalty: SaleLoyaltyDto | null;
 };
 
 export type SalesReportDto = {

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { LoyaltyCardPanel } from "@/components/negocio/loyalty-card";
 import { Modal } from "@/components/negocio/modal";
 import { birthdayLabel, dateNumeric, formatPeruPhone, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS } from "@/lib/salon/schemas";
@@ -84,6 +85,7 @@ export function ClientHistoryDialog({
           )}
         </dl>
       )}
+      {detail && <LoyaltyCardPanel contactId={clientId} className="mb-3" />}
       {error ? null : !detail ? null : detail.history.length === 0 ? (
         <p className="rounded-md border border-dashed px-3 py-4 text-sm text-text-2">
           Todavía no tiene atenciones registradas.

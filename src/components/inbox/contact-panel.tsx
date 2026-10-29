@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { FichaPanel } from "@/components/ficha-panel";
+import { LoyaltyCardPanel } from "@/components/negocio/loyalty-card";
 import { DeleteConversationDialog } from "./delete-conversation-dialog";
 
 const HANDOFF_LABELS: Record<string, string> = {
@@ -386,6 +387,11 @@ export function ContactPanel({
         {/* Ficha: lo que se SABE del lead. Va antes de Notas —lo que alguien
             OPINA— porque es lo que se consulta a mitad de una conversación. */}
         <FichaPanel ficha={ficha} onSave={saveFicha} />
+
+        {/* Fidelización: se oculta sola si el módulo Salón está apagado. */}
+        <div className="border-b p-4 empty:hidden">
+          <LoyaltyCardPanel contactId={contactId} />
+        </div>
 
         {/* Notas */}
         <section className={cn("p-4", onDeleteConversation && "border-b")}>

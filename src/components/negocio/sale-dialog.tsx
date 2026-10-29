@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { UserRound, X } from "lucide-react";
+import { Cake, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { apiFetch, describeError } from "@/components/negocio/api";
@@ -95,6 +96,7 @@ export function SaleDialog({
   );
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [customPct, setCustomPct] = useState("");
+  const [birthdayDiscount, setBirthdayDiscount] = useState(false);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -152,6 +154,7 @@ export function SaleDialog({
       paymentMethod: method || undefined,
       customCommissionPercentage:
         canAdjustCommission && customPct.trim() !== "" ? Number(customPct) : null,
+      ...(birthdayDiscount && { birthdayDiscount: true }),
     });
     if (!parsed.success) {
       setErrors(fieldErrors(parsed.error.issues));
@@ -396,6 +399,34 @@ export function SaleDialog({
           />
 
           <PaymentMethodField method={method} onChange={setMethod} busy={busy} error={errors.paymentMethod} />
+
+          <div
+            className={
+              "rounded-md border px-3 py-2.5 transition-colors " +
+              (birthdayDiscount ? "border-warning-soft bg-warning-tint" : "bg-subtle/50")
+            }
+          >
+            <div className="flex items-start gap-3">
+              <Cake className="mt-0.5 h-4 w-4 shrink-0 text-text-3" aria-hidden />
+              <div className="min-w-0 flex-1 text-sm">
+                <span className="font-medium">Aplicar 20% de descuento de cumpleaños</span>
+                <span className="block text-xs text-text-3">No suma sello</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={birthdayDiscount}
+                onCheckedChange={setBirthdayDiscount}
+                disabled={busy}
+                label="Aplicar 20% de descuento de cumpleaños (no suma sello)"
+              />
+            </div>
+            {birthdayDiscount && (
+              <p className="mt-2 text-xs text-warning-text" role="status">
+                Esta venta protege el margen del negocio: queda anotada en la tarjeta de fidelidad como
+                «Cumpleaños» y no acumula sello.
+              </p>
+            )}
+          </div>
 
           {canAdjustCommission && (
             <CustomCommissionField

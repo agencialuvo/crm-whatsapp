@@ -17,6 +17,7 @@ import {
   fieldErrors,
   PhoneInput,
 } from "@/components/negocio/fields";
+import { LoyaltyCardPanel } from "@/components/negocio/loyalty-card";
 import { ConfirmDialog, Modal, ModalFooter } from "@/components/negocio/modal";
 import {
   CustomCommissionField,
@@ -513,6 +514,8 @@ export function ClientDialog({
               </dd>
             </div>
           </dl>
+
+          {currentId && <LoyaltyCardPanel contactId={currentId} className="mb-4" />}
 
           {historySection}
 

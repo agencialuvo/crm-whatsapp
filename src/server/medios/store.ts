@@ -6,7 +6,7 @@ import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { getEnv } from "@/lib/env";
 import { nombreLegible, validarMedio, type MedioDto, type MedioTipo } from "@/lib/medios";
-import { detectarFormato } from "@/server/medios/sniff";
+import { detectarFormato, revisarSvg } from "@/server/medios/sniff";
 
 /**
  * Módulo Medios — la biblioteca de imágenes y videos del negocio.
@@ -71,13 +71,22 @@ export async function crearMedio(input: {
   sourceUrl?: string | null;
   /** Si se da, solo se acepta ese tipo (p. ej. la foto de un servicio no puede ser un video). */
   soloTipo?: MedioTipo;
+  /** Admite SVG (solo el selector de iconos); se revisa por dentro antes de guardarlo. */
+  permitirSvg?: boolean;
 }): Promise<MedioDto> {
-  const formato = detectarFormato(input.data);
+  const opts = { svg: input.permitirSvg === true };
+  const formato = detectarFormato(input.data, opts);
   if (!formato) {
     throw new MedioError(
       "unsupported_type",
-      `«${input.nombre}» no es una imagen o video válido. Se aceptan JPG, PNG, WEBP, AVIF y MP4.`
+      `«${input.nombre}» no es una imagen o video válido. Se aceptan JPG, PNG, WEBP, AVIF${opts.svg ? ", SVG" : ""} y MP4.`
     );
+  }
+  if (formato.ext === "svg") {
+    const motivo = revisarSvg(input.data);
+    if (motivo) {
+      throw new MedioError("unsupported_type", `«${input.nombre}» no se puede usar como SVG: ${motivo}.`);
+    }
   }
   if (input.soloTipo && formato.tipo !== input.soloTipo) {
     throw new MedioError(
@@ -87,7 +96,7 @@ export async function crearMedio(input: {
         : `«${input.nombre}» es una imagen. Aquí solo se aceptan videos (MP4).`
     );
   }
-  const valido = validarMedio(input.nombre, formato.mime, input.data.byteLength);
+  const valido = validarMedio(input.nombre, formato.mime, input.data.byteLength, opts);
   if (!valido.ok) throw new MedioError(valido.code, valido.message);
 
   const id = newId("mediaLibraryItem");

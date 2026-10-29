@@ -15,6 +15,7 @@ import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS } from "@/lib/salon/schemas";
+import { loyaltyNotice } from "@/lib/loyalty";
 import type { RegisteredSaleDto, SaleRowDto, SalesReportDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
@@ -114,7 +115,8 @@ export function CashClient({
     setNotice(
       `Venta registrada: ${sale.itemName} · ${money(sale.amountCents, currency)}. ` +
         `Comisión de ${sale.staffName}: ${money(sale.staffCommissionCents, currency)} ` +
-        `(${result.commissionPercentage}%, ${COMMISSION_SOURCE_LABEL[result.commissionSource]}).`
+        `(${result.commissionPercentage}%, ${COMMISSION_SOURCE_LABEL[result.commissionSource]}).` +
+        loyaltyNotice(result)
     );
     void load(range);
   }

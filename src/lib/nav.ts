@@ -167,7 +167,10 @@ export function settingsSections({
   instagram = false,
   messenger = false,
   tiktok = false,
+  salon = false,
 }: {
+  /** 031 — "Fidelización" existe solo con la bandera SALON. */
+  salon?: boolean;
   agenda?: boolean;
   /** 016 — "Anuncios" existe solo con la bandera ATRIBUCION. */
   atribucion?: boolean;
@@ -199,6 +202,7 @@ export function settingsSections({
     { href: "/ajustes/equipo", label: "Equipo" },
   ];
   if (atribucion) negocio.push({ href: "/ajustes/anuncios", label: "Anuncios" });
+  if (salon) negocio.push({ href: "/ajustes/fidelizacion", label: "Fidelización" });
 
   return [
     { title: "Canales", links: canales },

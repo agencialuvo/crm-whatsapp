@@ -50,6 +50,8 @@ export const POST = withAuth(async (session, req: Request) => {
       nombre: file.name || "medio",
       source: "upload",
       soloTipo: soloTipo ?? undefined,
+      // Solo el selector de iconos (`?icono=1`) admite SVG.
+      permitirSvg: new URL(req.url).searchParams.get("icono") === "1" && soloTipo === "image",
     });
     return Response.json({ medio }, { status: 201 });
   } catch (err) {

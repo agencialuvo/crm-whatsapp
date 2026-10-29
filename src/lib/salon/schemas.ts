@@ -383,6 +383,8 @@ export const saleInputSchema = z
     }),
     /** Porcentaje puntual para esta venta; sin él manda la regla de siempre. */
     customCommissionPercentage: percentage.nullish(),
+    /** Se aplicó el descuento de cumpleaños (20%): la venta no suma sello de fidelidad. */
+    birthdayDiscount: z.boolean().optional(),
   })
   .superRefine((v, ctx) => {
     const legacy = [v.serviceId, v.comboId, v.other].filter(Boolean).length;

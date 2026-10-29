@@ -46,7 +46,7 @@ export async function GET(req: Request, ctx: Params) {
   }
 
   const descargar = new URL(req.url).searchParams.has("descargar");
-  const nombre = `${medio.name.replace(/[^\w.-]+/g, "_") || "medio"}.${medio.mimeType.split("/")[1]?.replace("jpeg", "jpg") ?? "bin"}`;
+  const nombre = `${medio.name.replace(/[^\w.-]+/g, "_") || "medio"}.${medio.mimeType.split("/")[1]?.replace("jpeg", "jpg").replace("svg+xml", "svg") ?? "bin"}`;
   const disposicion = `${descargar ? "attachment" : "inline"}; filename="${nombre}"`;
 
   const rango = req.headers.get("range");
