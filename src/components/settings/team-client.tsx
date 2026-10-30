@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { UserPlus } from "lucide-react";
+import { CaptchaNotice, useCaptcha } from "@/components/auth/captcha";
 import { ContactAvatar } from "@/components/avatar";
+import { CAPTCHA_ACTIONS, CAPTCHA_HEADER, CAPTCHA_UNAVAILABLE_MESSAGE } from "@/lib/captcha";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +27,7 @@ export function TeamClient() {
   const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const captcha = useCaptcha();
 
   const refetch = useCallback(async () => {
     const res = await fetch("/api/settings/team").catch(() => null);
@@ -48,12 +51,22 @@ export function TeamClient() {
   }
 
   async function create() {
-    setSaving(true);
     setError(null);
     setCreated(null);
+    setSaving(true);
+    // Token invisible de un solo uso, nuevo en cada alta.
+    const token = captcha.enabled ? await captcha.execute(CAPTCHA_ACTIONS.teamSignup) : null;
+    if (captcha.enabled && !token) {
+      setSaving(false);
+      setError(CAPTCHA_UNAVAILABLE_MESSAGE);
+      return;
+    }
     const res = await fetch("/api/settings/team", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { [CAPTCHA_HEADER]: token } : {}),
+      },
       body: JSON.stringify({ name, email, password: tempPassword }),
     }).catch(() => null);
     setSaving(false);
@@ -115,7 +128,7 @@ export function TeamClient() {
               </Button>
             </div>
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           {created && (
             <div className="rounded-md border border-success-soft bg-success-tint p-3 text-sm">
               <p className="font-medium text-success-text">Cuenta creada ✓</p>
@@ -136,6 +149,7 @@ export function TeamClient() {
             <UserPlus className="h-4 w-4" />
             {saving ? "Creando…" : "Crear cuenta"}
           </Button>
+          <CaptchaNotice captcha={captcha} />
         </CardContent>
       </Card>
 

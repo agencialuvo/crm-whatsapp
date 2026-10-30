@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "two_factor_backup_codes" text;

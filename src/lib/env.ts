@@ -48,6 +48,15 @@ export const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().optional(),
+  // reCAPTCHA v3 (invisible, por puntuación) en inicio de sesión, restablecer contraseña y
+  // alta de equipo. Opcional: sin las dos claves queda apagado. La pública se
+  // incrusta AL CONSTRUIR (NEXT_PUBLIC_*): en el hosting debe ir también como
+  // variable de build. Se leen de process.env directo (server/auth/captcha.ts).
+  NEXT_PUBLIC_RECAPTCHA_SITE_KEY: z.string().optional(),
+  RECAPTCHA_SECRET_KEY: z.string().optional(),
+  RECAPTCHA_MIN_SCORE: z.string().optional(),
+  // Solo para el self-test: apunta la verificación a un Google falso. En producción se usa el real.
+  RECAPTCHA_VERIFY_URL: z.string().optional(),
   // 016: atribucion de anuncios y reporte a la Conversions API de Meta.
   // Apagada por defecto: sin ella no se captura de que anuncio vino una
   // conversacion, no se le reporta nada a Meta y la superficie da 404.

@@ -5,6 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import { authClient } from "@/lib/auth/client";
+import { CaptchaNotice, useCaptcha } from "@/components/auth/captcha";
+import {
+  CAPTCHA_ACTIONS,
+  CAPTCHA_HEADER,
+  CAPTCHA_REQUIRED_MESSAGE,
+  CAPTCHA_UNAVAILABLE_MESSAGE,
+} from "@/lib/captcha";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,6 +41,8 @@ type Step = "email" | "code" | "done";
 function describeError(err: { status?: number; code?: string; message?: string } | null): string {
   if (!err) return "";
   if (err.status === 429) return "Demasiados intentos. Espera unos minutos.";
+  if (err.code === "CAPTCHA_REQUIRED") return CAPTCHA_REQUIRED_MESSAGE;
+  if (err.code === "CAPTCHA_UNAVAILABLE") return CAPTCHA_UNAVAILABLE_MESSAGE;
   if (err.status === 503) return "El restablecimiento por correo no está disponible en esta instancia.";
   if (err.code === "TOO_MANY_ATTEMPTS") return "Demasiados intentos con ese código. Pide uno nuevo.";
   if (err.code === "OTP_EXPIRED") return "El código venció. Pide uno nuevo.";
@@ -60,6 +69,7 @@ export function RecuperarContrasenaForm() {
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [resent, setResent] = useState(false);
+  const captcha = useCaptcha();
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -74,8 +84,15 @@ export function RecuperarContrasenaForm() {
   }, [step, router]);
 
   async function requestCode() {
+    // Token invisible de un solo uso: uno nuevo en cada envío (también al reenviar).
+    let token: string | null = null;
+    if (captcha.enabled) {
+      token = await captcha.execute(CAPTCHA_ACTIONS.passwordReset);
+      if (!token) return { code: "CAPTCHA_UNAVAILABLE" };
+    }
     const { error: err } = await authClient.emailOtp.requestPasswordReset({
       email: email.trim().toLowerCase(),
+      fetchOptions: { headers: token ? { [CAPTCHA_HEADER]: token } : {} },
     });
     return err;
   }
@@ -286,6 +303,7 @@ export function RecuperarContrasenaForm() {
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Enviando…" : "Enviar código"}
           </Button>
+          <CaptchaNotice captcha={captcha} />
           <p className="text-center text-sm text-muted-foreground">
             <Link href="/iniciar-sesion" className="text-primary hover:underline">
               Volver a iniciar sesión

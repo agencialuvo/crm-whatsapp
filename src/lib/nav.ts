@@ -6,6 +6,9 @@ import {
   Images,
   Inbox,
   Kanban,
+  KeyRound,
+  ShieldCheck,
+  UserRound,
   Receipt,
   LayoutDashboard,
   ListChecks,
@@ -42,9 +45,11 @@ export type NavGroup = {
   /** Encabezado pequeño; sin él, el grupo es una entrada suelta. */
   title?: string;
   items: NavItem[];
+  /** Va al pie de la barra, separado del resto (el grupo «Sistema»). */
+  bottom?: boolean;
 };
 
-/** La única entrada que va abajo, separada del resto. */
+/** Ajustes, la entrada de configuración del grupo «Sistema». */
 export const SETTINGS_ITEM: NavItem = {
   href: "/ajustes",
   label: "Ajustes",
@@ -63,9 +68,10 @@ export const SYSTEM_TITLE = "Sistema";
 export const NAV_V2 = false;
 
 /**
- * Grupos de la barra lateral, en el orden en que se leen. En la v1.0 es uno:
- * Trabajo (Panel · Caja · Citas · Clientes · Contactos · Servicios · Equipo ·
- * Medios); Ajustes va aparte, abajo, bajo «Sistema».
+ * Grupos de la barra lateral, en el orden en que se leen. En la v1.0 son tres:
+ * Trabajo (Panel · Caja · Citas · Clientes), Gestión y equipo (Servicios ·
+ * Equipo · Gastos · Contactos · Medios) y Sistema (Notificaciones · Ajustes),
+ * este último al pie de la barra.
  */
 export function appNavGroups({
   agenda = false,
@@ -92,26 +98,31 @@ export function appNavGroups({
           { href: "/pipeline", label: "Pipeline", icon: Kanban },
         ]
       : []),
-    ...(salonManager
-      ? [
-          { href: "/caja", label: "Caja", icon: Wallet },
-          { href: "/gastos", label: "Gastos", icon: Receipt },
-        ]
-      : []),
+    ...(salonManager ? [{ href: "/caja", label: "Caja", icon: Wallet }] : []),
     ...(agenda ? [{ href: "/citas", label: "Citas", icon: CalendarDays }] : []),
     ...(salonManager ? [{ href: "/clientes", label: "Clientes", icon: UserCheck }] : []),
-    { href: "/contactos", label: "Contactos", icon: Users },
+  ];
+  const gestion: NavItem[] = [
     ...(salonManager
       ? [
           { href: "/servicios", label: "Servicios", icon: Scissors },
           { href: "/equipo", label: "Equipo", icon: UsersRound },
+          { href: "/gastos", label: "Gastos", icon: Receipt },
         ]
       : []),
+    { href: "/contactos", label: "Contactos", icon: Users },
     { href: "/medios", label: "Medios", icon: Images },
-    { href: "/notificaciones", label: "Notificaciones", icon: Bell },
   ];
-  const groups: NavGroup[] = [{ title: "Trabajo", items: trabajo }];
-  if (!NAV_V2) return groups;
+  const sistema: NavItem[] = [
+    { href: "/notificaciones", label: "Notificaciones", icon: Bell },
+    SETTINGS_ITEM,
+  ];
+  // Sin entradas, un grupo no se pinta (un miembro del equipo sin agenda no tiene «Trabajo»).
+  const groups: NavGroup[] = [
+    { title: "Trabajo", items: trabajo },
+    { title: "Gestión y equipo", items: gestion },
+  ].filter((g) => g.items.length > 0);
+  if (!NAV_V2) return [...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }];
 
   const agente: NavItem[] = [];
   // Un miembro del equipo no puede hacer ninguno de los pasos de la guía.
@@ -125,7 +136,7 @@ export function appNavGroups({
   groups.push({ title: "Agente", items: agente });
   // 019 — Se mide al final: primero se atiende y se organiza.
   groups.push({ items: [{ href: "/resultados", label: "Resultados", icon: ChartColumn }] });
-  return groups;
+  return [...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }];
 }
 
 /**
@@ -208,8 +219,28 @@ export function settingsSections({
     { title: "Canales", links: canales },
     { title: "Agente", links: agente },
     { title: "Negocio", links: negocio },
+    // Lo personal de quien inició sesión, no de la organización: lo ve cualquier rol.
+    {
+      title: "Cuenta",
+      // Una sola pantalla con tres zonas: cada enlace lleva a la suya (ancla `#…`).
+      links: [
+        { href: "/ajustes/perfil#perfil", label: "Mi perfil" },
+        { href: "/ajustes/perfil#seguridad", label: "Seguridad" },
+        { href: "/ajustes/perfil#cambiar-contrasena", label: "Cambiar contraseña" },
+      ],
+    },
   ];
 }
+
+/**
+ * El menú del usuario (abajo en la barra lateral): las tres zonas de la pantalla Mi perfil,
+ * cada una con su ancla `#…`, y debajo «Cerrar sesión».
+ */
+export const ACCOUNT_MENU_LINKS = [
+  { href: "/ajustes/perfil#perfil", label: "Mi perfil", icon: UserRound },
+  { href: "/ajustes/perfil#seguridad", label: "Seguridad", icon: ShieldCheck },
+  { href: "/ajustes/perfil#cambiar-contrasena", label: "Cambiar contraseña", icon: KeyRound },
+] as const;
 
 /** Activa si la ruta es la entrada o cuelga de ella (`/bandeja/cv_123`). */
 export function isNavActive(pathname: string, href: string): boolean {

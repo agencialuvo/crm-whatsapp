@@ -22,6 +22,7 @@ import { BrandLogo } from "@/components/brand-mark";
 export function AppShell({
   branding,
   userName,
+  userImage = null,
   role,
   agenda = false,
   salon = false,
@@ -30,6 +31,8 @@ export function AppShell({
 }: {
   branding: Branding;
   userName: string;
+  /** Foto de perfil del usuario (`user.image`), si la tiene. */
+  userImage?: string | null;
   role: string;
   /** 015 — ¿esta instancia tiene agenda? Lo decide el servidor. */
   agenda?: boolean;
@@ -65,7 +68,7 @@ export function AppShell({
   }, [navOpen]);
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
+    <div className="flex h-dvh overflow-clip bg-background">
       {navOpen && (
         <button
           aria-label="Cerrar el menú"
@@ -78,6 +81,7 @@ export function AppShell({
       <AppNav
         branding={branding}
         userName={userName}
+        userImage={userImage}
         role={role}
         agenda={agenda}
         salon={salon}
@@ -102,7 +106,7 @@ export function AppShell({
 
         {aviso}
 
-        <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
+        <main className="relative min-h-0 min-w-0 flex-1 overflow-clip">{children}</main>
       </div>
     </div>
   );

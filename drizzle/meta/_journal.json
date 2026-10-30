@@ -330,6 +330,20 @@
       "when": 1793303969309,
       "tag": "0046_sweet_jean_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1793370058275,
+      "tag": "0047_dapper_black_bolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1793370672135,
+      "tag": "0048_mute_gauntlet",
+      "breakpoints": true
     }
   ]
 }

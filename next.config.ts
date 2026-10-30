@@ -49,6 +49,9 @@ const REDIRECCIONES_DE_PAGINAS: ReadonlyArray<readonly [string, string]> = [
  * `src/lib/favicon.ts`); el de aquí no los pisa porque Next aplica las
  * cabeceras de cada respuesta de API tal cual las puso el handler.
  */
+// reCAPTCHA es un conector opcional: solo con las dos claves se abre el CSP a Google.
+const RECAPTCHA = !!(process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY?.trim() && process.env.RECAPTCHA_SECRET_KEY?.trim());
+
 const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -68,11 +71,13 @@ const SECURITY_HEADERS = [
     value: [
       "default-src 'self'",
       // React Refresh (solo en desarrollo) evalúa código; en producción no.
-      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
+      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}${RECAPTCHA ? " https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/" : ""}`,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",
-      "connect-src 'self'",
+      `connect-src 'self'${RECAPTCHA ? " https://www.google.com/recaptcha/" : ""}`,
+      // reCAPTCHA (solo con claves): el desafío vive en un iframe de Google.
+      ...(RECAPTCHA ? ["frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/"] : []),
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",

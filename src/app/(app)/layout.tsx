@@ -31,6 +31,7 @@ export default async function AppLayout({
       <AppShell
         branding={branding}
         userName={authSession?.user.name ?? "Usuario"}
+        userImage={authSession?.user.image ?? null}
         role={session.role}
         // Qué módulos opcionales existen se decide en el servidor y baja por
         // prop, igual que los canales de la Bandeja. El nav es un componente de

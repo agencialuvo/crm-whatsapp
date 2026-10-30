@@ -32,6 +32,13 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  /** Verificación en dos pasos por correo: al iniciar sesión se pide un código de 6 dígitos. */
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
+  /**
+   * Códigos de respaldo del 2FA, por si el correo falla: un arreglo JSON con el HMAC
+   * de cada código (nunca el código). Cada uno vale una sola vez; al usarlo se quita.
+   */
+  twoFactorBackupCodes: text("two_factor_backup_codes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

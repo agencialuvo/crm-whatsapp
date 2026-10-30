@@ -19,33 +19,44 @@ import {
   RESET_PASSWORD_PATH,
   sendResetCode,
 } from "@/server/auth/password-reset";
+import { CAPTCHA_ACTIONS, CAPTCHA_REQUIRED_MESSAGE } from "@/lib/captcha";
+import { captchaEnabled, verifyCaptchaHeader, verifyCaptchaProof } from "@/server/auth/captcha";
 import { isPublicSignupAllowed } from "@/server/auth/registration";
+import { findUserByEmail, isTwoFactorVerified } from "@/server/auth/two-factor";
 import { passwordResetAvailable } from "@/server/email/config";
 
 /**
- * Contexto interno del proceso: permite que el alta de cuentas de equipo
- * (owner → API) atraviese el gate de registro cerrado. No es alcanzable
- * desde fuera: solo envuelve llamadas server-side.
+ * Contexto interno del proceso: permite que ciertas llamadas server-side (el alta de
+ * cuentas de equipo del owner, el cambio de contraseña con código de Mi perfil)
+ * atraviesen un gate que por HTTP está cerrado. No es alcanzable desde fuera: solo
+ * envuelve llamadas internas.
  */
-const globalForSignup = globalThis as unknown as {
-  __voceroInternalSignup?: AsyncLocalStorage<boolean>;
+type InternalKind = "signup" | "password-change";
+
+const globalForInternal = globalThis as unknown as {
+  __voceroInternalAuth?: AsyncLocalStorage<InternalKind>;
 };
 
 // En globalThis: los módulos pueden evaluarse más de una vez (una por ruta en
 // dev) y todas las copias deben compartir el mismo contexto.
-function internalSignupContext(): AsyncLocalStorage<boolean> {
-  if (!globalForSignup.__voceroInternalSignup) {
-    globalForSignup.__voceroInternalSignup = new AsyncLocalStorage<boolean>();
+function internalContext(): AsyncLocalStorage<InternalKind> {
+  if (!globalForInternal.__voceroInternalAuth) {
+    globalForInternal.__voceroInternalAuth = new AsyncLocalStorage<InternalKind>();
   }
-  return globalForSignup.__voceroInternalSignup;
+  return globalForInternal.__voceroInternalAuth;
 }
 
 export function runInternalSignup<T>(fn: () => Promise<T>): Promise<T> {
-  return internalSignupContext().run(true, fn);
+  return internalContext().run("signup", fn);
 }
 
-function isInternalSignup(): boolean {
-  return internalSignupContext().getStore() === true;
+/** El cambio de contraseña solo entra por `/api/account/password` (contraseña actual + código del correo). */
+export function runInternalPasswordChange<T>(fn: () => Promise<T>): Promise<T> {
+  return internalContext().run("password-change", fn);
+}
+
+function isInternal(kind: InternalKind): boolean {
+  return internalContext().getStore() === kind;
 }
 
 const RATE_LIMITED_PATHS = new Set([
@@ -109,6 +120,34 @@ function createAuth() {
             });
           }
         }
+        // 2FA por correo: una cuenta que lo activó NO entra por aquí con solo la
+        // contraseña. Solo pasa la petición que viene de /api/login/two-factor/verify
+        // (ya comprobó contraseña y código). Responde igual que una contraseña
+        // mala: no se revela qué cuentas tienen 2FA.
+        if (ctx.path === "/sign-in/email") {
+          const email = String((ctx.body as { email?: unknown } | undefined)?.email ?? "");
+          const account = email ? await findUserByEmail(email) : null;
+          if (account?.twoFactorEnabled && !isTwoFactorVerified(account.id)) {
+            throw new APIError("UNAUTHORIZED", {
+              code: "INVALID_EMAIL_OR_PASSWORD",
+              message: "Invalid email or password",
+            });
+          }
+          // «No soy un robot»: la constancia la emitió el paso 1 (/api/login/two-factor/start)
+          // tras validar el desafío. El paso 2 de un 2FA ya la pasó por ahí.
+          if (
+            captchaEnabled() &&
+            !(account && isTwoFactorVerified(account.id)) &&
+            !verifyCaptchaProof(ctx.headers, email)
+          ) {
+            throw new APIError("BAD_REQUEST", { code: "CAPTCHA_REQUIRED", message: CAPTCHA_REQUIRED_MESSAGE });
+          }
+        }
+        // Cambiar la contraseña por la ruta nativa se saltaría el código del correo: solo
+        // pasa la llamada interna de /api/account/password.
+        if ((ctx.path === "/change-password" || ctx.path === "/set-password") && !isInternal("password-change")) {
+          throw new APIError("NOT_FOUND", { message: "No existe" });
+        }
         // El plugin de códigos trae rutas que nadie pidió (entrar solo con un
         // código, verificar o cambiar el correo): 404.
         if (isBlockedEmailOtpPath(ctx.path)) {
@@ -120,6 +159,10 @@ function createAuth() {
             throw new APIError("SERVICE_UNAVAILABLE", {
               message: "El restablecimiento por correo no está configurado",
             });
+          }
+          // Antes de gastar base de datos o correo: sin desafío resuelto, no se manda nada.
+          if (!(await verifyCaptchaHeader(ctx.headers, CAPTCHA_ACTIONS.passwordReset, clientIp(ctx.headers)))) {
+            throw new APIError("BAD_REQUEST", { code: "CAPTCHA_REQUIRED", message: CAPTCHA_REQUIRED_MESSAGE });
           }
           const email = String(
             (ctx.body as { email?: unknown } | undefined)?.email ?? ""
@@ -133,11 +176,15 @@ function createAuth() {
         }
         // Registro por HTTP cerrado: las cuentas se crean por backend (FR-060).
         if (ctx.path === "/sign-up/email") {
-          if (!isInternalSignup() && !(await isPublicSignupAllowed())) {
+          if (!isInternal("signup") && !(await isPublicSignupAllowed())) {
             throw new APIError("FORBIDDEN", {
               message:
                 "El registro está deshabilitado: las cuentas las crea quien administra el servidor",
             });
+          }
+          // El alta interna (propietario → equipo) ya validó el desafío en su propia ruta.
+          if (!isInternal("signup") && !(await verifyCaptchaHeader(ctx.headers, CAPTCHA_ACTIONS.signup, clientIp(ctx.headers)))) {
+            throw new APIError("BAD_REQUEST", { code: "CAPTCHA_REQUIRED", message: CAPTCHA_REQUIRED_MESSAGE });
           }
         }
       }),

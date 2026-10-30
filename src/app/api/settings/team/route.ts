@@ -5,6 +5,9 @@ import { getAuth, runInternalSignup } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import { CAPTCHA_ACTIONS, CAPTCHA_REQUIRED_MESSAGE } from "@/lib/captcha";
+import { clientIp } from "@/lib/rate-limit";
+import { verifyCaptchaHeader } from "@/server/auth/captcha";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +45,10 @@ const createSchema = z.object({
 export const POST = withAuth(async (session, req: Request) => {
   if (session.role !== "owner") {
     return apiError(403, "forbidden", "Solo el propietario puede crear cuentas");
+  }
+  // Antes de tocar la base de datos: sin el desafío resuelto no se crea nada.
+  if (!(await verifyCaptchaHeader(req.headers, CAPTCHA_ACTIONS.teamSignup, clientIp(req.headers)))) {
+    return apiError(400, "captcha_required", CAPTCHA_REQUIRED_MESSAGE);
   }
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;

@@ -19,15 +19,26 @@ const labels = (groups: { items: { label: string }[] }[]) =>
   groups.map((g) => g.items.map((i) => i.label));
 
 describe("barra lateral agrupada (v1.0)", () => {
-  it("con todo apagado y como miembro: solo Trabajo, con Contactos, Medios y Notificaciones", () => {
+  it("con todo apagado y como miembro: Gestión y equipo (Contactos, Medios) y Sistema", () => {
     const groups = appNavGroups({ role: "member" });
-    expect(groups.map((g) => g.title)).toEqual(["Trabajo"]);
-    expect(labels(groups)).toEqual([["Contactos", "Medios", "Notificaciones"]]);
+    expect(groups.map((g) => g.title)).toEqual(["Gestión y equipo", "Sistema"]);
+    expect(labels(groups)).toEqual([["Contactos", "Medios"], ["Notificaciones", "Ajustes"]]);
   });
 
-  it("AGENDA añade Citas en su lugar: antes de Contactos", () => {
-    const [trabajo] = appNavGroups({ agenda: true, role: "member" });
-    expect(trabajo!.items.map((i) => i.label)).toEqual(["Citas", "Contactos", "Medios", "Notificaciones"]);
+  it("AGENDA añade Citas en Trabajo", () => {
+    const groups = appNavGroups({ agenda: true, role: "member" });
+    expect(labels(groups)).toEqual([["Citas"], ["Contactos", "Medios"], ["Notificaciones", "Ajustes"]]);
+  });
+
+  it("dueño con SALON: Trabajo, Gestión y equipo y Sistema, en el orden pedido", () => {
+    const groups = appNavGroups({ salon: true, agenda: true, role: "owner" });
+    expect(groups.map((g) => g.title)).toEqual(["Trabajo", "Gestión y equipo", "Sistema"]);
+    expect(labels(groups)).toEqual([
+      ["Panel", "Caja", "Citas", "Clientes"],
+      ["Servicios", "Equipo", "Gastos", "Contactos", "Medios"],
+      ["Notificaciones", "Ajustes"],
+    ]);
+    expect(groups.map((g) => g.bottom ?? false)).toEqual([false, false, true]);
   });
 
   it("la v1.0 oculta Bandeja, Pipeline y todo el bloque Agente; las rutas siguen existiendo", () => {
@@ -42,12 +53,14 @@ describe("barra lateral agrupada (v1.0)", () => {
     }
   });
 
-  it("Ajustes queda fuera de los grupos, bajo el encabezado Sistema, y cada entrada trae icono", () => {
-    const todos = appNavGroups({ salon: true, agenda: true, role: "owner" }).flatMap((g) => g.items);
-    expect(todos.map((i) => i.href)).not.toContain("/ajustes");
+  it("Ajustes vive en el grupo Sistema, al pie, y cada entrada trae icono", () => {
+    const groups = appNavGroups({ salon: true, agenda: true, role: "owner" });
+    const sistema = groups.find((g) => g.bottom)!;
+    expect(sistema.title).toBe(SYSTEM_TITLE);
+    expect(sistema.items).toContain(SETTINGS_ITEM);
     expect(SETTINGS_ITEM.href).toBe("/ajustes");
     expect(SYSTEM_TITLE).toBe("Sistema");
-    for (const item of [...todos, SETTINGS_ITEM]) expect(item.icon).toBeDefined();
+    for (const item of groups.flatMap((g) => g.items)) expect(item.icon).toBeDefined();
   });
 
   it("una ruta hija activa su entrada, y /ajustes no activa nada más", () => {
@@ -90,11 +103,12 @@ describe("ajustes en tres secciones", () => {
 
   it("con todo apagado: Canales, Agente y Negocio con lo mínimo", () => {
     const sections = settingsSections({});
-    expect(sections.map((s) => s.title)).toEqual(["Canales", "Agente", "Negocio"]);
+    expect(sections.map((s) => s.title)).toEqual(["Canales", "Agente", "Negocio", "Cuenta"]);
     expect(links(sections)).toEqual({
       Canales: ["WhatsApp"],
       Agente: ["IA"],
       Negocio: ["Marca", "Plantillas", "Equipo"],
+      Cuenta: ["Mi perfil", "Seguridad", "Cambiar contraseña"],
     });
   });
 
@@ -104,6 +118,7 @@ describe("ajustes en tres secciones", () => {
       Canales: ["Estado", "WhatsApp", "Messenger"],
       Agente: ["IA"],
       Negocio: ["Marca", "Plantillas", "Equipo"],
+      Cuenta: ["Mi perfil", "Seguridad", "Cambiar contraseña"],
     });
     expect(links(settingsSections({ instagram: true })).Canales).toEqual([
       "Estado",
@@ -117,11 +132,13 @@ describe("ajustes en tres secciones", () => {
       Canales: ["WhatsApp"],
       Agente: ["IA", "Agenda"],
       Negocio: ["Marca", "Plantillas", "Equipo"],
+      Cuenta: ["Mi perfil", "Seguridad", "Cambiar contraseña"],
     });
     expect(links(settingsSections({ atribucion: true }))).toEqual({
       Canales: ["WhatsApp"],
       Agente: ["IA"],
       Negocio: ["Marca", "Plantillas", "Equipo", "Anuncios"],
+      Cuenta: ["Mi perfil", "Seguridad", "Cambiar contraseña"],
     });
   });
 
@@ -149,6 +166,9 @@ describe("ajustes en tres secciones", () => {
         "/ajustes/plantillas",
         "/ajustes/equipo",
         "/ajustes/anuncios",
+        "/ajustes/perfil#perfil",
+        "/ajustes/perfil#seguridad",
+        "/ajustes/perfil#cambiar-contrasena",
       ].sort()
     );
   });

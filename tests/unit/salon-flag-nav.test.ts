@@ -61,18 +61,21 @@ describe("menú", () => {
 
   it("con la bandera, dueño y administrador ven el menú de trabajo en su orden", () => {
     for (const role of ["owner", "admin"]) {
-      const g = appNavGroups({ salon: true, agenda: true, role })[0]!;
-      expect(g.items.map((i) => i.href)).toEqual([
+      const hrefsEnOrden = appNavGroups({ salon: true, agenda: true, role }).flatMap((g) =>
+        g.items.map((i) => i.href)
+      );
+      expect(hrefsEnOrden).toEqual([
         "/panel",
         "/caja",
-        "/gastos",
         "/citas",
         "/clientes",
-        "/contactos",
         "/servicios",
         "/equipo",
+        "/gastos",
+        "/contactos",
         "/medios",
         "/notificaciones",
+        "/ajustes",
       ]);
     }
   });

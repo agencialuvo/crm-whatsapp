@@ -548,7 +548,7 @@ async function appendLeadNote(
   const rows = await db
     .select({ id: schema.contact.id, notes: schema.contact.notes })
     .from(schema.contact)
-    .where(eq(schema.contact.id, contactId))
+    .where(and(eq(schema.contact.id, contactId), scoped(schema.contact.organizationId, organizationId)))
     .limit(1);
   const contact = rows[0];
   if (!contact) return;
@@ -559,5 +559,5 @@ async function appendLeadNote(
       notes: contact.notes ? `${contact.notes}\n${stamped}` : stamped,
       updatedAt: new Date(),
     })
-    .where(eq(schema.contact.id, contact.id));
+    .where(and(eq(schema.contact.id, contact.id), scoped(schema.contact.organizationId, organizationId)));
 }

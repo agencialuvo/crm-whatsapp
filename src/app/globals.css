@@ -288,3 +288,8 @@
     animation-duration: 0.01ms !important;
   }
 }
+
+/* reCAPTCHA v3: la insignia flotante se oculta y el aviso legal va en línea (CaptchaNotice). */
+.grecaptcha-badge {
+  visibility: hidden;
+}

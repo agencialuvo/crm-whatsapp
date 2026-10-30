@@ -45,6 +45,6 @@ describe("no hay forma de registrarse desde la interfaz", () => {
 
   it("el hook del servidor bloquea /sign-up/email salvo bypass interno", () => {
     const auth = readFileSync("src/lib/auth/index.ts", "utf8");
-    expect(auth).toMatch(/ctx\.path === "\/sign-up\/email"[\s\S]{0,200}isInternalSignup\(\)[\s\S]{0,120}isPublicSignupAllowed\(\)/);
+    expect(auth).toMatch(/ctx\.path === "\/sign-up\/email"[\s\S]{0,200}isInternal\("signup"\)[\s\S]{0,120}isPublicSignupAllowed\(\)/);
   });
 });
