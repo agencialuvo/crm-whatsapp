@@ -22,6 +22,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # el entorno al arrancar, marcado como no verificado.
 ARG SOURCE_COMMIT=""
 ENV SOURCE_COMMIT=$SOURCE_COMMIT
+# reCAPTCHA: Next incrusta NEXT_PUBLIC_* en el JS del navegador al construir, así que la
+# clave pública tiene que estar declarada ANTES del build (Render la pasa como build arg).
+ARG NEXT_PUBLIC_RECAPTCHA_SITE_KEY=""
+ENV NEXT_PUBLIC_RECAPTCHA_SITE_KEY=$NEXT_PUBLIC_RECAPTCHA_SITE_KEY
 RUN pnpm build
 # migrate.mjs autocontenido (drizzle-orm + postgres bundleados)
 RUN pnpm exec esbuild scripts/migrate.mjs --bundle --platform=node \

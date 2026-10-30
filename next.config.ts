@@ -49,8 +49,9 @@ const REDIRECCIONES_DE_PAGINAS: ReadonlyArray<readonly [string, string]> = [
  * `src/lib/favicon.ts`); el de aquí no los pisa porque Next aplica las
  * cabeceras de cada respuesta de API tal cual las puso el handler.
  */
-// reCAPTCHA es un conector opcional: solo con las dos claves se abre el CSP a Google.
-const RECAPTCHA = !!(process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY?.trim() && process.env.RECAPTCHA_SECRET_KEY?.trim());
+// reCAPTCHA es un conector opcional: solo con la clave pública se abre el CSP a Google. Las
+// cabeceras se fijan al construir, y ahí solo existe la pública (la secreta llega al arrancar).
+const RECAPTCHA = !!process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY?.trim();
 
 const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
