@@ -1,6 +1,9 @@
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { canConfigure } from "@/lib/auth/roles";
+import { computeFunnel } from "@/lib/salon/funnel";
 import { saleInputSchema } from "@/lib/salon/schemas";
+import type { CashReportDto } from "@/lib/salon/types";
+import { getExpensesTotalCents } from "@/server/business/financial-funnel";
 import { periodFromRequest } from "@/server/analytics/period";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
 import { getSalesReport, registerServiceSale } from "@/server/business/sales-service";
@@ -22,7 +25,23 @@ export const GET = withAuth(async (session, req: Request) => {
     const period = await periodFromRequest(session.organizationId, new URL(req.url));
     // `?staffId=` acota el reporte a un profesional (auditoría rápida).
     const staffId = new URL(req.url).searchParams.get("staffId")?.slice(0, 64) || null;
-    return Response.json(await getSalesReport(session.organizationId, period, staffId));
+    const [report, expensesTotal] = await Promise.all([
+      getSalesReport(session.organizationId, period, staffId),
+      // Los gastos son del negocio: no se reparten a un profesional.
+      staffId ? Promise.resolve(null) : getExpensesTotalCents(session.organizationId, period),
+    ]);
+    const funnel = computeFunnel({
+      count: report.totals.count,
+      revenueCents: report.totals.revenueCents,
+      commissionsCents: report.totals.commissionsCents,
+      expensesCents: expensesTotal,
+    });
+    const body: CashReportDto = {
+      ...report,
+      expensesCents: funnel.expensesCents,
+      netAfterExpensesCents: funnel.netCents,
+    };
+    return Response.json(body);
   } catch (err) {
     return salonErrorResponse(err);
   }

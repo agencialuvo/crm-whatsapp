@@ -11,6 +11,7 @@ import type {
 import { addDaysISO } from "@/lib/time/slots";
 import { resolvePeriod, type ResolvedPeriod } from "@/server/analytics/period";
 import { agendaEnabled } from "@/server/agenda/flag";
+import { getFunnelDaily, funnelTotals, type FunnelDay, type FunnelFilters } from "@/server/business/financial-funnel";
 import { getSalesReport } from "@/server/business/sales-service";
 
 /**
@@ -159,36 +160,14 @@ async function getRetention(
   };
 }
 
-/** Ingresos en el tiempo, con los huecos en cero: por día, por semana o por mes. */
-async function getRevenueSeries(
-  organizationId: string,
-  period: ResolvedPeriod,
-  staffId?: string | null
-): Promise<SalonDashboardDto["series"]> {
-  const sale = schema.serviceSale;
-  const days = period.dto.days;
-  const granularity = days <= 31 ? "day" : days <= 92 ? "week" : "month";
-  // La zona ya viene validada (`resolvePeriod`): es un literal seguro.
-  const tz = sql.raw(`'${period.timezone.replace(/'/g, "''")}'`);
-  const localDay = sql`to_char((${sale.createdAt} at time zone 'UTC') at time zone ${tz}, 'YYYY-MM-DD')`;
-  const rows = await getDb()
-    .select({
-      day: sql<string>`${localDay}`,
-      revenue: sql<number>`coalesce(sum(${sale.amountCents}), 0)::float8`,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(sale)
-    .where(
-      scoped(
-        sale.organizationId,
-        organizationId,
-        gte(sale.createdAt, period.start),
-        lt(sale.createdAt, period.end),
-        staffId ? eq(sale.staffId, staffId) : undefined
-      )
-    )
-    .groupBy(sql`1`);
-  const byDay = new Map(rows.map((r) => [r.day, r]));
+/**
+ * Ingresos, comisiones, gastos y ganancia neta en el tiempo, con los huecos en cero: por día,
+ * por semana o por mes. Sale de los mismos días que las tarjetas, así que nunca se contradicen.
+ */
+function buildSeries(period: ResolvedPeriod, days: FunnelDay[]): SalonDashboardDto["series"] {
+  const total = period.dto.days;
+  const granularity = total <= 31 ? "day" : total <= 92 ? "week" : "month";
+  const byDay = new Map(days.map((d) => [d.day, d]));
 
   const bucketOf = (day: string, index: number): string =>
     granularity === "day"
@@ -197,51 +176,64 @@ async function getRevenueSeries(
         ? addDaysISO(period.dto.from, Math.floor(index / 7) * 7)
         : day.slice(0, 7);
   const points = new Map<string, RevenuePointDto>();
-  for (let i = 0; i < days; i++) {
+  for (let i = 0; i < total; i++) {
     const day = addDaysISO(period.dto.from, i);
     const key = bucketOf(day, i);
-    const point = points.get(key) ?? { bucket: key, revenueCents: 0, count: 0 };
+    const point =
+      points.get(key) ?? { bucket: key, revenueCents: 0, commissionsCents: 0, expensesCents: 0, netCents: 0, count: 0 };
     const hit = byDay.get(day);
-    point.revenueCents += hit?.revenue ?? 0;
-    point.count += hit?.count ?? 0;
+    if (hit) {
+      point.revenueCents += hit.revenueCents;
+      point.commissionsCents += hit.commissionsCents;
+      point.expensesCents += hit.expensesCents;
+      point.count += hit.count;
+    }
+    point.netCents = point.revenueCents - point.commissionsCents - point.expensesCents;
     points.set(key, point);
   }
   return { granularity, points: [...points.values()] };
 }
 
-/** `today`: el día de hoy EN LA ZONA DEL NEGOCIO (AAAA-MM-DD); de él sale «este mes». */
+/**
+ * `today`: el día de hoy EN LA ZONA DEL NEGOCIO (AAAA-MM-DD); de él sale «este mes».
+ * `filters`: acotan las tarjetas, la gráfica, el equipo y las citas a un profesional y,
+ * las tarjetas y la gráfica, también a un servicio o combo.
+ */
 export async function getDashboard(
   organizationId: string,
   period: ResolvedPeriod,
   today: string,
-  /** Acota tarjetas, equipo, ranking y citas a un profesional. */
-  staffId?: string | null
+  filters: FunnelFilters = {}
 ): Promise<SalonDashboardDto> {
+  const staffId = filters.staffId ?? null;
   const month = Number(today.slice(5, 7));
   const cmp = comparisonRange(period);
   const previous = resolvePeriod({ from: cmp.from, to: cmp.to, timezone: period.timezone });
-  const [report, appointments, clients, retention, series, previousReport, previousRetention] =
-    await Promise.all([
-      getSalesReport(organizationId, period, staffId, false),
-      agendaEnabled() ? countAppointments(organizationId, period, staffId) : Promise.resolve(null),
-      listBirthdaysOfMonth(organizationId, month),
-      getRetention(organizationId, period, staffId),
-      getRevenueSeries(organizationId, period, staffId),
-      getSalesReport(organizationId, previous, staffId, false),
-      getRetention(organizationId, previous, staffId),
-    ]);
+  const [report, appointments, clients, retention, days, previousDays, previousRetention] = await Promise.all([
+    getSalesReport(organizationId, period, staffId, false),
+    agendaEnabled() ? countAppointments(organizationId, period, staffId) : Promise.resolve(null),
+    listBirthdaysOfMonth(organizationId, month),
+    getRetention(organizationId, period, staffId),
+    getFunnelDaily(organizationId, period, filters),
+    getFunnelDaily(organizationId, previous, filters),
+    getRetention(organizationId, previous, staffId),
+  ]);
+  const funnel = funnelTotals(days, filters);
+  const previousFunnel = funnelTotals(previousDays, filters);
   const comparison: DashboardComparisonDto = {
     kind: cmp.kind,
     from: cmp.from,
     to: cmp.to,
-    revenueCents: previousReport.totals.revenueCents,
-    count: previousReport.totals.count,
+    revenueCents: previousFunnel.revenueCents,
+    count: previousFunnel.count,
     retentionRate: previousRetention.rate,
+    funnel: previousFunnel,
   };
   return {
     retention,
     comparison,
-    series,
+    funnel,
+    series: buildSeries(period, days),
     report,
     appointments,
     birthdays: { month, today: Number(today.slice(8, 10)), clients },

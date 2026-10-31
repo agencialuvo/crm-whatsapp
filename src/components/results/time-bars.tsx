@@ -37,7 +37,14 @@ export function TimeBars({
 }) {
   const [activo, setActivo] = useState<number | null>(null);
   const max = Math.max(0, ...points.map((p) => p.value));
+  // Con valores negativos (una ganancia que sale en rojo) la gráfica es «con signo»: la línea del
+  // cero sube y las barras negativas cuelgan de ella. Sin negativos, todo es como siempre.
+  const min = Math.min(0, ...points.map((p) => p.value));
+  const conSigno = min < 0;
   const tope = escalaLimpia(max);
+  const piso = conSigno ? escalaLimpia(-min) : 0;
+  const rango = tope + piso;
+  const ceroPct = (piso / rango) * 100;
   const n = points.length;
   const total = points.reduce((a, p) => a + p.value, 0);
   const cada = Math.max(1, Math.ceil(n / 6));
@@ -51,7 +58,7 @@ export function TimeBars({
         </span>
       </figcaption>
 
-      {max === 0 ? (
+      {max === 0 && !conSigno ? (
         <p className="flex h-36 items-center justify-center rounded-md border border-dashed text-sm text-text-3">
           {emptyText}
         </p>
@@ -68,24 +75,47 @@ export function TimeBars({
               {format(tope)}
             </span>
             <div className="absolute inset-x-0 bottom-0 border-t border-border-strong" />
+            {conSigno && (
+              <>
+                <div className="absolute inset-x-0 border-t border-border-strong" style={{ bottom: `${ceroPct}%` }} />
+                <span className="absolute bottom-0 right-0 translate-y-full pt-0.5 text-[10px] leading-none text-text-3">
+                  {format(-piso)}
+                </span>
+              </>
+            )}
 
             <div className="absolute inset-0 flex items-end">
               {points.map((p, i) => (
                 <div
                   key={p.bucket}
-                  className="flex h-full min-w-0 flex-1 items-end justify-center"
+                  className="relative flex h-full min-w-0 flex-1 items-end justify-center"
                   onPointerEnter={() => setActivo(i)}
                   onPointerDown={() => setActivo(i)}
                 >
-                  {p.value > 0 && (
-                    <div
-                      className={cn(
-                        "w-[70%] max-w-[24px] rounded-t-[4px] bg-brand transition-opacity",
-                        activo !== null && activo !== i && "opacity-45"
+                  {conSigno
+                    ? p.value !== 0 && (
+                        <div
+                          className={cn(
+                            "absolute left-1/2 w-[70%] max-w-[24px] -translate-x-1/2 transition-opacity",
+                            p.value > 0 ? "rounded-t-[4px] bg-brand" : "rounded-b-[4px] bg-danger",
+                            activo !== null && activo !== i && "opacity-45"
+                          )}
+                          style={
+                            p.value > 0
+                              ? { bottom: `${ceroPct}%`, height: `${Math.max(2, (p.value / rango) * 100)}%` }
+                              : { bottom: `${ceroPct - Math.max(2, (-p.value / rango) * 100)}%`, height: `${Math.max(2, (-p.value / rango) * 100)}%` }
+                          }
+                        />
+                      )
+                    : p.value > 0 && (
+                        <div
+                          className={cn(
+                            "w-[70%] max-w-[24px] rounded-t-[4px] bg-brand transition-opacity",
+                            activo !== null && activo !== i && "opacity-45"
+                          )}
+                          style={{ height: `${Math.max(2, (p.value / tope) * 100)}%` }}
+                        />
                       )}
-                      style={{ height: `${Math.max(2, (p.value / tope) * 100)}%` }}
-                    />
-                  )}
                 </div>
               ))}
             </div>
@@ -95,7 +125,7 @@ export function TimeBars({
                 point={points[activo]}
                 index={activo}
                 n={n}
-                bottomPct={(points[activo].value / tope) * 100}
+                bottomPct={points[activo].value >= 0 ? ceroPct + (points[activo].value / rango) * 100 : ceroPct}
                 format={format}
               />
             )}

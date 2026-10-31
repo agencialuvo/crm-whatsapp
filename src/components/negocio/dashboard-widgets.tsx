@@ -37,12 +37,15 @@ export function KpiCard({
   value,
   hint,
   trend,
+  trendTone = "up-good",
   loading,
 }: {
   label: string;
   value: string;
   hint?: string;
   trend?: Trend;
+  /** Cómo se lee que suba: bien (ventas), mal (gastos) o sin juicio (comisiones). */
+  trendTone?: "up-good" | "up-bad" | "neutral";
   loading?: boolean;
 }) {
   const change = trend?.change ?? null;
@@ -60,11 +63,11 @@ export function KpiCard({
         <p
           className={cn(
             "mt-1.5 flex flex-wrap items-center gap-x-1 text-xs",
-            change === null || change === 0
+            change === null || change === 0 || trendTone === "neutral"
               ? "text-text-3"
-              : change > 0
-                ? "text-success-text"
-                : "text-danger-text"
+              : (change > 0) === (trendTone === "up-bad")
+                ? "text-danger-text"
+                : "text-success-text"
           )}
         >
           <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />

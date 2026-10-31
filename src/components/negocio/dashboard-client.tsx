@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Cake } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { FunnelCards } from "@/components/negocio/dashboard-funnel";
 import {
   KpiCard,
   PaymentMix,
@@ -15,6 +16,7 @@ import {
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { Section } from "@/components/results/section";
 import { TimeBars } from "@/components/results/time-bars";
+import { itemFilterOptions } from "@/lib/salon/funnel";
 import { MONTH_NAMES, money } from "@/lib/salon/format";
 import { addDaysISO } from "@/lib/time/slots";
 import type { SaleOptionsDto, SalonDashboardDto } from "@/lib/salon/types";
@@ -33,11 +35,6 @@ function dashboardPresets(today: string): { label: string; range: Range }[] {
     { label: "Este mes", range: { from: monthStart, to: today } },
     { label: "Mes pasado", range: { from: `${lastMonthEnd.slice(0, 8)}01`, to: lastMonthEnd } },
   ];
-}
-
-/** «Ventas del mes» si el rango es un mes en curso; si no, «del periodo». */
-function isMonthToDate(range: Range): boolean {
-  return range.from.endsWith("-01") && range.from.slice(0, 7) === range.to.slice(0, 7);
 }
 
 /** Enlace de WhatsApp para saludar; solo con un celular de dígitos. */
@@ -66,12 +63,17 @@ export function DashboardClient({
   // Auditoría rápida: acota las tarjetas, el equipo y el ranking a un profesional.
   const [staffId, setStaffId] = useState("");
   const [staffOptions, setStaffOptions] = useState<SaleOptionsDto["staff"]>([]);
+  // Filtro por servicio o combo (`service`, `combo`, `service:<id>`, `combo:<id>`): acota tarjetas y gráfica.
+  const [item, setItem] = useState("");
+  const [itemOptions, setItemOptions] = useState<ReturnType<typeof itemFilterOptions>>([]);
+  // Qué muestra la gráfica de tendencia.
+  const [view, setView] = useState<"revenue" | "net">("revenue");
   const [data, setData] = useState<SalonDashboardDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (r: Range, staff: string) => {
+  const load = useCallback(async (r: Range, staff: string, itemFilter: string) => {
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
@@ -79,7 +81,7 @@ export function DashboardClient({
     setError(null);
     try {
       const res = await apiFetch<SalonDashboardDto>(
-        `/api/negocio/panel?from=${r.from}&to=${r.to}${staff ? `&staffId=${encodeURIComponent(staff)}` : ""}`,
+        `/api/negocio/panel?from=${r.from}&to=${r.to}${staff ? `&staffId=${encodeURIComponent(staff)}` : ""}${itemFilter ? `&item=${encodeURIComponent(itemFilter)}` : ""}`,
         { signal: ctrl.signal }
       );
       if (ctrl.signal.aborted) return;
@@ -93,17 +95,21 @@ export function DashboardClient({
   }, []);
 
   useEffect(() => {
-    void load(range, staffId);
+    void load(range, staffId, item);
     return () => ctrlRef.current?.abort();
-  }, [range, staffId, load]);
+  }, [range, staffId, item, load]);
 
-  // El selector de profesional se llena una vez (no depende del filtro).
+  // Los selectores de profesional y servicio se llenan una vez (no dependen de los filtros).
   useEffect(() => {
     let alive = true;
     apiFetch<SaleOptionsDto>("/api/negocio/opciones")
-      .then((o) => alive && setStaffOptions(o.staff))
+      .then((o) => {
+        if (!alive) return;
+        setStaffOptions(o.staff);
+        setItemOptions(itemFilterOptions(o.services, o.combos));
+      })
       .catch(() => {
-        // Sin la lista no hay filtro por profesional; el resto funciona igual.
+        // Sin la lista no hay filtros por profesional ni servicio; el resto funciona igual.
       });
     return () => {
       alive = false;
@@ -111,7 +117,7 @@ export function DashboardClient({
   }, []);
 
   const report = data?.report ?? null;
-  const t = report?.totals;
+  const f = data?.funnel;
   const birthdays = data?.birthdays;
   const monthName = birthdays ? MONTH_NAMES[birthdays.month - 1] : null;
 
@@ -124,24 +130,50 @@ export function DashboardClient({
           today={today}
           presets={dashboardPresets(today)}
         />
-        {staffOptions.length > 1 && (
-          <div className="flex items-center gap-2">
-            <label htmlFor="panel-staff" className="text-sm font-medium text-text-2">
-              Profesional:
-            </label>
-            <SearchSelect
-              id="panel-staff"
-              value={staffId}
-              onChange={setStaffId}
-              options={staffOptions.map((m) => ({ value: m.id, label: m.name }))}
-              emptyLabel="Todo el equipo"
-              placeholder="Todo el equipo"
-              searchPlaceholder="Buscar profesional…"
-              className="w-48"
-            />
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {staffOptions.length > 1 && (
+            <div className="flex items-center gap-2">
+              <label htmlFor="panel-staff" className="text-sm font-medium text-text-2">
+                Profesional:
+              </label>
+              <SearchSelect
+                id="panel-staff"
+                value={staffId}
+                onChange={setStaffId}
+                options={staffOptions.map((m) => ({ value: m.id, label: m.name }))}
+                emptyLabel="Todo el equipo"
+                placeholder="Todo el equipo"
+                searchPlaceholder="Buscar profesional…"
+                className="w-48"
+              />
+            </div>
+          )}
+          {itemOptions.length > 2 && (
+            <div className="flex items-center gap-2">
+              <label htmlFor="panel-item" className="text-sm font-medium text-text-2">
+                Servicio:
+              </label>
+              <SearchSelect
+                id="panel-item"
+                value={item}
+                onChange={setItem}
+                options={itemOptions}
+                emptyLabel="Todos los servicios y combos"
+                placeholder="Todos los servicios y combos"
+                searchPlaceholder="Buscar servicio o combo…"
+                className="w-64"
+              />
+            </div>
+          )}
+        </div>
       </div>
+
+      {item && (
+        <p className="-mt-2 text-xs text-text-3">
+          El filtro de servicio acota las tarjetas y la gráfica; métodos de pago, ranking y equipo muestran todo el
+          periodo.
+        </p>
+      )}
 
       {error ? (
         <div
@@ -149,30 +181,30 @@ export function DashboardClient({
           className="rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm text-danger-text"
         >
           <p>{error}</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => void load(range, staffId)}>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => void load(range, staffId, item)}>
             Reintentar
           </Button>
         </div>
       ) : (
-        <section aria-label="Indicadores del periodo" aria-busy={loading}>
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-4">
-            <KpiCard
-              label={isMonthToDate(range) ? "Ventas del mes" : "Ventas totales"}
-              value={t ? money(t.revenueCents, currency) : "…"}
-              hint={t ? `${t.count} venta${t.count === 1 ? "" : "s"} cobrada${t.count === 1 ? "" : "s"}` : undefined}
-              trend={trend(data, "revenue", currency)}
-              loading={loading && !!report}
-            />
+        <section aria-label="Indicadores del periodo" aria-busy={loading} className="space-y-2.5 sm:space-y-3">
+          <FunnelCards
+            funnel={data?.funnel ?? null}
+            previous={data?.comparison.funnel ?? null}
+            versus={data?.comparison.kind === "month" ? "vs. mes anterior" : "vs. periodo anterior"}
+            currency={currency}
+            loading={loading}
+          />
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
             <KpiCard
               label="Ticket promedio"
-              value={t ? (t.count > 0 ? money(Math.round(t.revenueCents / t.count), currency) : "—") : "…"}
-              hint="ventas ÷ atenciones"
+              value={f ? (f.count > 0 ? money(Math.round(f.revenueCents / f.count), currency) : "—") : "…"}
+              hint="ingresos ÷ atenciones"
               trend={trend(data, "ticket", currency)}
               loading={loading && !!report}
             />
             <KpiCard
               label="Atenciones"
-              value={t ? String(t.count) : "…"}
+              value={f ? String(f.count) : "…"}
               hint={
                 data?.appointments != null
                   ? `${data.appointments} cita${data.appointments === 1 ? "" : "s"} en la agenda`
@@ -203,16 +235,44 @@ export function DashboardClient({
           <div className="grid gap-5 lg:grid-cols-3">
             <div className="lg:col-span-2">
               <Section
-                title={
-                  data?.series.granularity === "month"
-                    ? "Ingresos por mes"
-                    : data?.series.granularity === "week"
-                      ? "Ingresos por semana"
-                      : "Ingresos por día"
+                title={`${view === "net" ? "Ganancia neta" : "Ingresos"} por ${
+                  data?.series.granularity === "month" ? "mes" : data?.series.granularity === "week" ? "semana" : "día"
+                }`}
+                hint={
+                  view === "net"
+                    ? item || staffId
+                      ? "Ingresos − comisiones por tramo; con este filtro no se restan gastos. Rojo = pérdida."
+                      : "Ingresos − comisiones − gastos por tramo: lo que de verdad dejó. Rojo = pérdida."
+                    : "La tendencia de ventas en el periodo; pasa el cursor por una barra para ver el detalle."
                 }
-                hint="La tendencia de ventas en el periodo; pasa el cursor por una barra para ver el detalle."
                 loading={loading}
                 hasData={data !== null}
+                right={
+                  <div className="flex gap-1" role="group" aria-label="Qué mostrar en la gráfica">
+                    {(
+                      [
+                        ["revenue", "Ver Ingresos"],
+                        ["net", "Ver Ganancia Neta"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        aria-pressed={view === key}
+                        onClick={() => setView(key)}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          view === key
+                            ? "border-brand bg-brand-tint text-brand-text"
+                            : "text-text-2 hover:bg-accent hover:text-foreground"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                }
               >
                 {data && (
                   <TimeBars
@@ -223,13 +283,17 @@ export function DashboardClient({
                           ? "Por semana (inicio)"
                           : "Por día"
                     }
-                    unit="ingresos"
+                    unit={view === "net" ? "ganancia neta" : "ingresos"}
                     format={(v) => money(v, currency)}
                     points={data.series.points.map((p) => ({
                       bucket: p.bucket,
-                      value: p.revenueCents,
-                      detail: `${p.count} atención${p.count === 1 ? "" : "es"}`,
+                      value: view === "net" ? p.netCents : p.revenueCents,
+                      detail:
+                        view === "net"
+                          ? `${money(p.revenueCents, currency)} ingresos`
+                          : `${p.count} atención${p.count === 1 ? "" : "es"}`,
                     }))}
+                    emptyText={view === "net" ? "Sin ganancia en el periodo." : undefined}
                   />
                 )}
               </Section>
@@ -313,16 +377,13 @@ export function DashboardClient({
 /** La tendencia de una tarjeta contra el periodo de comparación (mes anterior o tramo anterior). */
 function trend(
   data: SalonDashboardDto | null,
-  kind: "revenue" | "ticket" | "count" | "retention",
+  kind: "ticket" | "count" | "retention",
   currency: string
 ): Trend | undefined {
   if (!data) return undefined;
   const c = data.comparison;
-  const t = data.report.totals;
+  const t = data.funnel;
   const versus = c.kind === "month" ? "vs. mes anterior" : "vs. periodo anterior";
-  if (kind === "revenue") {
-    return { change: percentChange(t.revenueCents, c.revenueCents), unit: "%", versus, previous: money(c.revenueCents, currency) };
-  }
   if (kind === "count") {
     return { change: percentChange(t.count, c.count), unit: "%", versus, previous: String(c.count) };
   }

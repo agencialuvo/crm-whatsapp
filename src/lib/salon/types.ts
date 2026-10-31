@@ -1,5 +1,6 @@
 import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import type { CommissionSource } from "@/lib/salon/commission";
+import type { FunnelPointDto, FunnelTotalsDto } from "@/lib/salon/funnel";
 import type { PaymentMethod, ScheduleDay } from "@/lib/salon/schemas";
 
 /**
@@ -140,6 +141,14 @@ export type SalesReportDto = {
   truncated: boolean;
 };
 
+/** El reporte de la pantalla Caja: el de ventas más los gastos operativos del periodo. */
+export type CashReportDto = SalesReportDto & {
+  /** Gastos del negocio en el periodo; `null` si el reporte se acotó a un profesional (no se le asignan). */
+  expensesCents: number | null;
+  /** Ingresos − comisiones − gastos (sin gastos si no aplican). */
+  netAfterExpensesCents: number;
+};
+
 export type BoardBooking = {
   id: string;
   kind: "session" | "block";
@@ -249,13 +258,8 @@ export type BirthdayClientDto = {
   totalCents: number;
 };
 
-/** Un punto de la serie de ingresos del Panel. */
-export type RevenuePointDto = {
-  /** `AAAA-MM-DD` (día o inicio de semana) o `AAAA-MM` (mes), en la zona del negocio. */
-  bucket: string;
-  revenueCents: number;
-  count: number;
-};
+/** Un punto de la serie del Panel: ingresos y, con ellos, comisiones, gastos y ganancia neta. */
+export type RevenuePointDto = FunnelPointDto;
 
 /** Clientes atendidos en un periodo y cuántos de ellos ya van en 2 o más visitas. */
 export type RetentionDto = {
@@ -274,6 +278,8 @@ export type DashboardComparisonDto = {
   revenueCents: number;
   count: number;
   retentionRate: number | null;
+  /** El embudo del periodo de comparación (mismos filtros que el actual). */
+  funnel: FunnelTotalsDto;
 };
 
 /** El panel ejecutivo: reporte del periodo, citas y cumpleaños del mes. */
@@ -281,7 +287,9 @@ export type SalonDashboardDto = {
   /** Retención del periodo: clientes atendidos con 2 o más visitas en total. */
   retention: RetentionDto;
   comparison: DashboardComparisonDto;
-  /** Ingresos en el tiempo: por día (hasta 31 días), por semana (hasta 92) o por mes. */
+  /** De ingresos a ganancia neta del periodo, con los filtros de profesional y servicio aplicados. */
+  funnel: FunnelTotalsDto;
+  /** Ingresos y ganancia neta en el tiempo: por día (hasta 31 días), por semana (hasta 92) o por mes. */
   series: { granularity: "day" | "week" | "month"; points: RevenuePointDto[] };
   /** Sin la tabla de ventas (`rows` vacío): el panel solo muestra agregados. */
   report: SalesReportDto;

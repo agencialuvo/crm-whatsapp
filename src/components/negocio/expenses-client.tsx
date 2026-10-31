@@ -41,11 +41,14 @@ function dayLabel(day: string): string {
 export function ExpensesClient({
   currency,
   today,
+  initialRange,
 }: {
   currency: string;
   today: string;
+  /** Llega desde Caja: el periodo que se estaba revisando. */
+  initialRange?: Range;
 }) {
-  const [range, setRange] = useState<Range>(() => ({ from: `${today.slice(0, 8)}01`, to: today }));
+  const [range, setRange] = useState<Range>(() => initialRange ?? { from: `${today.slice(0, 8)}01`, to: today });
   const [kindFilter, setKindFilter] = useState("");
   const [report, setReport] = useState<ExpensesReportDto | null>(null);
   const [loading, setLoading] = useState(true);

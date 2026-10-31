@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Eye, History, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, Eye, History, Pencil, Plus, Receipt, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { SearchSelect } from "@/components/ui/search-select";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -19,9 +20,9 @@ import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
 import { rowsPerPage } from "@/lib/salon/cash-shifts";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
-import { PAYMENT_LABELS } from "@/lib/salon/schemas";
+import { PAYMENT_LABELS, PAYMENT_METHODS, type PaymentMethod } from "@/lib/salon/schemas";
 import { loyaltyNotice } from "@/lib/loyalty";
-import type { RegisteredSaleDto, SaleRowDto, SalesReportDto } from "@/lib/salon/types";
+import type { CashReportDto, RegisteredSaleDto, SaleRowDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
 /** Cuántas ventas se pintan por defecto; «Mostrar más» agrega otro tanto. Cada persona puede elegir otro número. */
@@ -64,13 +65,16 @@ export function CashClient({
 }) {
   const [range, setRange] = useState<Range>({ from: initialDay ?? today, to: initialDay ?? today });
   const pendingSale = useRef<string | null>(openSaleId ?? null);
-  const [report, setReport] = useState<SalesReportDto | null>(null);
+  const [report, setReport] = useState<CashReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pageSize, setPageSize] = useTablePageSize("caja-ventas", PAGE);
   // Cuántas «tandas» de `pageSize` filas se muestran (cada «Mostrar más» suma una).
   const [batches, setBatches] = useState(1);
   const shown = batches * rowsPerPage(pageSize);
+  // Filtros rápidos de la tabla (en el navegador, sobre las ventas ya cargadas): "" = todos.
+  const [methodFilter, setMethodFilter] = useState<"" | PaymentMethod>("");
+  const [staffFilter, setStaffFilter] = useState("");
   // Cambia cada vez que la lista de ventas se recarga: el panel del turno se actualiza con ella.
   const [shiftTick, setShiftTick] = useState(0);
   const [saleOpen, setSaleOpen] = useState(false);
@@ -89,7 +93,7 @@ export function CashClient({
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<SalesReportDto>(
+      const data = await apiFetch<CashReportDto>(
         `/api/negocio/ventas?from=${r.from}&to=${r.to}`,
         { signal: ctrl.signal }
       );
@@ -141,7 +145,7 @@ export function CashClient({
   function exportCsv() {
     if (!report) return;
     const header = ["Fecha", "Cliente", "Servicio u oferta", "Profesional", "Pago", "Monto", "Comisión", "Neto"];
-    const lines = report.rows.map((r) =>
+    const lines = visibleRows.map((r) =>
       [
         dateTimeLabel(r.createdAt, timezone),
         r.customerName,
@@ -168,6 +172,18 @@ export function CashClient({
   }
 
   const t = report?.totals;
+  const filtering = methodFilter !== "" || staffFilter !== "";
+  const visibleRows = useMemo(
+    () =>
+      (report?.rows ?? []).filter(
+        (r) => (!methodFilter || r.paymentMethod === methodFilter) && (!staffFilter || r.staffId === staffFilter)
+      ),
+    [report, methodFilter, staffFilter]
+  );
+  const visibleTotal = visibleRows.reduce((n, r) => n + r.amountCents, 0);
+  const staffOptions = (report?.byStaff ?? []).map((m) => ({ value: m.staffId, label: m.staffName }));
+  const methodOptions = PAYMENT_METHODS.map((m) => ({ value: m, label: PAYMENT_LABELS[m] }));
+  const gastosHref = report ? `/gastos?from=${report.period.from}&to=${report.period.to}` : "/gastos";
   const oneDay = range.from === range.to;
   const periodTitle = oneDay
     ? range.from === today
@@ -189,7 +205,7 @@ export function CashClient({
             <History className="h-4 w-4" aria-hidden />
             Historial de turnos
           </Link>
-          <Button variant="outline" onClick={exportCsv} disabled={!report || report.rows.length === 0}>
+          <Button variant="outline" onClick={exportCsv} disabled={!report || visibleRows.length === 0}>
             <Download className="h-4 w-4" aria-hidden />
             Exportar CSV
           </Button>
@@ -231,7 +247,7 @@ export function CashClient({
             </Button>
           </div>
         ) : (
-          <div className={cn("grid grid-cols-2 gap-2.5 transition-opacity sm:gap-3 lg:grid-cols-4", loading && report && "opacity-60")}>
+          <div className={cn("grid grid-cols-2 gap-2.5 transition-opacity sm:gap-3 lg:grid-cols-5", loading && report && "opacity-60")}>
             <StatCard
               label="Ingresos"
               value={t ? money(t.revenueCents, currency) : "…"}
@@ -242,11 +258,50 @@ export function CashClient({
               value={t ? money(t.commissionsCents, currency) : "…"}
               hint={t ? percent(t.commissionsCents, t.revenueCents) : undefined}
             />
-            <StatCard
-              label="Ganancia neta"
-              value={t ? money(t.netCents, currency) : "…"}
-              hint={t ? percent(t.netCents, t.revenueCents) : undefined}
-            />
+            <div className="min-w-0 rounded-md border bg-subtle px-3 py-2.5">
+              <p className="text-xs font-medium text-text-2">Gastos operativos</p>
+              <p className="mt-0.5 truncate text-xl font-semibold">
+                {report ? (report.expensesCents === null ? "—" : money(report.expensesCents, currency)) : "…"}
+              </p>
+              {report?.expensesCents === null ? (
+                <p className="mt-1 text-[11px] text-text-3">No se asignan a un profesional</p>
+              ) : (
+                report && (
+                <Link
+                  href={gastosHref}
+                  className="mt-1 inline-flex items-center gap-1 rounded-sm text-[11px] font-medium text-brand-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Receipt className="h-3 w-3" aria-hidden />
+                  Ver gastos del periodo
+                </Link>
+                )
+              )}
+            </div>
+            <div
+              className={cn(
+                "min-w-0 rounded-md border px-3 py-2.5",
+                report && report.netAfterExpensesCents < 0
+                  ? "border-danger-soft bg-danger-tint"
+                  : "border-success-soft bg-success-tint"
+              )}
+            >
+              <p className="text-xs font-medium text-text-2">
+                {report?.expensesCents === null ? "Ganancia antes de gastos" : "Ganancia neta"}
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 truncate text-xl font-semibold tabular-nums",
+                  report && report.netAfterExpensesCents < 0 ? "text-danger-text" : "text-success-text"
+                )}
+              >
+                {report ? money(report.netAfterExpensesCents, currency) : "…"}
+              </p>
+              {report && (
+                <p className="mt-1 text-[11px] text-text-3">
+                  {report.expensesCents === null ? "ingresos − comisiones" : "ingresos − comisiones − gastos"}
+                </p>
+              )}
+            </div>
             <StatCard
               label="Ticket promedio"
               value={t ? (t.count > 0 ? money(Math.round(t.revenueCents / t.count), currency) : "—") : "…"}
@@ -277,7 +332,9 @@ export function CashClient({
                 )}
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 [&>h4]:mb-0">
                   <Subhead>
-                    {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
+                    {filtering
+                      ? `${visibleRows.length} de ${report.rows.length} ventas · ${money(visibleTotal, currency)}`
+                      : `${report.totals.count} venta${report.totals.count === 1 ? "" : "s"} en el periodo`}
                   </Subhead>
                   <PageSizeSelect
                     value={pageSize}
@@ -287,6 +344,64 @@ export function CashClient({
                     }}
                   />
                 </div>
+                <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="caja-metodo" className="text-sm font-medium text-text-2">
+                      Método de pago:
+                    </label>
+                    <SearchSelect
+                      id="caja-metodo"
+                      value={methodFilter}
+                      onChange={(v) => {
+                        setMethodFilter(v as "" | PaymentMethod);
+                        setBatches(1);
+                      }}
+                      options={methodOptions}
+                      emptyLabel="Todos"
+                      placeholder="Todos"
+                      searchPlaceholder="Buscar método…"
+                      className="w-40"
+                    />
+                  </div>
+                  {staffOptions.length > 1 && (
+                    <div className="flex items-center gap-2">
+                      <label htmlFor="caja-colaborador" className="text-sm font-medium text-text-2">
+                        Colaborador:
+                      </label>
+                      <SearchSelect
+                        id="caja-colaborador"
+                        value={staffFilter}
+                        onChange={(v) => {
+                          setStaffFilter(v);
+                          setBatches(1);
+                        }}
+                        options={staffOptions}
+                        emptyLabel="Todo el equipo"
+                        placeholder="Todo el equipo"
+                        searchPlaceholder="Buscar colaborador…"
+                        className="w-48"
+                      />
+                    </div>
+                  )}
+                  {filtering && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setMethodFilter("");
+                        setStaffFilter("");
+                        setBatches(1);
+                      }}
+                    >
+                      Quitar filtros
+                    </Button>
+                  )}
+                </div>
+                {filtering && visibleRows.length === 0 && (
+                  <p className="mb-3 rounded-md border bg-subtle px-3 py-2 text-sm text-text-2">
+                    Ninguna venta coincide con los filtros.
+                  </p>
+                )}
                 {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
                 del scroll y ensancha la página en el teléfono. */}
             <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
@@ -323,7 +438,7 @@ export function CashClient({
                       </tr>
                     </thead>
                     <tbody>
-                      {report.rows.slice(0, shown).map((r) => (
+                      {visibleRows.slice(0, shown).map((r) => (
                         <tr key={r.id} className="border-b last:border-0 hover:bg-row-hover">
                           <td className="whitespace-nowrap px-4 py-2 text-text-2 sm:pl-5">
                             {dateTimeLabel(r.createdAt, timezone)}
@@ -397,10 +512,10 @@ export function CashClient({
                     </tbody>
                   </table>
                 </div>
-                {shown < report.rows.length && (
+                {shown < visibleRows.length && (
                   <div className="mt-3 flex justify-center">
                     <Button variant="outline" size="sm" onClick={() => setBatches((n) => n + 1)}>
-                      Mostrar más ({report.rows.length - shown} restantes)
+                      Mostrar más ({visibleRows.length - shown} restantes)
                     </Button>
                   </div>
                 )}
