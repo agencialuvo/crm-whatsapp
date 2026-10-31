@@ -5,7 +5,6 @@ import { Download, Eye, History, Pencil, Plus, Receipt, Trash2, X } from "lucide
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
-import { SearchSelect } from "@/components/ui/search-select";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
@@ -19,7 +18,7 @@ import { Section, Subhead } from "@/components/results/section";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
-import { PAYMENT_LABELS, PAYMENT_METHODS, type PaymentMethod } from "@/lib/salon/schemas";
+import { PAYMENT_LABELS } from "@/lib/salon/schemas";
 import { loyaltyNotice } from "@/lib/loyalty";
 import type { CashReportDto, RegisteredSaleDto, SaleRowDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
@@ -68,9 +67,6 @@ export function CashClient({
   const [report, setReport] = useState<CashReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Filtros rápidos de la tabla (en el navegador, sobre las ventas ya cargadas): "" = todos.
-  const [methodFilter, setMethodFilter] = useState<"" | PaymentMethod>("");
-  const [staffFilter, setStaffFilter] = useState("");
   // Cambia cada vez que la lista de ventas se recarga: el panel del turno se actualiza con ella.
   const [shiftTick, setShiftTick] = useState(0);
   const [saleOpen, setSaleOpen] = useState(false);
@@ -140,7 +136,7 @@ export function CashClient({
   function exportCsv() {
     if (!report) return;
     const header = ["Fecha", "Cliente", "Servicio u oferta", "Profesional", "Pago", "Monto", "Comisión", "Neto"];
-    const lines = visibleRows.map((r) =>
+    const lines = rows.map((r) =>
       [
         dateTimeLabel(r.createdAt, timezone),
         r.customerName,
@@ -167,23 +163,13 @@ export function CashClient({
   }
 
   const t = report?.totals;
-  const filtering = methodFilter !== "" || staffFilter !== "";
-  const visibleRows = useMemo(
-    () =>
-      (report?.rows ?? []).filter(
-        (r) => (!methodFilter || r.paymentMethod === methodFilter) && (!staffFilter || r.staffId === staffFilter)
-      ),
-    [report, methodFilter, staffFilter]
-  );
-  // Cambia el periodo o un filtro: la tabla vuelve a la primera página.
-  const table = useDataTable(visibleRows, {
+  const rows = useMemo(() => report?.rows ?? [], [report]);
+  // Cambia el periodo: la tabla vuelve a la primera página.
+  const table = useDataTable(rows, {
     view: "caja-ventas",
     defaultPageSize: PAGE,
-    resetKey: `${range.from}|${range.to}|${methodFilter}|${staffFilter}`,
+    resetKey: `${range.from}|${range.to}`,
   });
-  const visibleTotal = visibleRows.reduce((n, r) => n + r.amountCents, 0);
-  const staffOptions = (report?.byStaff ?? []).map((m) => ({ value: m.staffId, label: m.staffName }));
-  const methodOptions = PAYMENT_METHODS.map((m) => ({ value: m, label: PAYMENT_LABELS[m] }));
   const gastosHref = report ? `/gastos?from=${report.period.from}&to=${report.period.to}` : "/gastos";
   const oneDay = range.from === range.to;
   const periodTitle = oneDay
@@ -206,7 +192,7 @@ export function CashClient({
             <History className="h-4 w-4" aria-hidden />
             Historial de turnos
           </Link>
-          <Button variant="outline" onClick={exportCsv} disabled={!report || visibleRows.length === 0}>
+          <Button variant="outline" onClick={exportCsv} disabled={!report || rows.length === 0}>
             <Download className="h-4 w-4" aria-hidden />
             Exportar CSV
           </Button>
@@ -333,66 +319,9 @@ export function CashClient({
                 )}
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 [&>h4]:mb-0">
                   <Subhead>
-                    {filtering
-                      ? `${visibleRows.length} de ${report.rows.length} ventas · ${money(visibleTotal, currency)}`
-                      : `${report.totals.count} venta${report.totals.count === 1 ? "" : "s"} en el periodo`}
+                    {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
                   </Subhead>
                 </div>
-                <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="caja-metodo" className="text-sm font-medium text-text-2">
-                      Método de pago:
-                    </label>
-                    <SearchSelect
-                      id="caja-metodo"
-                      value={methodFilter}
-                      onChange={(v) => {
-                        setMethodFilter(v as "" | PaymentMethod);
-                      }}
-                      options={methodOptions}
-                      emptyLabel="Todos"
-                      placeholder="Todos"
-                      searchPlaceholder="Buscar método…"
-                      className="w-40"
-                    />
-                  </div>
-                  {staffOptions.length > 1 && (
-                    <div className="flex items-center gap-2">
-                      <label htmlFor="caja-colaborador" className="text-sm font-medium text-text-2">
-                        Colaborador:
-                      </label>
-                      <SearchSelect
-                        id="caja-colaborador"
-                        value={staffFilter}
-                        onChange={(v) => {
-                          setStaffFilter(v);
-                        }}
-                        options={staffOptions}
-                        emptyLabel="Todo el equipo"
-                        placeholder="Todo el equipo"
-                        searchPlaceholder="Buscar colaborador…"
-                        className="w-48"
-                      />
-                    </div>
-                  )}
-                  {filtering && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setMethodFilter("");
-                        setStaffFilter("");
-                      }}
-                    >
-                      Quitar filtros
-                    </Button>
-                  )}
-                </div>
-                {filtering && visibleRows.length === 0 && (
-                  <p className="mb-3 rounded-md border bg-subtle px-3 py-2 text-sm text-text-2">
-                    Ninguna venta coincide con los filtros.
-                  </p>
-                )}
                 <DataTableToolbar {...table.pagination} noun={SALE_NOUN} />
                 {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
                 del scroll y ensancha la página en el teléfono. */}
