@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cake } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { FunnelCards } from "@/components/negocio/dashboard-funnel";
 import {
@@ -22,6 +24,10 @@ import { addDaysISO } from "@/lib/time/slots";
 import type { SaleOptionsDto, SalonDashboardDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 import { SearchSelect } from "@/components/ui/search-select";
+
+/** Lista vacía estable mientras el Panel carga. */
+const NONE: never[] = [];
+const BIRTHDAY_NOUN = { one: "cumpleaños", other: "cumpleaños" };
 
 /** Atajos del Panel: hoy, la semana (de lunes a hoy), el mes y el mes pasado. Las fechas sueltas están en el selector. */
 function dashboardPresets(today: string): { label: string; range: Range }[] {
@@ -119,6 +125,8 @@ export function DashboardClient({
   const report = data?.report ?? null;
   const f = data?.funnel;
   const birthdays = data?.birthdays;
+  // Los cumpleaños del mes pueden ser muchos: van paginados como cualquier lista.
+  const birthdayTable = useDataTable(birthdays?.clients ?? NONE, { view: "panel-cumpleanos", defaultPageSize: 10 });
   const monthName = birthdays ? MONTH_NAMES[birthdays.month - 1] : null;
 
   return (
@@ -316,8 +324,10 @@ export function DashboardClient({
               emptyText="Ningún cliente cumple años este mes. Registra el cumpleaños al cobrar o desde Clientes."
             >
               {birthdays && (
+                <>
+                <DataTableToolbar {...birthdayTable.pagination} noun={BIRTHDAY_NOUN} />
                 <ul className="divide-y">
-                  {birthdays.clients.map((c) => {
+                  {birthdayTable.rows.map((c) => {
                     const link = whatsappLink(c.phone, c.name);
                     const isToday = c.day === birthdays.today;
                     const passed = c.day < birthdays.today;
@@ -365,6 +375,12 @@ export function DashboardClient({
                     );
                   })}
                 </ul>
+                <DataTablePagination
+                  {...birthdayTable.pagination}
+                  noun={BIRTHDAY_NOUN}
+                  label="Paginación de cumpleaños"
+                />
+                </>
               )}
             </Section>
           </div>

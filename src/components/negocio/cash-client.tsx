@@ -14,7 +14,7 @@ import { SaleDialog } from "@/components/negocio/sale-dialog";
 import { SaleDetailDialog } from "@/components/negocio/sale-detail-dialog";
 import { SaleEditDialog } from "@/components/negocio/sale-edit-dialog";
 import { ShiftPanel } from "@/components/negocio/shift-panel";
-import { Section, Subhead } from "@/components/results/section";
+import { Section } from "@/components/results/section";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
@@ -308,6 +308,13 @@ export function CashClient({
             hasData={report !== null}
             empty={report?.rows.length === 0}
             emptyText="Todavía no hay ventas en este periodo. Usa «Registrar venta» para cobrar una."
+            right={
+              report && (
+                <span className="text-[13px] font-semibold text-text-2">
+                  {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
+                </span>
+              )
+            }
           >
             {report && (
               <>
@@ -317,11 +324,6 @@ export function CashClient({
                     incluyen todas; acota el rango para ver el detalle completo.
                   </p>
                 )}
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 [&>h4]:mb-0">
-                  <Subhead>
-                    {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
-                  </Subhead>
-                </div>
                 <DataTableToolbar {...table.pagination} noun={SALE_NOUN} />
                 {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
                 del scroll y ensancha la página en el teléfono. */}

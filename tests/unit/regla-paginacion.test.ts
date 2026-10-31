@@ -16,6 +16,7 @@ const TABLAS = [
   "src/components/negocio/client-history-dialog.tsx",
   "src/components/negocio/shift-history-client.tsx",
   "src/components/contacts/contacts-client.tsx",
+  "src/components/negocio/dashboard-client.tsx",
 ];
 
 const leer = (f: string) => readFileSync(join(process.cwd(), f), "utf8");
