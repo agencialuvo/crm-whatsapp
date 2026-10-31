@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Eye, Pencil, Plus, Trash2, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Download, Eye, History, Pencil, Plus, Trash2, X } from "lucide-react";
+import Link from "next/link";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -16,6 +17,7 @@ import { useTablePageSize } from "@/components/negocio/use-page-size";
 import { Section, Subhead } from "@/components/results/section";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
+import { rowsPerPage } from "@/lib/salon/cash-shifts";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS } from "@/lib/salon/schemas";
 import { loyaltyNotice } from "@/lib/loyalty";
@@ -68,7 +70,7 @@ export function CashClient({
   const [pageSize, setPageSize] = useTablePageSize("caja-ventas", PAGE);
   // Cuántas «tandas» de `pageSize` filas se muestran (cada «Mostrar más» suma una).
   const [batches, setBatches] = useState(1);
-  const shown = batches * pageSize;
+  const shown = batches * rowsPerPage(pageSize);
   // Cambia cada vez que la lista de ventas se recarga: el panel del turno se actualiza con ella.
   const [shiftTick, setShiftTick] = useState(0);
   const [saleOpen, setSaleOpen] = useState(false);
@@ -182,7 +184,11 @@ export function CashClient({
           today={today}
           presets={presets(today)}
         />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/caja/historial" className={buttonVariants({ variant: "outline" })}>
+            <History className="h-4 w-4" aria-hidden />
+            Historial de turnos
+          </Link>
           <Button variant="outline" onClick={exportCsv} disabled={!report || report.rows.length === 0}>
             <Download className="h-4 w-4" aria-hidden />
             Exportar CSV

@@ -1,9 +1,9 @@
 "use client";
 
 import { SearchSelect } from "@/components/ui/search-select";
-import { PAGE_SIZES } from "@/lib/salon/cash-shifts";
+import { PAGE_SIZES, pageSizeLabel } from "@/lib/salon/cash-shifts";
 
-const OPTIONS = PAGE_SIZES.map((n) => ({ value: String(n), label: `${n} por página` }));
+const OPTIONS = PAGE_SIZES.map((n) => ({ value: String(n), label: pageSizeLabel(n) }));
 
 /** Selector de filas por página (con buscador, como todo desplegable del sistema). */
 export function PageSizeSelect({

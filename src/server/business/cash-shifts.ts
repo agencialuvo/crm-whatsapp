@@ -1,10 +1,15 @@
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import {
+  DEFAULT_HISTORY_ROWS,
+  MAX_HISTORY_ROWS,
   closeShiftInputSchema,
   computeShiftTotals,
+  type CashShiftDetailDto,
+  type CashShiftRowDto,
   openShiftInputSchema,
   type CashShiftDto,
   type CloseShiftInput,
@@ -122,15 +127,105 @@ export async function getOpenShift(organizationId: string): Promise<CashShiftDto
   return serializeShift({ ...row, ...live });
 }
 
-/** Los últimos turnos (más recientes primero). */
-export async function listShifts(organizationId: string, limit = 30): Promise<CashShiftDto[]> {
-  const rows = await getDb()
-    .select()
+/** Nombres de quien abrió y cerró (las dos uniones salen de la misma tabla `user`). */
+const openerT = alias(schema.user, "shift_opener");
+const closerT = alias(schema.user, "shift_closer");
+
+function toRow(
+  row: ShiftRow,
+  names: { opener: string | null; closer: string | null }
+): CashShiftRowDto {
+  return { ...serializeShift(row), openedByName: names.opener, closedByName: names.closer };
+}
+
+/**
+ * Historial: los turnos CERRADOS de la organización, del más reciente al más antiguo.
+ * `period` acota por la fecha de cierre (días del negocio, `end` exclusivo). Pagina con
+ * `limit` y `offset`; `total` cuenta todas las páginas.
+ */
+export async function listShifts(
+  organizationId: string,
+  opts: { period?: { start: Date; end: Date }; limit?: number; offset?: number } = {}
+): Promise<{ shifts: CashShiftRowDto[]; total: number }> {
+  const db = getDb();
+  const where = scoped(
+    shift.organizationId,
+    organizationId,
+    eq(shift.status, "closed"),
+    opts.period ? gte(shift.closedAt, opts.period.start) : undefined,
+    opts.period ? lt(shift.closedAt, opts.period.end) : undefined
+  );
+  const limit = Math.min(Math.max(opts.limit ?? DEFAULT_HISTORY_ROWS, 1), MAX_HISTORY_ROWS);
+  const offset = Math.max(opts.offset ?? 0, 0);
+
+  const [rows, [count]] = await Promise.all([
+    db
+      .select({ shift, opener: openerT.name, closer: closerT.name })
+      .from(shift)
+      .leftJoin(openerT, eq(shift.openedByUserId, openerT.id))
+      .leftJoin(closerT, eq(shift.closedByUserId, closerT.id))
+      .where(where)
+      .orderBy(desc(shift.closedAt), desc(shift.openedAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ n: sql<number>`count(*)`.mapWith(Number) }).from(shift).where(where),
+  ]);
+  return {
+    shifts: rows.map((r) => toRow(r.shift, { opener: r.opener, closer: r.closer })),
+    total: count?.n ?? 0,
+  };
+}
+
+/**
+ * El desglose de un turno (abierto o cerrado): cómo se cobró lo vendido en su periodo,
+ * cuántas ventas y gastos hubo, y si las ventas de hoy ya no coinciden con lo que se
+ * congeló al cerrar.
+ */
+export async function getShiftDetail(organizationId: string, shiftId: string): Promise<CashShiftDetailDto> {
+  const db = getDb();
+  const [found] = await db
+    .select({ shift, opener: openerT.name, closer: closerT.name })
     .from(shift)
-    .where(scoped(shift.organizationId, organizationId))
-    .orderBy(desc(shift.openedAt))
-    .limit(Math.min(Math.max(limit, 1), 200));
-  return rows.map(serializeShift);
+    .leftJoin(openerT, eq(shift.openedByUserId, openerT.id))
+    .leftJoin(closerT, eq(shift.closedByUserId, closerT.id))
+    .where(scoped(shift.organizationId, organizationId, eq(shift.id, shiftId)))
+    .limit(1);
+  if (!found) throw new SalonError("not_found", 404, "Turno no encontrado");
+
+  const until = found.shift.closedAt ?? new Date();
+  const sale = schema.serviceSale;
+  const expense = schema.expenseItem;
+  const [byPayment, [expenses]] = await Promise.all([
+    db
+      .select({
+        method: sale.paymentMethod,
+        count: sql<number>`count(*)`.mapWith(Number),
+        amountCents: sql<number>`coalesce(sum(${sale.amountCents}), 0)`.mapWith(Number),
+      })
+      .from(sale)
+      .where(scoped(sale.organizationId, organizationId, gte(sale.createdAt, found.shift.openedAt), lte(sale.createdAt, until)))
+      .groupBy(sale.paymentMethod)
+      .orderBy(desc(sql`sum(${sale.amountCents})`)),
+    db
+      .select({ n: sql<number>`count(*)`.mapWith(Number) })
+      .from(expense)
+      .where(scoped(expense.organizationId, organizationId, gte(expense.createdAt, found.shift.openedAt), lte(expense.createdAt, until))),
+  ]);
+
+  // Un turno abierto enseña lo de ahora, como el panel.
+  const live =
+    found.shift.status === "open"
+      ? await totalsBetween(db, organizationId, found.shift.initialCashCents, found.shift.openedAt, until)
+      : null;
+  const row = toRow(live ? { ...found.shift, ...live } : found.shift, { opener: found.opener, closer: found.closer });
+
+  return {
+    ...row,
+    byPayment,
+    salesCount: byPayment.reduce((n, p) => n + p.count, 0),
+    expensesCount: expenses?.n ?? 0,
+    currentSalesCents: byPayment.reduce((n, p) => n + p.amountCents, 0),
+  };
 }
 
 /**

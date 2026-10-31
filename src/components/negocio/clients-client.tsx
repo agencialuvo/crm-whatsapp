@@ -11,6 +11,7 @@ import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ClientDialog } from "@/components/negocio/client-dialog";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
+import { rowsPerPage } from "@/lib/salon/cash-shifts";
 import { birthdayLabel, dateNumeric, formatPeruPhone, money } from "@/lib/salon/format";
 import type { SalonClientDto } from "@/lib/salon/types";
 
@@ -91,10 +92,10 @@ export function ClientsClient({
   useEffect(() => () => ctrlRef.current?.abort(), []);
 
   const clients = useMemo(() => data?.clients ?? [], [data]);
-  const pages = Math.max(1, Math.ceil(clients.length / pageSize));
+  const pages = Math.max(1, Math.ceil(clients.length / rowsPerPage(pageSize)));
   const current = Math.min(page, pages);
   const rows = useMemo(
-    () => clients.slice((current - 1) * pageSize, current * pageSize),
+    () => clients.slice((current - 1) * rowsPerPage(pageSize), current * rowsPerPage(pageSize)),
     [clients, current, pageSize]
   );
   const allOnPage = rows.length > 0 && rows.every((x) => selected.has(x.id));

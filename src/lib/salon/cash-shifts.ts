@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { PeriodDto } from "@/lib/analytics";
+import type { PaymentMethod } from "@/lib/salon/schemas";
 
 /**
  * Cuadre de caja y turnos — contratos compartidos. Todo el dinero viaja en
@@ -73,8 +75,58 @@ export type CashShiftDto = {
   notes: string | null;
 };
 
+/** Un turno del historial: el turno y quién lo abrió y lo cerró (por nombre, no por id). */
+export type CashShiftRowDto = CashShiftDto & {
+  openedByName: string | null;
+  closedByName: string | null;
+};
+
+export type ShiftPaymentDto = { method: PaymentMethod; count: number; amountCents: number };
+
+/** El desglose de un turno: cómo se cobró lo que vendió. */
+export type CashShiftDetailDto = CashShiftRowDto & {
+  byPayment: ShiftPaymentDto[];
+  salesCount: number;
+  expensesCount: number;
+  /**
+   * Las ventas del periodo del turno tal como están HOY. Si difiere de `totalSalesCents`
+   * (lo congelado al cerrar), alguna venta se anuló o editó después del cierre.
+   */
+  currentSalesCents: number;
+};
+
+/** Historial: filas por consulta (tope del servidor) y respuesta. */
+export const MAX_HISTORY_ROWS = 200;
+export const DEFAULT_HISTORY_ROWS = 25;
+
+export type ShiftHistoryDto = {
+  shifts: CashShiftRowDto[];
+  /** Cuántos turnos cerrados hay en el periodo (todas las páginas). */
+  total: number;
+  period: PeriodDto;
+};
+
+export const historyQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_HISTORY_ROWS).default(DEFAULT_HISTORY_ROWS),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+});
+
+/** «Todos»: se guarda como 0 y las pantallas lo leen como «sin tope» (`rowsPerPage`). */
+export const PAGE_SIZE_ALL = 0;
+
 /** Vistas con paginación recordada y filas por página permitidas. */
-export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const PAGE_SIZES = [10, 25, 50, 100, PAGE_SIZE_ALL] as const;
+
+/** Las filas que realmente caben por página: «Todos» = sin tope. */
+export function rowsPerPage(size: number): number {
+  return size === PAGE_SIZE_ALL ? Number.MAX_SAFE_INTEGER : size;
+}
+
+/** Texto del selector: `25` → «25 por página», `0` → «Todos». */
+export function pageSizeLabel(size: number): string {
+  return size === PAGE_SIZE_ALL ? "Todos" : `${size} por página`;
+}
+
 export const MAX_PAGE_SIZE_VIEWS = 50;
 
 export const tableViewKeySchema = z
@@ -85,7 +137,7 @@ export const pageSizeSchema = z
   .number()
   .int()
   .refine((n): n is (typeof PAGE_SIZES)[number] => (PAGE_SIZES as readonly number[]).includes(n), {
-    message: `Filas por página: ${PAGE_SIZES.join(", ")}`,
+    message: `Filas por página: ${PAGE_SIZES.map(pageSizeLabel).join(", ")}`,
   });
 
 export const setTablePageSizeInputSchema = z.object({

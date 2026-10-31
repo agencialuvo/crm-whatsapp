@@ -55,6 +55,23 @@ export function currencySymbol(currency: string): string {
   }
 }
 
+/** Como `dateTimeLabel` pero con el año: para listas que cruzan meses o años ("31 oct 2026, 18:05"). */
+export function dateTimeFullLabel(iso: string, timezone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("es-MX", {
+    timeZone: timezone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("day")} ${get("month").replace(/\.$/, "")} ${get("year")}, ${get("hour")}:${get("minute")}`;
+}
+
 /** Centavos → texto editable de un campo de monto: `2500` → "25.00". */
 export function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2);
