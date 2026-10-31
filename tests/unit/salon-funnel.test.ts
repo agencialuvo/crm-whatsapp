@@ -51,7 +51,7 @@ describe("embudo financiero — de bruto a neto", () => {
   });
 });
 
-describe("filtro de servicio o combo", () => {
+describe("filtro de servicio u oferta", () => {
   it("entiende tipo y tipo:id", () => {
     expect(parseItemFilter("service")).toEqual({ kind: "service", id: null });
     expect(parseItemFilter("combo")).toEqual({ kind: "combo", id: null });
@@ -75,13 +75,13 @@ describe("filtro de servicio o combo", () => {
     expect(formatItemFilter(null)).toBe("");
   });
 
-  it("las opciones van agrupadas: por tipo, servicios y combos", () => {
+  it("las opciones van agrupadas: por tipo, servicios y ofertas", () => {
     const o = itemFilterOptions([{ id: "s1", name: "Corte" }], [{ id: "c1", name: "Fresh" }]);
     expect(o.map((x) => [x.value, x.group])).toEqual([
       ["service", "Por tipo"],
       ["combo", "Por tipo"],
       ["service:s1", "Servicios"],
-      ["combo:c1", "Combos"],
+      ["combo:c1", "Ofertas"],
     ]);
   });
 });

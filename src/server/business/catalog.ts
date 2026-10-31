@@ -15,7 +15,7 @@ import {
 } from "@/server/business/http";
 
 /**
- * Módulo SALON — catálogo: servicios regulares y combos de publicidad.
+ * Módulo SALON — catálogo: servicios regulares y ofertas de publicidad.
  *
  * Cada servicio u oferta puede llevar una imagen de la biblioteca de Medios y
  * una lista de los profesionales que lo dan (sin lista = todo el equipo).

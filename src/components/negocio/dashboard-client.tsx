@@ -63,7 +63,7 @@ export function DashboardClient({
   // Auditoría rápida: acota las tarjetas, el equipo y el ranking a un profesional.
   const [staffId, setStaffId] = useState("");
   const [staffOptions, setStaffOptions] = useState<SaleOptionsDto["staff"]>([]);
-  // Filtro por servicio o combo (`service`, `combo`, `service:<id>`, `combo:<id>`): acota tarjetas y gráfica.
+  // Filtro por servicio u oferta (`service`, `combo`, `service:<id>`, `combo:<id>`): acota tarjetas y gráfica.
   const [item, setItem] = useState("");
   const [itemOptions, setItemOptions] = useState<ReturnType<typeof itemFilterOptions>>([]);
   // Qué muestra la gráfica de tendencia.
@@ -158,9 +158,9 @@ export function DashboardClient({
                 value={item}
                 onChange={setItem}
                 options={itemOptions}
-                emptyLabel="Todos los servicios y combos"
-                placeholder="Todos los servicios y combos"
-                searchPlaceholder="Buscar servicio o combo…"
+                emptyLabel="Todos los servicios y ofertas"
+                placeholder="Todos los servicios y ofertas"
+                searchPlaceholder="Buscar servicio u oferta…"
                 className="w-64"
               />
             </div>

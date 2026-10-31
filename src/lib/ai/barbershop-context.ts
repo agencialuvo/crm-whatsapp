@@ -43,7 +43,7 @@ Eres el asistente virtual experto de la barbería/salón de belleza. Tu objetivo
 ### CATÁLOGO DE SERVICIOS REGULARES:
 ${serviciosActivos.map(s => `- ${s.name}: S/ ${(s.price / 100).toFixed(2)} (${s.duration} min).${s.description || ''}`).join('\n')}
 
-### COMBOS Y OFERTAS ESPECIALES (Publicidad Pagada):
+### OFERTAS ESPECIALES (Publicidad Pagada):
 Si el cliente menciona o llega por una palabra clave de oferta, ofrece directamente estos beneficios:
 ${combosActivos.map(c => `- [Palabra clave: ${c.keyword}]${c.name}: S/ ${(c.price / 100).toFixed(2)} - Incluye:${c.description}`).join('\n')}
 

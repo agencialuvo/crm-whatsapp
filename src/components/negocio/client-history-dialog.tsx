@@ -4,9 +4,14 @@ import { useEffect, useState } from "react";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { LoyaltyCardPanel } from "@/components/negocio/loyalty-card";
 import { Modal } from "@/components/negocio/modal";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { birthdayLabel, dateNumeric, formatPeruPhone, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS } from "@/lib/salon/schemas";
 import type { SalonClientDetailDto } from "@/lib/salon/types";
+
+/** Lista vacía estable mientras la ficha carga. */
+const NONE: never[] = [];
 
 /**
  * Módulo SALON — la ficha de un cliente: sus datos (celular, cumpleaños, notas) y la línea de tiempo: cada atención con su fecha
@@ -26,6 +31,7 @@ export function ClientHistoryDialog({
 }) {
   const [detail, setDetail] = useState<SalonClientDetailDto | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const table = useDataTable(detail?.history ?? NONE, { view: "ficha-cliente" });
 
   useEffect(() => {
     let alive = true;
@@ -91,6 +97,8 @@ export function ClientHistoryDialog({
           Todavía no tiene atenciones registradas.
         </p>
       ) : (
+        <>
+        <DataTableToolbar {...table.pagination} noun={{ one: "atención", other: "atenciones" }} />
         <div className="relative max-h-[60vh] overflow-auto rounded-md border">
           <table className="w-full min-w-[560px] text-sm">
             <thead>
@@ -113,7 +121,7 @@ export function ClientHistoryDialog({
               </tr>
             </thead>
             <tbody>
-              {detail.history.map((h) => (
+              {table.rows.map((h) => (
                 <tr key={h.id} className="border-b last:border-0">
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums text-text-2">
                     {dateNumeric(h.createdAt, timezone)}
@@ -134,6 +142,14 @@ export function ClientHistoryDialog({
             </tbody>
           </table>
         </div>
+        </>
+      )}
+      {detail && detail.history.length > 0 && (
+        <DataTablePagination
+          {...table.pagination}
+          noun={{ one: "atención", other: "atenciones" }}
+          label="Paginación de atenciones"
+        />
       )}
     </Modal>
   );

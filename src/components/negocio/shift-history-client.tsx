@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ChevronLeft, ChevronRight, Eye } from "lucide-react";
+import { ArrowLeft, Eye } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Modal } from "@/components/negocio/modal";
-import { PageSizeSelect } from "@/components/negocio/page-size-select";
 import { presets } from "@/components/negocio/report-sections";
 import { Difference, Row } from "@/components/negocio/shift-parts";
-import { useTablePageSize } from "@/components/negocio/use-page-size";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
+import { useTablePageSize } from "@/components/ui/use-table-page-size";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { Section } from "@/components/results/section";
 import {
@@ -113,9 +113,6 @@ export function ShiftHistoryClient({
   }, [range, page, limit, load]);
 
   const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / limit));
-  const first = total === 0 ? 0 : page * limit + 1;
-  const last = Math.min(total, (page + 1) * limit);
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -143,18 +140,21 @@ export function ShiftHistoryClient({
         hasData={data !== null}
         empty={data?.shifts.length === 0}
         emptyText="No hay turnos cerrados en este periodo."
-        right={
-          <PageSizeSelect
-            value={pageSize}
-            onChange={(n) => {
-              setPageSize(n);
-              setPage(0);
-            }}
-          />
-        }
       >
         {data && (
           <>
+            <DataTableToolbar
+              page={page + 1}
+              pageSize={pageSize}
+              total={total}
+              maxPerPage={MAX_HISTORY_ROWS}
+              disabled={loading}
+              noun={{ one: "turno", other: "turnos" }}
+              onPageSizeChange={(n) => {
+                setPageSize(n);
+                setPage(0);
+              }}
+            />
             <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
               <table className="w-full min-w-[1040px] text-sm">
                 <thead>
@@ -205,41 +205,21 @@ export function ShiftHistoryClient({
               </table>
             </div>
 
-            <nav
-              aria-label="Paginación de turnos"
-              className="mt-3 flex flex-wrap items-center justify-between gap-2"
-            >
-              <p className="text-xs text-text-3">
-                Mostrando {first}–{last} de {total} turno{total === 1 ? "" : "s"}
-              </p>
-              {pages > 1 && (
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage((n) => n - 1)}
-                    disabled={page <= 0 || loading}
-                    aria-label="Página anterior"
-                  >
-                    <ChevronLeft className="h-4 w-4" aria-hidden />
-                    Anterior
-                  </Button>
-                  <span className="px-2 text-xs tabular-nums text-text-3">
-                    {page + 1} / {pages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage((n) => n + 1)}
-                    disabled={page + 1 >= pages || loading}
-                    aria-label="Página siguiente"
-                  >
-                    Siguiente
-                    <ChevronRight className="h-4 w-4" aria-hidden />
-                  </Button>
-                </div>
-              )}
-            </nav>
+            {/* El servidor entrega los turnos por tramos (`page` va desde 0 aquí, desde 1 en el pie). */}
+            <DataTablePagination
+              page={page + 1}
+              pageSize={pageSize}
+              total={total}
+              maxPerPage={MAX_HISTORY_ROWS}
+              disabled={loading}
+              noun={{ one: "turno", other: "turnos" }}
+              label="Paginación de turnos"
+              onPageChange={(n) => setPage(n - 1)}
+              onPageSizeChange={(n) => {
+                setPageSize(n);
+                setPage(0);
+              }}
+            />
           </>
         )}
       </Section>

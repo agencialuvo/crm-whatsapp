@@ -4,29 +4,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, Eye, History, Pencil, Plus, Receipt, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { SearchSelect } from "@/components/ui/search-select";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
-import { PageSizeSelect } from "@/components/negocio/page-size-select";
 import { presets } from "@/components/negocio/report-sections";
 import { SaleDialog } from "@/components/negocio/sale-dialog";
 import { SaleDetailDialog } from "@/components/negocio/sale-detail-dialog";
 import { SaleEditDialog } from "@/components/negocio/sale-edit-dialog";
 import { ShiftPanel } from "@/components/negocio/shift-panel";
-import { useTablePageSize } from "@/components/negocio/use-page-size";
 import { Section, Subhead } from "@/components/results/section";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
-import { rowsPerPage } from "@/lib/salon/cash-shifts";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS, PAYMENT_METHODS, type PaymentMethod } from "@/lib/salon/schemas";
 import { loyaltyNotice } from "@/lib/loyalty";
 import type { CashReportDto, RegisteredSaleDto, SaleRowDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
-/** Cuántas ventas se pintan por defecto; «Mostrar más» agrega otro tanto. Cada persona puede elegir otro número. */
+/** Ventas por página por defecto; cada persona puede elegir otro número. */
 const PAGE = 50;
+const SALE_NOUN = { one: "venta", other: "ventas" };
 
 const COMMISSION_SOURCE_LABEL: Record<RegisteredSaleDto["commissionSource"], string> = {
   custom: "porcentaje de esta venta",
@@ -68,10 +68,6 @@ export function CashClient({
   const [report, setReport] = useState<CashReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [pageSize, setPageSize] = useTablePageSize("caja-ventas", PAGE);
-  // Cuántas «tandas» de `pageSize` filas se muestran (cada «Mostrar más» suma una).
-  const [batches, setBatches] = useState(1);
-  const shown = batches * rowsPerPage(pageSize);
   // Filtros rápidos de la tabla (en el navegador, sobre las ventas ya cargadas): "" = todos.
   const [methodFilter, setMethodFilter] = useState<"" | PaymentMethod>("");
   const [staffFilter, setStaffFilter] = useState("");
@@ -99,7 +95,6 @@ export function CashClient({
       );
       if (ctrl.signal.aborted) return;
       setReport(data);
-      setBatches(1);
       setShiftTick((n) => n + 1);
     } catch (err) {
       if (ctrl.signal.aborted) return;
@@ -180,6 +175,12 @@ export function CashClient({
       ),
     [report, methodFilter, staffFilter]
   );
+  // Cambia el periodo o un filtro: la tabla vuelve a la primera página.
+  const table = useDataTable(visibleRows, {
+    view: "caja-ventas",
+    defaultPageSize: PAGE,
+    resetKey: `${range.from}|${range.to}|${methodFilter}|${staffFilter}`,
+  });
   const visibleTotal = visibleRows.reduce((n, r) => n + r.amountCents, 0);
   const staffOptions = (report?.byStaff ?? []).map((m) => ({ value: m.staffId, label: m.staffName }));
   const methodOptions = PAYMENT_METHODS.map((m) => ({ value: m, label: PAYMENT_LABELS[m] }));
@@ -336,13 +337,6 @@ export function CashClient({
                       ? `${visibleRows.length} de ${report.rows.length} ventas · ${money(visibleTotal, currency)}`
                       : `${report.totals.count} venta${report.totals.count === 1 ? "" : "s"} en el periodo`}
                   </Subhead>
-                  <PageSizeSelect
-                    value={pageSize}
-                    onChange={(n) => {
-                      setPageSize(n);
-                      setBatches(1);
-                    }}
-                  />
                 </div>
                 <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                   <div className="flex items-center gap-2">
@@ -354,7 +348,6 @@ export function CashClient({
                       value={methodFilter}
                       onChange={(v) => {
                         setMethodFilter(v as "" | PaymentMethod);
-                        setBatches(1);
                       }}
                       options={methodOptions}
                       emptyLabel="Todos"
@@ -373,7 +366,6 @@ export function CashClient({
                         value={staffFilter}
                         onChange={(v) => {
                           setStaffFilter(v);
-                          setBatches(1);
                         }}
                         options={staffOptions}
                         emptyLabel="Todo el equipo"
@@ -390,7 +382,6 @@ export function CashClient({
                       onClick={() => {
                         setMethodFilter("");
                         setStaffFilter("");
-                        setBatches(1);
                       }}
                     >
                       Quitar filtros
@@ -402,6 +393,7 @@ export function CashClient({
                     Ninguna venta coincide con los filtros.
                   </p>
                 )}
+                <DataTableToolbar {...table.pagination} noun={SALE_NOUN} />
                 {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
                 del scroll y ensancha la página en el teléfono. */}
             <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
@@ -438,7 +430,7 @@ export function CashClient({
                       </tr>
                     </thead>
                     <tbody>
-                      {visibleRows.slice(0, shown).map((r) => (
+                      {table.rows.map((r) => (
                         <tr key={r.id} className="border-b last:border-0 hover:bg-row-hover">
                           <td className="whitespace-nowrap px-4 py-2 text-text-2 sm:pl-5">
                             {dateTimeLabel(r.createdAt, timezone)}
@@ -512,13 +504,7 @@ export function CashClient({
                     </tbody>
                   </table>
                 </div>
-                {shown < visibleRows.length && (
-                  <div className="mt-3 flex justify-center">
-                    <Button variant="outline" size="sm" onClick={() => setBatches((n) => n + 1)}>
-                      Mostrar más ({visibleRows.length - shown} restantes)
-                    </Button>
-                  </div>
-                )}
+                <DataTablePagination {...table.pagination} noun={SALE_NOUN} label="Paginación de ventas" />
               </>
             )}
           </Section>

@@ -1,22 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Eye, History, Pencil, Plus, Search, Trash2, Upload, X } from "lucide-react";
+import { Eye, History, Pencil, Plus, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { Input } from "@/components/ui/input";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
-import { PageSizeSelect } from "@/components/negocio/page-size-select";
-import { useTablePageSize } from "@/components/negocio/use-page-size";
 import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ClientDialog } from "@/components/negocio/client-dialog";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
-import { rowsPerPage } from "@/lib/salon/cash-shifts";
 import { birthdayLabel, dateNumeric, formatPeruPhone, money } from "@/lib/salon/format";
 import type { SalonClientDto } from "@/lib/salon/types";
 
 /** Clientes por página por defecto; cada persona puede elegir otro número. */
 const DEFAULT_PAGE_SIZE = 10;
+const CLIENT_NOUN = { one: "cliente", other: "clientes" };
 
 type Listing = { clients: SalonClientDto[]; truncated: boolean };
 
@@ -42,8 +42,6 @@ export function ClientsClient({
   const [data, setData] = useState<Listing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useTablePageSize("clientes", DEFAULT_PAGE_SIZE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRemoving, setBulkRemoving] = useState(false);
   const [historyId, setHistoryId] = useState<string | null>(null);
@@ -92,12 +90,8 @@ export function ClientsClient({
   useEffect(() => () => ctrlRef.current?.abort(), []);
 
   const clients = useMemo(() => data?.clients ?? [], [data]);
-  const pages = Math.max(1, Math.ceil(clients.length / rowsPerPage(pageSize)));
-  const current = Math.min(page, pages);
-  const rows = useMemo(
-    () => clients.slice((current - 1) * rowsPerPage(pageSize), current * rowsPerPage(pageSize)),
-    [clients, current, pageSize]
-  );
+  const table = useDataTable(clients, { view: "clientes", defaultPageSize: DEFAULT_PAGE_SIZE, resetKey: query });
+  const rows = table.rows;
   const allOnPage = rows.length > 0 && rows.every((x) => selected.has(x.id));
   const someOnPage = rows.some((x) => selected.has(x.id));
   const masterRef = useRef<HTMLInputElement>(null);
@@ -160,7 +154,6 @@ export function ClientsClient({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              setPage(1);
             }}
             placeholder="Buscar por nombre o celular"
             aria-label="Buscar clientes"
@@ -185,11 +178,8 @@ export function ClientsClient({
         </div>
       </div>
 
-      {data && clients.length > 0 && (
-        <p className="text-xs text-text-3" aria-live="polite">
-          Mostrando {rows.length} de {clients.length} cliente{clients.length === 1 ? "" : "s"}
-          {data.truncated ? " (hay más: afina con la búsqueda)" : ""}
-        </p>
+      {data?.truncated && clients.length > 0 && (
+        <p className="text-xs text-text-3">Hay más clientes de los que se muestran: afina con la búsqueda.</p>
       )}
 
       {selected.size > 0 && (
@@ -253,6 +243,7 @@ export function ClientsClient({
               concreto.
             </p>
           )}
+          <DataTableToolbar {...table.pagination} noun={CLIENT_NOUN} />
           {/* `relative`: contiene el `sr-only` de la cabecera dentro del scroll. */}
           <div
             className={`relative overflow-x-auto rounded-md border ${loading ? "opacity-60" : ""}`}
@@ -392,67 +383,7 @@ export function ClientsClient({
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <PageSizeSelect
-                value={pageSize}
-                onChange={(n) => {
-                  setPageSize(n);
-                  setPage(1);
-                }}
-              />
-              {pages > 1 && (
-                <p className="text-xs text-text-3">
-                  Página {current} de {pages}
-                </p>
-              )}
-            </div>
-            {pages > 1 && (
-            <nav aria-label="Paginación de clientes">
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage(current - 1)}
-                  disabled={current <= 1}
-                  aria-label="Página anterior"
-                >
-                  <ChevronLeft className="h-4 w-4" aria-hidden />
-                  Anterior
-                </Button>
-                {pageWindow(current, pages).map((n, i) =>
-                  n === null ? (
-                    <span key={`gap${i}`} className="px-1 text-text-3" aria-hidden>
-                      …
-                    </span>
-                  ) : (
-                    <Button
-                      key={n}
-                      variant={n === current ? "default" : "ghost"}
-                      size="sm"
-                      onClick={() => setPage(n)}
-                      aria-label={`Página ${n}`}
-                      aria-current={n === current ? "page" : undefined}
-                      className="min-w-8 tabular-nums"
-                    >
-                      {n}
-                    </Button>
-                  )
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage(current + 1)}
-                  disabled={current >= pages}
-                  aria-label="Página siguiente"
-                >
-                  Siguiente
-                  <ChevronRight className="h-4 w-4" aria-hidden />
-                </Button>
-              </div>
-            </nav>
-            )}
-          </div>
+          <DataTablePagination {...table.pagination} noun={CLIENT_NOUN} label="Paginación de clientes" />
         </>
       )}
 
@@ -518,16 +449,4 @@ export function ClientsClient({
       )}
     </div>
   );
-}
-
-/** Números de página a mostrar: primera, última y las vecinas de la actual (`null` = hueco). */
-function pageWindow(current: number, pages: number): (number | null)[] {
-  const keep = new Set([1, pages, current - 1, current, current + 1]);
-  const list = [...keep].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
-  const out: (number | null)[] = [];
-  list.forEach((n, i) => {
-    if (i > 0 && n - list[i - 1]! > 1) out.push(null);
-    out.push(n);
-  });
-  return out;
 }

@@ -197,7 +197,7 @@ function buildSeries(period: ResolvedPeriod, days: FunnelDay[]): SalonDashboardD
 /**
  * `today`: el día de hoy EN LA ZONA DEL NEGOCIO (AAAA-MM-DD); de él sale «este mes».
  * `filters`: acotan las tarjetas, la gráfica, el equipo y las citas a un profesional y,
- * las tarjetas y la gráfica, también a un servicio o combo.
+ * las tarjetas y la gráfica, también a un servicio u oferta.
  */
 export async function getDashboard(
   organizationId: string,

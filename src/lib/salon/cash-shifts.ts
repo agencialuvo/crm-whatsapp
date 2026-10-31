@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { PeriodDto } from "@/lib/analytics";
+import { PAGE_SIZE_ALL, PAGE_SIZES, pageSizeLabel, rowsPerPage } from "@/lib/pagination";
 import type { PaymentMethod } from "@/lib/salon/schemas";
 
 /**
@@ -111,21 +112,8 @@ export const historyQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
 });
 
-/** «Todos»: se guarda como 0 y las pantallas lo leen como «sin tope» (`rowsPerPage`). */
-export const PAGE_SIZE_ALL = 0;
-
-/** Vistas con paginación recordada y filas por página permitidas. */
-export const PAGE_SIZES = [10, 25, 50, 100, PAGE_SIZE_ALL] as const;
-
-/** Las filas que realmente caben por página: «Todos» = sin tope. */
-export function rowsPerPage(size: number): number {
-  return size === PAGE_SIZE_ALL ? Number.MAX_SAFE_INTEGER : size;
-}
-
-/** Texto del selector: `25` → «25 por página», `0` → «Todos». */
-export function pageSizeLabel(size: number): string {
-  return size === PAGE_SIZE_ALL ? "Todos" : `${size} por página`;
-}
+// La regla de paginación vive en `@/lib/pagination`; se re-exporta para no romper importadores.
+export { PAGE_SIZE_ALL, PAGE_SIZES, pageSizeLabel, rowsPerPage };
 
 export const MAX_PAGE_SIZE_VIEWS = 50;
 

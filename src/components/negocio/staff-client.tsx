@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { CalendarClock, Pencil, Percent, Plus, Trash2, Upload, Users } from "lucide-react";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -20,6 +22,9 @@ type Dialog =
   | { kind: "edit"; item: StaffDto | null }
   | { kind: "config"; item: StaffDto; tab: "horario" | "comisiones" }
   | null;
+
+/** Lista vacía estable mientras el equipo carga. */
+const NONE: never[] = [];
 
 /**
  * Módulo SALON — el equipo: alta de profesionales (nombre, teléfono, estado),
@@ -39,6 +44,7 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   const [dialog, setDialog] = useState<Dialog>(null);
   const [removal, setRemoval] = useState<StaffDto | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  const table = useDataTable(staff ?? NONE, { view: "equipo" });
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -152,6 +158,8 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
       ) : (
         // `relative`: el `sr-only` de la cabecera es absoluto y, sin esto, escapa del recorte
         // del scroll y ensancha la página en el teléfono.
+        <>
+        <DataTableToolbar {...table.pagination} noun={{ one: "profesional", other: "profesionales" }} />
         <div className="relative overflow-x-auto rounded-lg border border-border-strong bg-card shadow-sm">
           <table className="w-full min-w-[720px] text-sm">
             <thead>
@@ -174,7 +182,7 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
               </tr>
             </thead>
             <tbody>
-              {staff.map((m) => (
+              {table.rows.map((m) => (
                 <tr key={m.id} className={cn("border-b last:border-0", !m.active && "opacity-60")}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
@@ -252,6 +260,12 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
             </tbody>
           </table>
         </div>
+        <DataTablePagination
+          {...table.pagination}
+          noun={{ one: "profesional", other: "profesionales" }}
+          label="Paginación del equipo"
+        />
+        </>
       )}
 
       {bulkOpen && (

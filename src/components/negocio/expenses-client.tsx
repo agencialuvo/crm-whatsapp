@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { SearchSelect } from "@/components/ui/search-select";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ExpenseDialog } from "@/components/negocio/expense-dialogs";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -18,8 +20,9 @@ import {
 import { money } from "@/lib/salon/format";
 import { cn } from "@/lib/utils";
 
-/** Cuántos gastos se pintan de entrada; «Mostrar más» agrega otro tanto. */
+/** Gastos por página por defecto; cada persona puede elegir otro número. */
 const PAGE = 50;
+const EXPENSE_NOUN = { one: "gasto", other: "gastos" };
 
 function percentOf(part: number, whole: number): number {
   return whole > 0 ? Math.round((part / whole) * 100) : 0;
@@ -53,7 +56,6 @@ export function ExpensesClient({
   const [report, setReport] = useState<ExpensesReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [shown, setShown] = useState(PAGE);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<ExpenseItemDto | "new" | null>(null);
   const [deleting, setDeleting] = useState<ExpenseItemDto | null>(null);
@@ -73,7 +75,6 @@ export function ExpensesClient({
       });
       if (ctrl.signal.aborted) return;
       setReport(data);
-      setShown(PAGE);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       setError(describeError(err));
@@ -86,6 +87,13 @@ export function ExpensesClient({
     void load(range, kindFilter);
     return () => ctrlRef.current?.abort();
   }, [range, kindFilter, load]);
+
+  const items = useMemo(() => report?.items ?? [], [report]);
+  const table = useDataTable(items, {
+    view: "gastos",
+    defaultPageSize: PAGE,
+    resetKey: `${range.from}|${range.to}|${kindFilter}`,
+  });
 
   const reload = useCallback(() => {
     void load(range, kindFilter);
@@ -295,6 +303,7 @@ export function ExpensesClient({
                     incluyen todos; acota el rango para ver el detalle completo.
                   </p>
                 )}
+                <DataTableToolbar {...table.pagination} noun={EXPENSE_NOUN} />
                 <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
                   <table className="w-full min-w-[620px] text-sm">
                     <thead>
@@ -309,7 +318,7 @@ export function ExpensesClient({
                       </tr>
                     </thead>
                     <tbody>
-                      {report.items.slice(0, shown).map((g) => (
+                      {table.rows.map((g) => (
                         <tr key={g.id} className="border-b last:border-0 hover:bg-row-hover">
                           <td className="whitespace-nowrap px-4 py-2 tabular-nums text-text-2 sm:pl-5">
                             {dayLabel(g.expenseDate)}
@@ -367,13 +376,7 @@ export function ExpensesClient({
                     </tbody>
                   </table>
                 </div>
-                {shown < report.items.length && (
-                  <div className="mt-3 flex justify-center">
-                    <Button variant="outline" size="sm" onClick={() => setShown((n) => n + PAGE)}>
-                      Mostrar más ({report.items.length - shown} restantes)
-                    </Button>
-                  </div>
-                )}
+                <DataTablePagination {...table.pagination} noun={EXPENSE_NOUN} label="Paginación de gastos" />
               </>
             )}
           </Section>

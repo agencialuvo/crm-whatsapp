@@ -5,7 +5,7 @@ import { getSaleOptions } from "@/server/business/sales-service";
 export const dynamic = "force-dynamic";
 
 /**
- * Lo que necesita el formulario de cobro: servicios, combos y profesionales
+ * Lo que necesita el formulario de cobro: servicios, ofertas y profesionales
  * ACTIVOS, sin comisiones. Todo el equipo puede leerlo.
  */
 export const GET = withAuth(async (session) => {

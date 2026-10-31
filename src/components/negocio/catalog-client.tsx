@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Eye, ImageIcon, Pencil, Plus, Scissors, Tag, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ComboDialog } from "@/components/negocio/combo-dialog";
@@ -18,6 +20,9 @@ import type { ComboDto, ServiceDto, StaffDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
 type Tab = "servicios" | "combos";
+
+/** Lista vacía estable mientras el catálogo carga (así `useDataTable` no recalcula en cada render). */
+const NONE: never[] = [];
 
 type Dialog =
   | { kind: "service"; item: ServiceDto | null }
@@ -46,6 +51,8 @@ export function CatalogClient({ currency }: { currency: string }) {
   const [removal, setRemoval] = useState<Removal | null>(null);
   const [viewing, setViewing] = useState<Removal | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  const serviceTable = useDataTable(services ?? NONE, { view: "servicios" });
+  const comboTable = useDataTable(combos ?? NONE, { view: "ofertas" });
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -165,11 +172,13 @@ export function CatalogClient({ currency }: { currency: string }) {
         <ListSkeleton />
       ) : tab === "servicios" ? (
         services && services.length > 0 ? (
+          <>
+          <DataTableToolbar {...serviceTable.pagination} noun={{ one: "servicio", other: "servicios" }} />
           <TableShell
             heads={["Servicio", "Duración", "Precio", "Comisión", "Activo", ""]}
             alignRight={[1, 2, 3]}
           >
-            {services.map((s) => (
+            {serviceTable.rows.map((s) => (
               <tr key={s.id} className={cn("border-b last:border-0", !s.active && "opacity-60")}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-3">
@@ -217,6 +226,12 @@ export function CatalogClient({ currency }: { currency: string }) {
               </tr>
             ))}
           </TableShell>
+          <DataTablePagination
+            {...serviceTable.pagination}
+            noun={{ one: "servicio", other: "servicios" }}
+            label="Paginación de servicios"
+          />
+          </>
         ) : (
           <EmptyCard>
             <EmptyState
@@ -233,11 +248,13 @@ export function CatalogClient({ currency }: { currency: string }) {
           </EmptyCard>
         )
       ) : combos && combos.length > 0 ? (
+        <>
+        <DataTableToolbar {...comboTable.pagination} noun={{ one: "oferta", other: "ofertas" }} />
         <TableShell
           heads={["Oferta", "Palabra clave", "Duración", "Precio", "Activo", ""]}
           alignRight={[2, 3]}
         >
-          {combos.map((c) => (
+          {comboTable.rows.map((c) => (
             <tr key={c.id} className={cn("border-b last:border-0", !c.active && "opacity-60")}>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-3">
@@ -289,6 +306,12 @@ export function CatalogClient({ currency }: { currency: string }) {
             </tr>
           ))}
         </TableShell>
+        <DataTablePagination
+          {...comboTable.pagination}
+          noun={{ one: "oferta", other: "ofertas" }}
+          label="Paginación de ofertas"
+        />
+        </>
       ) : (
         <EmptyCard>
           <EmptyState

@@ -53,7 +53,7 @@ export const BULK_FILENAMES: Record<BulkModule, string> = {
 export const BULK_COLUMNS: Record<BulkModule, BulkColumn[]> = {
   servicios: [
     { key: "tipo", required: true, help: "servicio u oferta", examples: ["servicio", "oferta"] },
-    { key: "nombre", required: true, help: "2 a 80 caracteres", examples: ["Corte clásico", "Combo Fresh"] },
+    { key: "nombre", required: true, help: "2 a 80 caracteres", examples: ["Corte clásico", "Oferta Fresh"] },
     {
       key: "descripcion",
       required: false,

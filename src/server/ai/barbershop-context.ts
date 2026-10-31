@@ -108,7 +108,7 @@ ${
     : "No hay servicios regulares configurados aún."
 }
 
-### COMBOS Y OFERTAS ESPECIALES (Publicidad Pagada):
+### OFERTAS ESPECIALES (Publicidad Pagada):
 Si el cliente menciona o llega por una palabra clave de oferta (ej. su palabra clave asociada), ofrece directamente estos beneficios:
 ${
   combosActivos.length > 0

@@ -123,7 +123,7 @@ export const invitation = pgTable("invitation", {
 /* ============================================================
  * Barberías, salones y manicure (módulo SALON)
  *
- * Catálogo (servicios y combos), equipo (staff, comisiones, horarios) y caja
+ * Catálogo (servicios y ofertas), equipo (staff, comisiones, horarios) y caja
  * (ventas). Dinero SIEMPRE en centavos enteros. Las tablas se crean igual en
  * toda instancia —unas tablas vacías son inertes—; lo que enciende la UI y la
  * API es la bandera `SALON` (src/server/business/flag.ts).
@@ -178,7 +178,7 @@ export const combo = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    name: text("name").notNull(), // ej: "Combo Fresh"
+    name: text("name").notNull(), // ej: "Oferta Fresh"
     description: text("description").notNull(), // "Incluye corte, mascarilla, masajes..."
     priceCents: integer("price_cents").notNull(),
     durationMinutes: integer("duration_minutes").notNull().default(60),

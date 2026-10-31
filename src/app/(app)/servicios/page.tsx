@@ -7,7 +7,7 @@ import { requireSalonPage } from "@/server/business/page-guard";
 // la plataforma no haría nada.
 export const dynamic = "force-dynamic";
 
-/** Módulo SALON — servicios regulares y combos de publicidad. Solo dueño/administrador. */
+/** Módulo SALON — servicios regulares y ofertas de publicidad. Solo dueño/administrador. */
 export default async function ServiciosPage() {
   const session = await requireSalonPage({ manage: true });
   const { currency } = await getBranding(session.organizationId);

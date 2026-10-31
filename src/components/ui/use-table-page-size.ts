@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/components/negocio/api";
-import { PAGE_SIZES } from "@/lib/salon/cash-shifts";
+import { isPageSize } from "@/lib/pagination";
 
 type Sizes = Record<string, number>;
 
@@ -20,8 +20,6 @@ function loadSizes(): Promise<Sizes> {
   return loaded;
 }
 
-const isAllowed = (n: unknown): n is number =>
-  typeof n === "number" && (PAGE_SIZES as readonly number[]).includes(n);
 
 /**
  * Filas por página de una tabla, recordadas por persona. Arranca con `fallback` (la pantalla
@@ -35,7 +33,7 @@ export function useTablePageSize(view: string, fallback: number): [number, (size
     let alive = true;
     void loadSizes().then((sizes) => {
       const saved = sizes[view];
-      if (alive && isAllowed(saved)) setSize(saved);
+      if (alive && isPageSize(saved)) setSize(saved);
     });
     return () => {
       alive = false;
@@ -44,7 +42,7 @@ export function useTablePageSize(view: string, fallback: number): [number, (size
 
   const change = useCallback(
     (next: number) => {
-      if (!isAllowed(next)) return;
+      if (!isPageSize(next)) return;
       setSize(next);
       void loadSizes().then((sizes) => {
         sizes[view] = next;

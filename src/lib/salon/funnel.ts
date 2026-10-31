@@ -80,8 +80,8 @@ export function itemFilterOptions(
 ): { value: string; label: string; group: string }[] {
   return [
     { value: "service", label: "Todos los servicios", group: "Por tipo" },
-    { value: "combo", label: "Todos los combos", group: "Por tipo" },
+    { value: "combo", label: "Todas las ofertas", group: "Por tipo" },
     ...services.map((s) => ({ value: `service:${s.id}`, label: s.name, group: "Servicios" })),
-    ...combos.map((c) => ({ value: `combo:${c.id}`, label: c.name, group: "Combos" })),
+    ...combos.map((c) => ({ value: `combo:${c.id}`, label: c.name, group: "Ofertas" })),
   ];
 }

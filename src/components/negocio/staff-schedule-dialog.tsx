@@ -269,7 +269,7 @@ export function StaffScheduleDialog({
             <p className="mb-1.5 text-sm font-medium">Pactos por servicio</p>
             {services.length === 0 ? (
               <p className="rounded-md border border-dashed px-3 py-4 text-center text-sm text-text-3">
-                Aún no hay servicios. Créalos en «Servicios y combos».
+                Aún no hay servicios. Créalos en «Servicios».
               </p>
             ) : (
               <ul className="divide-y rounded-md border">

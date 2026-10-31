@@ -19,6 +19,8 @@ import { formatPhone } from "@/lib/utils";
 import { ContactAvatar } from "@/components/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
+import { useDataTable } from "@/components/ui/use-data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,6 +47,7 @@ export function ContactsClient() {
   const [importando, setImportando] = useState(false);
   const [escribiendo, setEscribiendo] = useState<ContactDto | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const table = useDataTable(contacts, { view: "contactos", resetKey: `${query}|${stage}|${showArchived}` });
 
   // Mismo rescate que en la Bandeja: lo tecleado antes de que hidrate el JS
   // se perdía en silencio. Ver conversation-list.tsx.
@@ -174,8 +177,10 @@ export function ContactsClient() {
             />
           )
         ) : (
+          <>
+          <DataTableToolbar {...table.pagination} noun={{ one: "contacto", other: "contactos" }} />
           <ul className="space-y-2">
-            {contacts.map((c) => (
+            {table.rows.map((c) => (
               <li
                 key={c.id}
                 className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border bg-card px-3 py-3 sm:flex-nowrap sm:gap-x-4 sm:px-4"
@@ -258,6 +263,14 @@ export function ContactsClient() {
               </li>
             ))}
           </ul>
+          </>
+        )}
+        {contacts.length > 0 && (
+          <DataTablePagination
+            {...table.pagination}
+            noun={{ one: "contacto", other: "contactos" }}
+            label="Paginación de contactos"
+          />
         )}
       </div>
 
