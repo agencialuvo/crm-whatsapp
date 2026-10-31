@@ -55,6 +55,9 @@ const prefixes = {
   loyaltySettings: "lgs",
   customerLoyaltyCard: "clc",
   loyaltyTransaction: "ltr",
+  // Cuadre de caja y preferencias de vista
+  cashRegisterShift: "shf",
+  userUiPreferences: "pref",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

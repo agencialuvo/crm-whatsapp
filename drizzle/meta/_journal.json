@@ -344,6 +344,20 @@
       "when": 1793370672135,
       "tag": "0048_mute_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1793422505312,
+      "tag": "0049_steady_enchantress",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793424277323,
+      "tag": "0050_illegal_sprite",
+      "breakpoints": true
     }
   ]
 }

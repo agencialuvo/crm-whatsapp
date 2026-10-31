@@ -514,6 +514,78 @@ export type LoyaltyMilestone = {
   serviceIdRestriction?: string; // Opcional si aplica a un servicio específico
 };
 
+/* ============================================================
+ * Módulo de Cuadre de Caja y Turnos (Nuevo para control empresarial)
+ * ============================================================ */
+
+export const cashRegisterShift = pgTable(
+  "cash_register_shift",
+  {
+    id: text("id").primaryKey(), // prefix: 'shf'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    
+    openedByUserId: text("opened_by_user_id")
+      .notNull()
+      .references(() => user.id),
+    closedByUserId: text("closed_by_user_id")
+      .references(() => user.id),
+
+    status: text("status", { enum: ["open", "closed"] })
+      .notNull()
+      .default("open"),
+
+    // Dinero en centavos
+    initialCashCents: integer("initial_cash_cents").notNull().default(0),
+    finalCashCents: integer("final_cash_cents"), // Contado físico al cerrar
+    expectedCashCents: integer("expected_cash_cents"), // Calculado por el sistema
+
+    totalSalesCents: integer("total_sales_cents").notNull().default(0),
+    totalCommissionsCents: integer("total_commissions_cents").notNull().default(0),
+    totalExpensesCents: integer("total_expenses_cents").notNull().default(0),
+    netProfitCents: integer("net_profit_cents").notNull().default(0),
+
+    openedAt: timestamp("opened_at").notNull().defaultNow(),
+    closedAt: timestamp("closed_at"),
+    notes: text("notes"),
+  },
+  (t) => [
+    index("cash_register_shift_org_status_idx").on(t.organizationId, t.status),
+    index("cash_register_shift_org_date_idx").on(t.organizationId, t.openedAt),
+    // Evita que existan dos turnos abiertos simultáneamente por organización
+    uniqueIndex("cash_register_shift_org_open_uq")
+      .on(t.organizationId)
+      .where(sql`${t.status} = 'open'`),
+    check("cash_register_shift_initial_nonneg", sql`${t.initialCashCents} >= 0`),
+  ]
+);
+
+/* ============================================================
+ * Preferencias de Vista y Paginación de Tablas (UI)
+ * ============================================================ */
+
+export const userUiPreferences = pgTable(
+  "user_ui_preferences",
+  {
+    id: text("id").primaryKey(), // prefix: 'pref'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    
+    // Guardar filas por página preferidas por vista (ej: {"clients": 25, "sales": 50})
+    tablePageSizes: jsonb("table_page_sizes").$type<Record<string, number>>().notNull().default({}),
+    
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("user_ui_preferences_org_user_uq").on(t.organizationId, t.userId),
+  ]
+);
+
 
 /**
  * Configuración de la tarjeta de fidelidad de la organización.

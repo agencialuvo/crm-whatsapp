@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "cash_register_shift_org_open_uq" ON "cash_register_shift" USING btree ("organization_id") WHERE "cash_register_shift"."status" = 'open';

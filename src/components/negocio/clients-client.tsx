@@ -5,6 +5,8 @@ import { ChevronLeft, ChevronRight, Eye, History, Pencil, Plus, Search, Trash2, 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { PageSizeSelect } from "@/components/negocio/page-size-select";
+import { useTablePageSize } from "@/components/negocio/use-page-size";
 import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ClientDialog } from "@/components/negocio/client-dialog";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
@@ -12,8 +14,8 @@ import { ConfirmDialog } from "@/components/negocio/modal";
 import { birthdayLabel, dateNumeric, formatPeruPhone, money } from "@/lib/salon/format";
 import type { SalonClientDto } from "@/lib/salon/types";
 
-/** Clientes por página. */
-const PAGE_SIZE = 10;
+/** Clientes por página por defecto; cada persona puede elegir otro número. */
+const DEFAULT_PAGE_SIZE = 10;
 
 type Listing = { clients: SalonClientDto[]; truncated: boolean };
 
@@ -40,6 +42,7 @@ export function ClientsClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useTablePageSize("clientes", DEFAULT_PAGE_SIZE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRemoving, setBulkRemoving] = useState(false);
   const [historyId, setHistoryId] = useState<string | null>(null);
@@ -88,11 +91,11 @@ export function ClientsClient({
   useEffect(() => () => ctrlRef.current?.abort(), []);
 
   const clients = useMemo(() => data?.clients ?? [], [data]);
-  const pages = Math.max(1, Math.ceil(clients.length / PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(clients.length / pageSize));
   const current = Math.min(page, pages);
   const rows = useMemo(
-    () => clients.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE),
-    [clients, current]
+    () => clients.slice((current - 1) * pageSize, current * pageSize),
+    [clients, current, pageSize]
   );
   const allOnPage = rows.length > 0 && rows.every((x) => selected.has(x.id));
   const someOnPage = rows.some((x) => selected.has(x.id));
@@ -388,14 +391,23 @@ export function ClientsClient({
               </tbody>
             </table>
           </div>
-          {pages > 1 && (
-            <nav
-              aria-label="Paginación de clientes"
-              className="flex flex-wrap items-center justify-between gap-2"
-            >
-              <p className="text-xs text-text-3">
-                Página {current} de {pages}
-              </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-3">
+              <PageSizeSelect
+                value={pageSize}
+                onChange={(n) => {
+                  setPageSize(n);
+                  setPage(1);
+                }}
+              />
+              {pages > 1 && (
+                <p className="text-xs text-text-3">
+                  Página {current} de {pages}
+                </p>
+              )}
+            </div>
+            {pages > 1 && (
+            <nav aria-label="Paginación de clientes">
               <div className="flex items-center gap-1">
                 <Button
                   variant="outline"
@@ -438,7 +450,8 @@ export function ClientsClient({
                 </Button>
               </div>
             </nav>
-          )}
+            )}
+          </div>
         </>
       )}
 

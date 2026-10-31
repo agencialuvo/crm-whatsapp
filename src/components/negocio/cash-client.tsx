@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
+import { PageSizeSelect } from "@/components/negocio/page-size-select";
 import { presets } from "@/components/negocio/report-sections";
 import { SaleDialog } from "@/components/negocio/sale-dialog";
 import { SaleDetailDialog } from "@/components/negocio/sale-detail-dialog";
 import { SaleEditDialog } from "@/components/negocio/sale-edit-dialog";
+import { ShiftPanel } from "@/components/negocio/shift-panel";
+import { useTablePageSize } from "@/components/negocio/use-page-size";
 import { Section, Subhead } from "@/components/results/section";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { StatCard } from "@/components/results/stat-card";
@@ -19,7 +22,7 @@ import { loyaltyNotice } from "@/lib/loyalty";
 import type { RegisteredSaleDto, SaleRowDto, SalesReportDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
-/** Cuántas ventas se pintan de entrada; «Mostrar más» agrega otro tanto. */
+/** Cuántas ventas se pintan por defecto; «Mostrar más» agrega otro tanto. Cada persona puede elegir otro número. */
 const PAGE = 50;
 
 const COMMISSION_SOURCE_LABEL: Record<RegisteredSaleDto["commissionSource"], string> = {
@@ -62,7 +65,12 @@ export function CashClient({
   const [report, setReport] = useState<SalesReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [shown, setShown] = useState(PAGE);
+  const [pageSize, setPageSize] = useTablePageSize("caja-ventas", PAGE);
+  // Cuántas «tandas» de `pageSize` filas se muestran (cada «Mostrar más» suma una).
+  const [batches, setBatches] = useState(1);
+  const shown = batches * pageSize;
+  // Cambia cada vez que la lista de ventas se recarga: el panel del turno se actualiza con ella.
+  const [shiftTick, setShiftTick] = useState(0);
   const [saleOpen, setSaleOpen] = useState(false);
   const [voiding, setVoiding] = useState<SaleRowDto | null>(null);
   const [editing, setEditing] = useState<SaleRowDto | null>(null);
@@ -85,7 +93,8 @@ export function CashClient({
       );
       if (ctrl.signal.aborted) return;
       setReport(data);
-      setShown(PAGE);
+      setBatches(1);
+      setShiftTick((n) => n + 1);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       setError(describeError(err));
@@ -185,6 +194,8 @@ export function CashClient({
         </div>
       </div>
 
+      <ShiftPanel currency={currency} timezone={timezone} refreshKey={shiftTick} />
+
       {notice && (
         <div
           role="status"
@@ -258,9 +269,18 @@ export function CashClient({
                     incluyen todas; acota el rango para ver el detalle completo.
                   </p>
                 )}
-                <Subhead>
-                  {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
-                </Subhead>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 [&>h4]:mb-0">
+                  <Subhead>
+                    {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
+                  </Subhead>
+                  <PageSizeSelect
+                    value={pageSize}
+                    onChange={(n) => {
+                      setPageSize(n);
+                      setBatches(1);
+                    }}
+                  />
+                </div>
                 {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
                 del scroll y ensancha la página en el teléfono. */}
             <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
@@ -373,7 +393,7 @@ export function CashClient({
                 </div>
                 {shown < report.rows.length && (
                   <div className="mt-3 flex justify-center">
-                    <Button variant="outline" size="sm" onClick={() => setShown((n) => n + PAGE)}>
+                    <Button variant="outline" size="sm" onClick={() => setBatches((n) => n + 1)}>
                       Mostrar más ({report.rows.length - shown} restantes)
                     </Button>
                   </div>
