@@ -516,6 +516,15 @@ export const clientBulkDeleteSchema = z.object({
     .refine((ids) => new Set(ids).size === ids.length, "Hay un cliente repetido"),
 });
 
+/** Eliminar varios servicios u ofertas a la vez (la barra de acciones masivas del catálogo). */
+export const catalogBulkDeleteSchema = z.object({
+  ids: z
+    .array(z.string().min(1))
+    .min(1, "Elige al menos un elemento")
+    .max(200, "Máximo 200 a la vez")
+    .refine((ids) => new Set(ids).size === ids.length, "Hay un elemento repetido"),
+});
+
 /**
  * Corregir una venta ya registrada: los ítems vendidos, quién atendió, el monto
  * cobrado y, si hace falta, el cliente y la fecha y hora. El método de pago no

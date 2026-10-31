@@ -1,6 +1,7 @@
 import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import type { CommissionSource } from "@/lib/salon/commission";
 import type { FunnelPointDto, FunnelTotalsDto } from "@/lib/salon/funnel";
+import type { RepurchaseDto, TicketSplitDto } from "@/lib/salon/insights";
 import type { PaymentMethod, ScheduleDay } from "@/lib/salon/schemas";
 
 /**
@@ -284,6 +285,10 @@ export type DashboardComparisonDto = {
 
 /** El panel ejecutivo: reporte del periodo, citas y cumpleaños del mes. */
 export type SalonDashboardDto = {
+  /** Ticket promedio de las ventas con oferta contra las de servicios sueltos. */
+  ticketSplit: TicketSplitDto;
+  /** Cada cuántos días vuelve un cliente y a quién ya le toca volver. */
+  repurchase: RepurchaseDto;
   /** Retención del periodo: clientes atendidos con 2 o más visitas en total. */
   retention: RetentionDto;
   comparison: DashboardComparisonDto;

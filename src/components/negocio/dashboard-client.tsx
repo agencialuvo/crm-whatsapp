@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Cake } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Cake, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { FunnelCards } from "@/components/negocio/dashboard-funnel";
+import { RepurchaseCard, TicketSplitCard } from "@/components/negocio/dashboard-insights";
 import {
   KpiCard,
   PaymentMix,
@@ -43,6 +44,8 @@ function dashboardPresets(today: string): { label: string; range: Range }[] {
   ];
 }
 
+const FILTERS_OPEN_KEY = "panel-filtros-abiertos";
+
 /** Enlace de WhatsApp para saludar; solo con un celular de dígitos. */
 function whatsappLink(phone: string | null, name: string): string | null {
   if (!phone || !/^\d{7,15}$/.test(phone)) return null;
@@ -78,6 +81,37 @@ export function DashboardClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
+  // Las fechas (atajos y calendarios) están siempre a la vista. Solo los selectores de profesional y
+  // servicio se pliegan con «Filtros»; plegar no borra nada: su valor vive aquí, no en la barra.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersId = useId();
+  // «Acotada»: hay un profesional o un servicio elegido (el rango se ve siempre, no necesita aviso).
+  const filtersActive = staffId !== "" || item !== "";
+
+  // Recuerda si la persona la dejó abierta (solo comodidad: sin almacenamiento, arranca plegada).
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(FILTERS_OPEN_KEY) === "1") setFiltersOpen(true);
+    } catch {
+      // Almacenamiento bloqueado: se queda plegada.
+    }
+  }, []);
+
+  function toggleFilters() {
+    setFiltersOpen((open) => {
+      try {
+        window.localStorage.setItem(FILTERS_OPEN_KEY, open ? "0" : "1");
+      } catch {
+        // Sin almacenamiento el cambio vale solo en pantalla.
+      }
+      return !open;
+    });
+  }
+
+  function resetFilters() {
+    setStaffId("");
+    setItem("");
+  }
 
   const load = useCallback(async (r: Range, staff: string, itemFilter: string) => {
     ctrlRef.current?.abort();
@@ -132,47 +166,81 @@ export function DashboardClient({
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <RangePicker
-          value={range}
-          onChange={setRange}
-          today={today}
-          presets={dashboardPresets(today)}
-        />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          {staffOptions.length > 1 && (
-            <div className="flex items-center gap-2">
-              <label htmlFor="panel-staff" className="text-sm font-medium text-text-2">
-                Profesional:
-              </label>
-              <SearchSelect
-                id="panel-staff"
-                value={staffId}
-                onChange={setStaffId}
-                options={staffOptions.map((m) => ({ value: m.id, label: m.name }))}
-                emptyLabel="Todo el equipo"
-                placeholder="Todo el equipo"
-                searchPlaceholder="Buscar profesional…"
-                className="w-48"
-              />
-            </div>
+        <RangePicker value={range} onChange={setRange} today={today} presets={dashboardPresets(today)} />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={toggleFilters}
+          aria-expanded={filtersOpen}
+          aria-controls={filtersId}
+        >
+          <SlidersHorizontal className="h-4 w-4" aria-hidden />
+          Filtros
+          {filtersActive && (
+            <>
+              <span className="h-2 w-2 rounded-full bg-brand" aria-hidden />
+              <span className="sr-only">(hay filtros activos)</span>
+            </>
           )}
-          {itemOptions.length > 2 && (
-            <div className="flex items-center gap-2">
-              <label htmlFor="panel-item" className="text-sm font-medium text-text-2">
-                Servicio:
-              </label>
-              <SearchSelect
-                id="panel-item"
-                value={item}
-                onChange={setItem}
-                options={itemOptions}
-                emptyLabel="Todos los servicios y ofertas"
-                placeholder="Todos los servicios y ofertas"
-                searchPlaceholder="Buscar servicio u oferta…"
-                className="w-64"
-              />
+        </Button>
+      </div>
+
+      {/* Solo profesional y servicio se pliegan, con una transición de altura (grid 0fr → 1fr). Plegado es
+          `inert`: sus controles no se alcanzan con el teclado ni los lee el lector de pantalla. Los
+          desplegables se pintan en el body, así que el recorte no los afecta. */}
+      <div
+        id={filtersId}
+        inert={!filtersOpen}
+        className={cn(
+          "grid transition-[grid-template-rows,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
+          // Plegada, `-mb-5` anula el hueco que el `space-y-5` del panel dejaría alrededor de una altura 0.
+          filtersOpen ? "grid-rows-[1fr] opacity-100" : "-mb-5 grid-rows-[0fr] opacity-0"
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="flex justify-start p-1">
+            <div className="flex flex-wrap items-center justify-start gap-x-4 gap-y-2">
+              {staffOptions.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <label htmlFor="panel-staff" className="text-sm font-medium text-text-2">
+                    Profesional:
+                  </label>
+                  <SearchSelect
+                    id="panel-staff"
+                    value={staffId}
+                    onChange={setStaffId}
+                    options={staffOptions.map((m) => ({ value: m.id, label: m.name }))}
+                    emptyLabel="Todo el equipo"
+                    placeholder="Todo el equipo"
+                    searchPlaceholder="Buscar profesional…"
+                    className="w-48"
+                  />
+                </div>
+              )}
+              {itemOptions.length > 2 && (
+                <div className="flex items-center gap-2">
+                  <label htmlFor="panel-item" className="text-sm font-medium text-text-2">
+                    Servicio:
+                  </label>
+                  <SearchSelect
+                    id="panel-item"
+                    value={item}
+                    onChange={setItem}
+                    options={itemOptions}
+                    emptyLabel="Todos los servicios y ofertas"
+                    placeholder="Todos los servicios y ofertas"
+                    searchPlaceholder="Buscar servicio u oferta…"
+                    className="w-64"
+                  />
+                </div>
+              )}
+              {filtersActive && (
+                <Button variant="ghost" size="sm" onClick={resetFilters}>
+                  Restablecer
+                </Button>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
@@ -312,6 +380,11 @@ export function DashboardClient({
           <div className="grid gap-5 lg:grid-cols-2">
             <TopItems report={report} currency={currency} loading={loading} />
             <TeamBars report={report} currency={currency} loading={loading} />
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <TicketSplitCard split={data?.ticketSplit ?? null} currency={currency} loading={loading} />
+            <RepurchaseCard cycle={data?.repurchase ?? null} loading={loading} />
           </div>
 
           <div>

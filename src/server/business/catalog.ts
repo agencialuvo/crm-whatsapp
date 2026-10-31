@@ -338,6 +338,49 @@ export async function deleteCombo(organizationId: string, id: string): Promise<v
   }
 }
 
+/**
+ * Eliminar varios servicios u ofertas a la vez. Cada uno por separado (una clave foránea fallida aborta
+ * la transacción que la contiene): el que nunca se vendió se borra; el que ya tiene ventas no se puede
+ * borrar sin romper el historial de Caja, así que se DESACTIVA (deja de ofrecerse y todo se conserva).
+ * Un id que no es de esta organización se ignora.
+ */
+export async function removeCatalogItems(
+  organizationId: string,
+  kind: "service" | "combo",
+  ids: string[]
+): Promise<{ deleted: number; deactivated: number; missing: number }> {
+  const out = { deleted: 0, deactivated: 0, missing: 0 };
+  for (const id of ids) {
+    try {
+      if (kind === "service") await deleteService(organizationId, id);
+      else await deleteCombo(organizationId, id);
+      out.deleted += 1;
+    } catch (err) {
+      if (!(err instanceof SalonError)) throw err;
+      if (err.code === "not_found") {
+        out.missing += 1;
+      } else if (err.code === "in_use") {
+        const db = getDb();
+        if (kind === "service") {
+          await db
+            .update(schema.service)
+            .set({ active: false, updatedAt: new Date() })
+            .where(scoped(schema.service.organizationId, organizationId, eq(schema.service.id, id)));
+        } else {
+          await db
+            .update(schema.combo)
+            .set({ active: false })
+            .where(scoped(schema.combo.organizationId, organizationId, eq(schema.combo.id, id)));
+        }
+        out.deactivated += 1;
+      } else {
+        throw err;
+      }
+    }
+  }
+  return out;
+}
+
 /** Los ids de servicios que existen en esta organización (para validar comisiones). */
 export async function existingServiceIds(
   organizationId: string,

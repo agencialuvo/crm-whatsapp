@@ -8,10 +8,12 @@ import type {
   RevenuePointDto,
   SalonDashboardDto,
 } from "@/lib/salon/types";
+import { sortBirthdaysByProximity } from "@/lib/salon/insights";
 import { addDaysISO } from "@/lib/time/slots";
 import { resolvePeriod, type ResolvedPeriod } from "@/server/analytics/period";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { getFunnelDaily, funnelTotals, type FunnelDay, type FunnelFilters } from "@/server/business/financial-funnel";
+import { getRepurchaseCycle, getTicketSplit } from "@/server/business/business-insights";
 import { getSalesReport } from "@/server/business/sales-service";
 
 /**
@@ -207,9 +209,13 @@ export async function getDashboard(
 ): Promise<SalonDashboardDto> {
   const staffId = filters.staffId ?? null;
   const month = Number(today.slice(5, 7));
+  const todayDay = Number(today.slice(8, 10));
   const cmp = comparisonRange(period);
   const previous = resolvePeriod({ from: cmp.from, to: cmp.to, timezone: period.timezone });
-  const [report, appointments, clients, retention, days, previousDays, previousRetention] = await Promise.all([
+  // «Hoy» para contar los días sin venir: el de hoy, o el último del periodo si este ya pasó.
+  const asOf = period.dto.to < today ? period.dto.to : today;
+  const [report, appointments, clients, retention, days, previousDays, previousRetention, ticketSplit, repurchase] =
+    await Promise.all([
     getSalesReport(organizationId, period, staffId, false),
     agendaEnabled() ? countAppointments(organizationId, period, staffId) : Promise.resolve(null),
     listBirthdaysOfMonth(organizationId, month),
@@ -217,6 +223,8 @@ export async function getDashboard(
     getFunnelDaily(organizationId, period, filters),
     getFunnelDaily(organizationId, previous, filters),
     getRetention(organizationId, previous, staffId),
+    getTicketSplit(organizationId, period, staffId),
+    getRepurchaseCycle(organizationId, period, asOf),
   ]);
   const funnel = funnelTotals(days, filters);
   const previousFunnel = funnelTotals(previousDays, filters);
@@ -231,11 +239,14 @@ export async function getDashboard(
   };
   return {
     retention,
+    ticketSplit,
+    repurchase,
     comparison,
     funnel,
     series: buildSeries(period, days),
     report,
     appointments,
-    birthdays: { month, today: Number(today.slice(8, 10)), clients },
+    // Lo más próximo a hoy primero (no por día del mes): quien cumple hoy o mañana es a quien hay que saludar.
+    birthdays: { month, today: todayDay, clients: sortBirthdaysByProximity(clients, todayDay) },
   };
 }

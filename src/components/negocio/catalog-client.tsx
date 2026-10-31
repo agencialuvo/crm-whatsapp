@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Eye, ImageIcon, Pencil, Plus, Scissors, Tag, Trash2, Upload } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Eye, ImageIcon, Pencil, Plus, Scissors, Tag, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
@@ -51,6 +51,10 @@ export function CatalogClient({ currency }: { currency: string }) {
   const [removal, setRemoval] = useState<Removal | null>(null);
   const [viewing, setViewing] = useState<Removal | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  // Selección múltiple (solo de la pestaña a la vista: al cambiar de pestaña se limpia).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRemoving, setBulkRemoving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const serviceTable = useDataTable(services ?? NONE, { view: "servicios" });
   const comboTable = useDataTable(combos ?? NONE, { view: "ofertas" });
 
@@ -101,11 +105,64 @@ export function CatalogClient({ currency }: { currency: string }) {
   async function remove(target: Removal) {
     const base = target.kind === "service" ? "servicios" : "ofertas";
     await apiFetch(`/api/negocio/${base}/${target.item.id}`, { method: "DELETE" });
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(target.item.id);
+      return next;
+    });
     if (target.kind === "service") {
       setServices((prev) => prev?.filter((s) => s.id !== target.item.id) ?? prev);
     } else {
       setCombos((prev) => prev?.filter((c) => c.id !== target.item.id) ?? prev);
     }
+  }
+
+  const pageRows = tab === "servicios" ? serviceTable.rows : comboTable.rows;
+  const allOnPage = pageRows.length > 0 && pageRows.every((x) => selected.has(x.id));
+  const someOnPage = pageRows.some((x) => selected.has(x.id));
+  const noun = tab === "servicios" ? { one: "servicio", other: "servicios" } : { one: "oferta", other: "ofertas" };
+  const countLabel = `${selected.size} ${selected.size === 1 ? noun.one : noun.other}`;
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    setSelected(new Set());
+    setNotice(null);
+  }
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+
+  function togglePage() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const x of pageRows) {
+        if (allOnPage) next.delete(x.id);
+        else next.add(x.id);
+      }
+      return next;
+    });
+  }
+
+  async function removeSelected() {
+    const base = tab === "servicios" ? "servicios" : "ofertas";
+    const res = await apiFetch<{ deleted: number; deactivated: number; missing: number }>(
+      `/api/negocio/${base}/eliminar`,
+      { method: "POST", json: { ids: [...selected] } }
+    );
+    setSelected(new Set());
+    const parts: string[] = [];
+    if (res.deleted > 0) parts.push(`${res.deleted} ${res.deleted === 1 ? "se eliminó" : "se eliminaron"}`);
+    if (res.deactivated > 0)
+      parts.push(
+        `${res.deactivated} con ventas ${res.deactivated === 1 ? "se desactivó" : "se desactivaron"} (el historial de Caja se conserva)`
+      );
+    setNotice(parts.length > 0 ? `${parts.join("; ")}.` : "No había nada que eliminar.");
+    await load();
   }
 
   const loading = services === null && combos === null && !loadError;
@@ -116,14 +173,14 @@ export function CatalogClient({ currency }: { currency: string }) {
         <div role="tablist" aria-label="Catálogo" className="flex gap-1 rounded-md bg-secondary p-1">
           <TabButton
             active={tab === "servicios"}
-            onClick={() => setTab("servicios")}
+            onClick={() => selectTab("servicios")}
             count={services?.length}
           >
             Servicios
           </TabButton>
           <TabButton
             active={tab === "combos"}
-            onClick={() => setTab("combos")}
+            onClick={() => selectTab("combos")}
             count={combos?.length}
           >
             Ofertas
@@ -161,6 +218,37 @@ export function CatalogClient({ currency }: { currency: string }) {
         </p>
       )}
 
+      {selected.size > 0 && (
+        <div
+          role="region"
+          aria-label="Acciones sobre la selección"
+          className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md border bg-popover px-3 py-2 shadow-pop"
+        >
+          <p className="text-sm font-medium" aria-live="polite">
+            {selected.size} seleccionado{selected.size === 1 ? "" : "s"}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+              <X className="h-4 w-4" aria-hidden />
+              Quitar selección
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => setBulkRemoving(true)}>
+              <Trash2 className="h-4 w-4" aria-hidden />
+              Eliminar seleccionados
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {notice && (
+        <p
+          role="status"
+          className="rounded-md border border-success-soft bg-success-tint px-3 py-2 text-sm text-success-text"
+        >
+          {notice}
+        </p>
+      )}
+
       {loadError ? (
         <div className="rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm text-danger-text">
           <p>{loadError}</p>
@@ -177,9 +265,22 @@ export function CatalogClient({ currency }: { currency: string }) {
           <TableShell
             heads={["Servicio", "Duración", "Precio", "Comisión", "Activo", ""]}
             alignRight={[1, 2, 3]}
+            master={{ checked: allOnPage, some: someOnPage, onChange: togglePage, label: "Seleccionar todos los servicios de esta página" }}
           >
             {serviceTable.rows.map((s) => (
-              <tr key={s.id} className={cn("border-b last:border-0", !s.active && "opacity-60")}>
+              <tr
+                key={s.id}
+                className={cn("border-b last:border-0", !s.active && "opacity-60", selected.has(s.id) && "bg-brand-tint")}
+              >
+                <td className="w-10 px-3 py-3">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(s.id)}
+                    onChange={() => toggleOne(s.id)}
+                    aria-label={`Seleccionar ${s.name}`}
+                    className="h-4 w-4 accent-primary"
+                  />
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-3">
                     <Thumb url={s.imageUrl} />
@@ -253,9 +354,22 @@ export function CatalogClient({ currency }: { currency: string }) {
         <TableShell
           heads={["Oferta", "Palabra clave", "Duración", "Precio", "Activo", ""]}
           alignRight={[2, 3]}
+          master={{ checked: allOnPage, some: someOnPage, onChange: togglePage, label: "Seleccionar todas las ofertas de esta página" }}
         >
           {comboTable.rows.map((c) => (
-            <tr key={c.id} className={cn("border-b last:border-0", !c.active && "opacity-60")}>
+            <tr
+              key={c.id}
+              className={cn("border-b last:border-0", !c.active && "opacity-60", selected.has(c.id) && "bg-brand-tint")}
+            >
+              <td className="w-10 px-3 py-3">
+                <input
+                  type="checkbox"
+                  checked={selected.has(c.id)}
+                  onChange={() => toggleOne(c.id)}
+                  aria-label={`Seleccionar ${c.name}`}
+                  className="h-4 w-4 accent-primary"
+                />
+              </td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-3">
                   <Thumb url={c.imageUrl} />
@@ -376,6 +490,25 @@ export function CatalogClient({ currency }: { currency: string }) {
         />
       )}
 
+      {bulkRemoving && (
+        <ConfirmDialog
+          title={tab === "servicios" ? "Eliminar servicios" : "Eliminar ofertas"}
+          message={
+            <div className="space-y-2">
+              <p>¿Eliminar {countLabel}?</p>
+              <p>
+                Los que nunca se han vendido se eliminan por completo y no se puede deshacer. Los que ya
+                tienen ventas no se pueden borrar sin perder el historial de Caja: se desactivan (dejan de
+                ofrecerse y todo se conserva).
+              </p>
+            </div>
+          }
+          confirmLabel={`Eliminar ${countLabel}`}
+          onConfirm={removeSelected}
+          onClose={() => setBulkRemoving(false)}
+        />
+      )}
+
       {removal && (
         <ConfirmDialog
           title={removal.kind === "service" ? "Eliminar servicio" : "Eliminar oferta"}
@@ -444,13 +577,35 @@ function TabButton({
   );
 }
 
+/** La casilla de «seleccionar todo» de una tabla; `some` la deja a medias (indeterminada). */
+type MasterCheck = { checked: boolean; some: boolean; onChange: () => void; label: string };
+
+function MasterCheckbox({ master }: { master: MasterCheck }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = master.some && !master.checked;
+  }, [master.some, master.checked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={master.checked}
+      onChange={master.onChange}
+      aria-label={master.label}
+      className="h-4 w-4 accent-primary"
+    />
+  );
+}
+
 function TableShell({
   heads,
   alignRight = [],
+  master,
   children,
 }: {
   heads: string[];
   alignRight?: number[];
+  master?: MasterCheck;
   children: React.ReactNode;
 }) {
   return (
@@ -460,6 +615,11 @@ function TableShell({
       <table className="w-full min-w-[640px] text-sm">
         <thead>
           <tr className="border-b bg-subtle text-left">
+            {master && (
+              <th scope="col" className="w-10 px-3 py-2.5">
+                <MasterCheckbox master={master} />
+              </th>
+            )}
             {heads.map((h, i) => (
               <th
                 key={`${h}-${i}`}

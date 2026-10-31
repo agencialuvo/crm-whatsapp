@@ -36,11 +36,11 @@ export function expensesApply(filters: FunnelFilters): boolean {
 }
 
 /** La zona ya viene validada (`resolvePeriod`): es un literal seguro. */
-function tzLiteral(timezone: string): SQL {
+export function tzLiteral(timezone: string): SQL {
   return sql.raw(`'${timezone.replace(/'/g, "''")}'`);
 }
 
-const localDay = (col: SQL | unknown, tz: SQL) =>
+export const localDay = (col: SQL | unknown, tz: SQL) =>
   sql<string>`to_char((${col} at time zone 'UTC') at time zone ${tz}, 'YYYY-MM-DD')`;
 
 async function salesByDay(organizationId: string, period: ResolvedPeriod, filters: FunnelFilters) {
