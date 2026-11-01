@@ -161,6 +161,29 @@ export function loginCodeEmail(input: { code: string; minutes: number; productNa
   return { subject, text, html };
 }
 
+/** El código para confirmar el correo al crear una cuenta nueva. */
+export function signupCodeEmail(input: { code: string; minutes: number; productName: string }): ResetCodeEmail {
+  const nombre = input.productName.trim() || "tu cuenta";
+  const subject = `Tu código para verificar tu correo: ${input.code}`;
+  const text = [
+    `Gracias por registrarte. Para activar tu cuenta en ${nombre}, escribe este código:`,
+    "",
+    `Tu código de verificación es: ${input.code}`,
+    "",
+    `Vale ${input.minutes} minutos y solo se puede usar una vez.`,
+    "Si no creaste una cuenta, ignora este correo: no pasa nada.",
+  ].join("\n");
+  const html = accountMail({
+    title: "Verifica tu correo",
+    body: [
+      `Gracias por registrarte. Para activar tu cuenta en <strong>${escapeHtml(nombre)}</strong>, escribe este código:`,
+    ],
+    highlight: input.code,
+    footer: `Vale ${input.minutes} minutos y solo se puede usar una vez. Si no creaste una cuenta, ignora este correo.`,
+  });
+  return { subject, text, html };
+}
+
 /** El aviso de seguridad inmediato: se cambió una contraseña. Va a la persona y a los propietarios. */
 export function passwordChangedAlertEmail(input: {
   /** Nombre de quien cambió la contraseña. */

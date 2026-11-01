@@ -22,6 +22,7 @@ import {
 import { CAPTCHA_ACTIONS, CAPTCHA_REQUIRED_MESSAGE } from "@/lib/captcha";
 import { captchaEnabled, verifyCaptchaHeader, verifyCaptchaProof } from "@/server/auth/captcha";
 import { isPublicSignupAllowed } from "@/server/auth/registration";
+import { findPendingSignup } from "@/server/auth/signup-verification";
 import { findUserByEmail, isTwoFactorVerified } from "@/server/auth/two-factor";
 import { passwordResetAvailable } from "@/server/email/config";
 
@@ -89,6 +90,9 @@ function createAuth() {
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
+      // Al registrarse NO se inicia sesión: primero se verifica el correo con un código y la sesión
+      // la abre el servidor (`/api/registro/verificar`). El alta del equipo no usa sesión.
+      autoSignIn: false,
       minPasswordLength: 8,
       // Quien restablece la contraseña es porque alguien más pudo tenerla: se
       // cierran las sesiones abiertas.
@@ -127,6 +131,14 @@ function createAuth() {
         if (ctx.path === "/sign-in/email") {
           const email = String((ctx.body as { email?: unknown } | undefined)?.email ?? "");
           const account = email ? await findUserByEmail(email) : null;
+          // Un registro sin verificar no entra con solo la contraseña: primero el código del correo.
+          // Responde igual que una contraseña mala (no se revela qué correos están a medias).
+          if (account && (await findPendingSignup(email))) {
+            throw new APIError("UNAUTHORIZED", {
+              code: "INVALID_EMAIL_OR_PASSWORD",
+              message: "Invalid email or password",
+            });
+          }
           if (account?.twoFactorEnabled && !isTwoFactorVerified(account.id)) {
             throw new APIError("UNAUTHORIZED", {
               code: "INVALID_EMAIL_OR_PASSWORD",
@@ -193,7 +205,10 @@ function createAuth() {
       user: {
         create: {
           after: async (user) => {
-            await onUserCreated(user.id, user.name);
+            // Equipo (lo crea el propietario, con su membresía explícita): solo el primer arranque
+            // crea la organización. Registro público: el negocio se crea al VERIFICAR el correo
+            // (`completeSignup`), no antes: una cuenta sin verificar no tiene dónde entrar.
+            if (isInternal("signup")) await onUserCreated(user.id, user.name);
           },
         },
       },

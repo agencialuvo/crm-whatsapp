@@ -15,7 +15,7 @@ export const OTP_LENGTH = 6;
 export const OTP_MAX_ATTEMPTS = 5;
 
 /** Para qué sirve el código: dos propósitos no se confunden aunque el código coincida. */
-export type OtpPurpose = "password-change" | "login-2fa" | "2fa-setup";
+export type OtpPurpose = "password-change" | "login-2fa" | "2fa-setup" | "signup-verify";
 
 export type OtpResult = "ok" | "invalid" | "expired" | "too_many" | "missing";
 

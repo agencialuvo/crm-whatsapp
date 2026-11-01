@@ -5,7 +5,7 @@ import { isPublicSignupAllowed } from "@/server/auth/registration";
 /**
  * El registro por HTTP está cerrado: las cuentas se crean por backend
  * (`pnpm crear-usuario`) o las del equipo las crea el propietario. La única
- * apertura es ALLOW_SIGNUP=true, para los arneses de prueba.
+ * apertura es ALLOW_SIGNUP=true, que además muestra «Regístrate» en el acceso.
  */
 
 afterEach(() => vi.unstubAllEnvs());
@@ -16,7 +16,7 @@ describe("registro por HTTP cerrado", () => {
     expect(await isPublicSignupAllowed()).toBe(false);
   });
 
-  it("solo ALLOW_SIGNUP=true lo abre (escape para pruebas)", async () => {
+  it("solo ALLOW_SIGNUP=true lo abre", async () => {
     vi.stubEnv("ALLOW_SIGNUP", "true");
     expect(await isPublicSignupAllowed()).toBe(true);
   });
@@ -29,18 +29,29 @@ describe("registro por HTTP cerrado", () => {
   });
 });
 
-describe("no hay forma de registrarse desde la interfaz", () => {
-  it("la pantalla de registro no existe y el inicio de sesión no la enlaza", () => {
-    const login = readFileSync("src/app/(auth)/iniciar-sesion/page.tsx", "utf8");
-    expect(login).not.toContain("/registro");
-    expect(login).not.toContain("Crear la cuenta inicial");
-    expect(login).not.toContain("Primera vez");
-    expect(() => readFileSync("src/app/(auth)/registro/page.tsx", "utf8")).toThrow();
+describe("el registro de la interfaz depende del interruptor", () => {
+  it("el inicio de sesión solo enlaza «Regístrate» si la instancia lo permite", () => {
+    const form = readFileSync("src/components/auth/login-form.tsx", "utf8");
+    expect(form).toMatch(/signupEnabled && \([\s\S]{0,200}href="\/registro"/);
+    const page = readFileSync("src/app/(auth)/iniciar-sesion/page.tsx", "utf8");
+    expect(page).toContain("isPublicSignupAllowed()");
+    expect(form).not.toContain("Crear la cuenta inicial");
   });
 
-  it("el cliente de autenticación ya no expone signUp", () => {
+  it("la pantalla de registro se niega si el interruptor está apagado", () => {
+    const page = readFileSync("src/app/(auth)/registro/page.tsx", "utf8");
+    expect(page).toMatch(/!\(await isPublicSignupAllowed\(\)\)[\s\S]{0,400}Registro no disponible/);
+  });
+
+  it("el formulario manda el desafío del captcha de la acción de registro", () => {
+    const form = readFileSync("src/components/auth/registro-form.tsx", "utf8");
+    expect(form).toContain("CAPTCHA_ACTIONS.signup");
+    expect(form).toContain("CAPTCHA_HEADER");
+  });
+
+  it("el cliente de autenticación no desestructura signUp (solo lo usa el formulario de registro)", () => {
     const client = readFileSync("src/lib/auth/client.ts", "utf8");
-    expect(client).not.toMatch(/\bsignUp\b/);
+    expect(client).not.toMatch(/signUp/);
   });
 
   it("el hook del servidor bloquea /sign-up/email salvo bypass interno", () => {

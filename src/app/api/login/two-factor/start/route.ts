@@ -4,6 +4,7 @@ import { CAPTCHA_ACTIONS, CAPTCHA_REQUIRED_MESSAGE } from "@/lib/captcha";
 import { AUTH_RATE_LIMIT, checkRateLimit, clientIp } from "@/lib/rate-limit";
 import { captchaEnabled, issueCaptchaProof, verifyCaptchaHeader, verifyCaptchaProof } from "@/server/auth/captcha";
 import { changeCodeAvailable, verifyCurrentPassword } from "@/server/auth/password-change";
+import { findPendingSignupWithPassword, sendSignupCode } from "@/server/auth/signup-verification";
 import { backupCodesRemaining, findUserByEmail, sendLoginCode } from "@/server/auth/two-factor";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +46,24 @@ export async function POST(req: Request) {
   }
   // La constancia viaja a la llamada de inicio de sesión (el token de Google es de un solo uso).
   const captchaProof = captchaEnabled() ? issueCaptchaProof(body.data.email) : undefined;
+
+  // Un registro a medias (correo sin verificar) con su contraseña correcta: se manda el código para terminarlo.
+  const pending = await findPendingSignupWithPassword(body.data.email, body.data.password);
+  if (pending) {
+    if (!changeCodeAvailable()) {
+      return apiError(503, "email_unavailable", "El servidor no tiene correo configurado para enviar el código.");
+    }
+    if (!checkRateLimit(`signup-code:${pending.id}`, CODE_LIMIT).allowed) {
+      return apiError(429, "rate_limited", "Pediste varios códigos. Espera unos minutos para pedir otro.");
+    }
+    try {
+      await sendSignupCode(pending);
+    } catch (err) {
+      console.error("[auth] no se pudo enviar el código de registro:", err instanceof Error ? err.message : "error");
+      return apiError(502, "email_failed", "No se pudo enviar el código al correo. Inténtalo de nuevo.");
+    }
+    return Response.json({ twoFactor: false, pendingVerification: true, email: maskEmail(pending.email), captchaProof });
+  }
 
   const user = await findUserByEmail(body.data.email);
   if (!user?.twoFactorEnabled || !(await verifyCurrentPassword(user.id, body.data.password))) {
