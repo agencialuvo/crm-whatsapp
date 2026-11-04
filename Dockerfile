@@ -26,6 +26,9 @@ ENV SOURCE_COMMIT=$SOURCE_COMMIT
 # clave pública tiene que estar declarada ANTES del build (Render la pasa como build arg).
 ARG NEXT_PUBLIC_RECAPTCHA_SITE_KEY=""
 ENV NEXT_PUBLIC_RECAPTCHA_SITE_KEY=$NEXT_PUBLIC_RECAPTCHA_SITE_KEY
+# Menú completo (Bandeja, Pipeline, Agente, Laboratorio, Resultados): también se incrusta al construir.
+ARG NEXT_PUBLIC_NAV_V2=""
+ENV NEXT_PUBLIC_NAV_V2=$NEXT_PUBLIC_NAV_V2
 RUN pnpm build
 # migrate.mjs autocontenido (drizzle-orm + postgres bundleados)
 RUN pnpm exec esbuild scripts/migrate.mjs --bundle --platform=node \

@@ -61,6 +61,14 @@ services:
         value: "on"
       - key: AGENDA
         value: "on"
+      # Canales opcionales, atribución de anuncios y menú completo (Bandeja, Pipeline, Agente,
+      # Laboratorio y Resultados). NEXT_PUBLIC_NAV_V2 se lee al construir: hace falta redeploy.
+      - key: CHANNELS
+        value: whatsapp,instagram,messenger,tiktok
+      - key: ATRIBUCION
+        value: "on"
+      - key: NEXT_PUBLIC_NAV_V2
+        value: "on"
       # Registro público de propietarios: exige correo (SMTP) para el código de verificación.
       - key: ALLOW_SIGNUP
         value: "true"
