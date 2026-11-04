@@ -63,9 +63,10 @@ export const SYSTEM_TITLE = "Sistema";
  * Hoja de ruta v2.0: Bandeja, Pipeline y el bloque Agente (Guía de inicio,
  * Agente, Laboratorio y Resultados) siguen existiendo —sus rutas funcionan—,
  * pero la v1.0 enfoca la barra en la operación del salón o barbería. Poner en
- * `true` los devuelve al menú, sin tocar nada más.
+ * `true` los devuelve al menú, sin tocar nada más. Se enciende sin tocar código con
+ * `NEXT_PUBLIC_NAV_V2=on` (se lee al construir y al arrancar el servidor de desarrollo).
  */
-export const NAV_V2 = false;
+export const NAV_V2 = process.env.NEXT_PUBLIC_NAV_V2 === "on";
 
 /**
  * Grupos de la barra lateral, en el orden en que se leen. En la v1.0 son tres:

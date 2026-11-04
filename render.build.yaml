@@ -61,6 +61,21 @@ services:
         value: "on"
       - key: AGENDA
         value: "on"
+      # Registro público de propietarios: exige correo (SMTP) para el código de verificación.
+      - key: ALLOW_SIGNUP
+        value: "true"
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
 
 databases:
   - name: crm-db
