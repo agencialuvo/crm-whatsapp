@@ -258,6 +258,8 @@ export type LoyaltyCardViewDto = {
     stampIconMediaId: string | null;
     /** El programa está encendido (apagado, no se suman ni se canjean sellos). */
     enabled: boolean;
+    /** Monto mínimo (centavos) para ganar un sello; 0 = cualquier venta. */
+    minStampAmountCents: number;
     /** Ruta pública del icono de los sellos (`null` = palomito por defecto). */
     stampIconUrl: string | null;
   };

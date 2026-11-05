@@ -10,6 +10,7 @@ import { apiFetch, describeError } from "@/components/negocio/api";
 import { ContactMatchPanel, useContactMatches } from "@/components/negocio/contact-match";
 import { Field, fieldErrors } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
+import { SaleLoyaltyBanner } from "@/components/negocio/sale-loyalty-banner";
 import {
   CustomCommissionField,
   SaleAmountField,
@@ -256,6 +257,13 @@ export function SaleEditDialog({
             busy={busy}
             error={errors.amountCents}
             idPrefix="sale-edit"
+          />
+
+          <SaleLoyaltyBanner
+            sale={sale}
+            contactId={pickedClient?.id ?? sale.contactId}
+            amountCents={cart.amountCents()}
+            currency={currency}
           />
 
           <CustomCommissionField

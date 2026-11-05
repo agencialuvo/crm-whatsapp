@@ -381,8 +381,8 @@ export function CashClient({
                           <td className="max-w-[12rem] truncate px-2 py-2">
                             <button
                               type="button"
-                              onClick={() => setViewing(r)}
-                              title="Ver el detalle de la venta"
+                              onClick={() => openClient(r)}
+                              title={r.contactId ? "Ver la ficha del cliente" : "Ver el detalle de la venta"}
                               className="max-w-full truncate rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               {r.itemName}

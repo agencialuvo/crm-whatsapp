@@ -645,6 +645,59 @@ export async function stampSale(
 }
 
 /**
+ * Tras EDITAR una venta, deja el sello como corresponde al monto y al cliente nuevos: si ya no llega al monto
+ * mínimo (o cambió el cliente) se retira el sello; si ahora llega y no lo tenía, se otorga. Una venta con
+ * descuento de cumpleaños o con canje de premio no suma sello. Va en la transacción de la edición.
+ * Devuelve cómo quedó para que la pantalla pueda decirlo.
+ */
+export async function syncSaleStamp(
+  tx: DbExecutor,
+  p: {
+    organizationId: string;
+    saleId: string;
+    contactId: string | null;
+    previousContactId: string | null;
+    staffId: string;
+    amountCents: number;
+    birthdayDiscount: boolean;
+  }
+): Promise<{ had: boolean; has: boolean }> {
+  const [earned] = await tx
+    .select({ id: txT.id })
+    .from(txT)
+    .where(scoped(txT.organizationId, p.organizationId, eq(txT.saleId, p.saleId), eq(txT.type, "earned")))
+    .limit(1);
+  const [redeemed] = await tx
+    .select({ id: txT.id })
+    .from(txT)
+    .where(scoped(txT.organizationId, p.organizationId, eq(txT.saleId, p.saleId), eq(txT.type, "redeemed")))
+    .limit(1);
+  const settings = await getLoyaltySettings(p.organizationId, tx);
+  const had = !!earned;
+  const wants =
+    !!p.contactId &&
+    !p.birthdayDiscount &&
+    !redeemed &&
+    settings.enabled &&
+    saleEarnsStamp(settings.minStampAmountCents, p.amountCents);
+  const contactChanged = p.contactId !== p.previousContactId;
+  if (had && (!wants || contactChanged)) await reverseSaleStamp(tx, p.organizationId, p.saleId);
+  const keeps = had && wants && !contactChanged;
+  if (wants && !keeps && p.contactId) {
+    const stamped = await stampSale(tx, {
+      organizationId: p.organizationId,
+      contactId: p.contactId,
+      saleId: p.saleId,
+      staffId: p.staffId,
+      birthdayDiscount: false,
+      amountCents: p.amountCents,
+    });
+    return { had, has: stamped !== null };
+  }
+  return { had, has: keeps };
+}
+
+/**
  * Anular una venta que canjeó un premio devuelve los sellos del canje (y descuenta el premio entregado),
  * dejando constancia. Va dentro de la transacción de la anulación, antes de borrar la venta.
  */
@@ -695,6 +748,11 @@ export async function reverseSaleStamp(
     .where(scoped(txT.organizationId, organizationId, eq(txT.saleId, saleId), eq(txT.type, "earned")))
     .limit(1);
   if (!earned) return;
+  // Ese sello ya no es de esta venta: se desvincula para no revertirlo dos veces ni darlo por vigente.
+  await tx
+    .update(txT)
+    .set({ saleId: null })
+    .where(scoped(txT.organizationId, organizationId, eq(txT.saleId, saleId), eq(txT.type, "earned")));
   await tx
     .update(cardT)
     .set({

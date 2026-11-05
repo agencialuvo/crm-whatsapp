@@ -37,6 +37,7 @@ import {
   reverseSaleRedemption,
   reverseSaleStamp,
   stampSale,
+  syncSaleStamp,
 } from "@/server/loyalty/actions";
 
 /**
@@ -578,6 +579,10 @@ export async function registerServiceSale(
       staffCommissionCents,
       businessNetCents,
       bookingId: input.bookingId ?? null,
+      loyalty: {
+        stamped: loyalty?.type === "earned",
+        blocked: input.redeemMilestoneStamps !== undefined ? "redeemed" : input.birthdayDiscount === true ? "birthday" : null,
+      },
     };
     return { sale, commissionPercentage: percentage, commissionSource: source, loyalty };
   });
@@ -678,6 +683,9 @@ export async function getSalesReport(
         staffCommissionCents: sale.staffCommissionCents,
         businessNetCents: sale.businessNetCents,
         bookingId: sale.bookingId,
+        birthdayDiscount: sale.birthdayDiscount,
+        stamped: sql<boolean>`exists (select 1 from loyalty_transaction lt where lt.sale_id = ${sale.id} and lt.type = 'earned')`,
+        redeemed: sql<boolean>`exists (select 1 from loyalty_transaction lt where lt.sale_id = ${sale.id} and lt.type = 'redeemed')`,
       })
       .from(sale)
       .innerJoin(schema.staff, eq(schema.staff.id, sale.staffId))
@@ -815,6 +823,10 @@ export async function getSalesReport(
         staffCommissionCents: r.staffCommissionCents,
         businessNetCents: r.businessNetCents,
         bookingId: r.bookingId,
+        loyalty: {
+          stamped: r.stamped,
+          blocked: r.redeemed ? "redeemed" : r.birthdayDiscount ? "birthday" : null,
+        },
       };
     }),
     truncated,
@@ -1095,6 +1107,16 @@ export async function updateSale(
         note: line.note,
       }))
     );
+    // El sello sigue al monto y al cliente: si ahora no llega al mínimo se retira; si llega, se otorga.
+    await syncSaleStamp(tx, {
+      organizationId,
+      saleId: id,
+      contactId: nextContactId,
+      previousContactId: current.contactId,
+      staffId: member.id,
+      amountCents: input.amountCents,
+      birthdayDiscount: current.birthdayDiscount,
+    });
     await tx.insert(schema.serviceSaleEdit).values({
       id: newId("serviceSaleEdit"),
       organizationId,

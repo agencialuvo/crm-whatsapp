@@ -98,6 +98,8 @@ export type SaleRowDto = {
   staffCommissionCents: number;
   businessNetCents: number;
   bookingId: string | null;
+  /** Fidelidad de esta venta: si dio sello, o por qué no puede darlo (descuento de cumpleaños o canje de premio). */
+  loyalty: { stamped: boolean; blocked: "birthday" | "redeemed" | null };
 };
 
 /** Respuesta de cobrar: la venta y con qué regla se repartió. */
