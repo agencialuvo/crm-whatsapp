@@ -4,6 +4,7 @@ import {
   computeRepurchase,
   computeTicketSplit,
   daysBetween,
+  isBirthdayMonth,
   reminderStatus,
   sortBirthdaysByProximity,
   type CycleClientInput,
@@ -163,5 +164,23 @@ describe("cumpleaños del mes por cercanía", () => {
     const list = [b(5, "Zoe"), b(5, "Ana")];
     expect(sortBirthdaysByProximity(list, 1).map((x) => x.name)).toEqual(["Ana", "Zoe"]);
     expect(list[0]!.name).toBe("Zoe");
+  });
+});
+
+describe("isBirthdayMonth (descuento de cumpleaños durante todo el mes)", () => {
+  it("aplica en cualquier día del mes de cumpleaños", () => {
+    expect(isBirthdayMonth(11, "2026-11-01")).toBe(true);
+    expect(isBirthdayMonth(11, "2026-11-05")).toBe(true);
+    expect(isBirthdayMonth(11, "2026-11-30")).toBe(true);
+  });
+  it("no aplica en otro mes", () => {
+    expect(isBirthdayMonth(11, "2026-10-31")).toBe(false);
+    expect(isBirthdayMonth(11, "2026-12-01")).toBe(false);
+    expect(isBirthdayMonth(11, "2027-10-11")).toBe(false);
+  });
+  it("sin mes cargado o con fecha ilegible no hay descuento", () => {
+    expect(isBirthdayMonth(null, "2026-11-05")).toBe(false);
+    expect(isBirthdayMonth(undefined, "2026-11-05")).toBe(false);
+    expect(isBirthdayMonth(11, "")).toBe(false);
   });
 });

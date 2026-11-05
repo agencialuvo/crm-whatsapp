@@ -385,6 +385,8 @@ export const saleInputSchema = z
     customCommissionPercentage: percentage.nullish(),
     /** Se aplicó el descuento de cumpleaños (20%): la venta no suma sello de fidelidad. */
     birthdayDiscount: z.boolean().optional(),
+    /** Canjear un premio de la tarjeta en esta venta: el hito (su número de sellos). Exige cliente identificado. */
+    redeemMilestoneStamps: z.number().int().min(1).max(100).optional(),
   })
   .superRefine((v, ctx) => {
     const legacy = [v.serviceId, v.comboId, v.other].filter(Boolean).length;

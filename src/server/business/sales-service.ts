@@ -1,7 +1,7 @@
 import { asc, desc, eq, gte, inArray, lt, or, sql, type AnyColumn } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
-import type { SaleLoyaltyDto } from "@/lib/loyalty";
+import { birthdayAllowsItems, type SaleLoyaltyDto } from "@/lib/loyalty";
 import { normalizeMx } from "@/lib/meta/client";
 import { scoped } from "@/lib/db/tenant";
 import {
@@ -30,7 +30,14 @@ import { businessTimezone, type ResolvedPeriod } from "@/server/analytics/period
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
 import { catalogStaffMaps, staffGivesItem } from "@/server/business/catalog-staff";
 import { publish } from "@/server/events/bus";
-import { reverseSaleStamp, stampSale } from "@/server/loyalty/actions";
+import {
+  birthdayUsedInYear,
+  getBirthdayCampaign,
+  redeemInSale,
+  reverseSaleRedemption,
+  reverseSaleStamp,
+  stampSale,
+} from "@/server/loyalty/actions";
 
 /**
  * Módulo SALON — caja: ventas, reparto con el profesional y reporte.
@@ -294,6 +301,19 @@ export async function registerServiceSale(
 
     const { lines, first } = await resolveLines(tx, organizationId, member, saleItemsOf(input));
 
+    // Descuento de cumpleaños: solo con la campaña encendida y sobre los servicios que ella permite
+    // (la pantalla ya lo esconde; esto lo sostiene si alguien llama a la API directo).
+    if (input.birthdayDiscount === true) {
+      const campaign = await getBirthdayCampaign(organizationId, tx);
+      if (!campaign.enabled || !birthdayAllowsItems(campaign.serviceIds, lines)) {
+        throw new SalonError(
+          "birthday_not_allowed",
+          422,
+          "El descuento de cumpleaños no aplica a esta venta (campaña apagada o servicios no incluidos)."
+        );
+      }
+    }
+
     // La cita que se cobra: debe ser de esta organización, real (no del
     // Laboratorio), una sesión y no cancelada. Si trae contacto y no se pasó
     // otro, el cliente es el de la cita.
@@ -392,6 +412,17 @@ export async function registerServiceSale(
         .where(scoped(schema.contact.organizationId, organizationId, eq(schema.contact.id, contactId)))
         .limit(1);
       if (!c) throw new SalonError("contact_not_found", 404, "El contacto no existe");
+      // El descuento de cumpleaños es de UNA vez por año por cliente.
+      if (input.birthdayDiscount === true) {
+        const year = (soldAt ?? new Date()).getUTCFullYear();
+        if (await birthdayUsedInYear(tx, organizationId, c.id, year)) {
+          throw new SalonError(
+            "birthday_already_used",
+            422,
+            `${c.name} ya usó su descuento de cumpleaños en ${year}. Es una vez por año.`
+          );
+        }
+      }
       customerName = c.name;
       // Quien compra en Caja es cliente del salón (también si lo habían quitado de
       // Clientes). El cumpleaños se guarda solo si se indicó; nunca se borra.
@@ -437,6 +468,7 @@ export async function registerServiceSale(
           staffCommissionCents,
           businessNetCents,
           paymentMethod: input.paymentMethod,
+          birthdayDiscount: input.birthdayDiscount === true,
           ...(soldAt ? { createdAt: soldAt } : {}),
         })
         .returning({ createdAt: schema.serviceSale.createdAt });
@@ -461,16 +493,49 @@ export async function registerServiceSale(
       }))
     );
 
-    // Fidelización: +1 sello, o constancia sin sello si hubo descuento de cumpleaños.
-    // Va en esta transacción (cobro y sello juntos) y nunca bloquea el cobro.
+    // Canje de un premio en esta venta: valida los servicios permitidos y descuenta los sellos. Si falla,
+    // falla la venta entera (a diferencia del sello, que nunca bloquea el cobro).
     let loyalty: SaleLoyaltyDto | null = null;
-    if (contactId) {
+    if (input.redeemMilestoneStamps !== undefined) {
+      if (!contactId) {
+        throw new SalonError("redeem_needs_client", 422, "Para canjear un premio hay que identificar al cliente.");
+      }
+      if (input.birthdayDiscount === true) {
+        throw new SalonError(
+          "redeem_and_birthday",
+          422,
+          "No se puede canjear un premio y aplicar el descuento de cumpleaños en la misma venta."
+        );
+      }
+      const redeemed = await redeemInSale(tx, {
+        organizationId,
+        contactId,
+        saleId: id,
+        staffId: member.id,
+        milestoneStamps: input.redeemMilestoneStamps,
+        items: lines,
+      });
+      loyalty = {
+        type: "redeemed",
+        currentStamps: redeemed.card.currentStamps,
+        stampsRequired: redeemed.stampsRequired,
+        rewardReady: redeemed.rewardReady,
+        rewardJustUnlocked: false,
+        unlockedTitle: null,
+      };
+    }
+
+    // Fidelización: +1 sello, o constancia sin sello si hubo descuento de cumpleaños.
+    // Va en esta transacción (cobro y sello juntos) y nunca bloquea el cobro. Una venta que canjea un premio
+    // no suma sello.
+    if (contactId && input.redeemMilestoneStamps === undefined) {
       const stamped = await stampSale(tx, {
         organizationId,
         contactId,
         saleId: id,
         staffId: member.id,
         birthdayDiscount: input.birthdayDiscount === true,
+        amountCents: input.amountCents,
       });
       if (stamped) {
         loyalty = {
@@ -1049,6 +1114,7 @@ export async function deleteSale(organizationId: string, id: string): Promise<vo
   await getDb().transaction(async (tx) => {
     // Su sello de fidelidad se retira en la misma transacción (antes de borrar la venta).
     await reverseSaleStamp(tx, organizationId, id);
+    await reverseSaleRedemption(tx, organizationId, id);
     const rows = await tx
       .delete(schema.serviceSale)
       .where(
@@ -1105,5 +1171,6 @@ export async function getSaleOptions(organizationId: string): Promise<SaleOption
     services: services.map((x) => ({ ...x, staffIds: staffBy.services.get(x.id) ?? [] })),
     combos: combos.map((x) => ({ ...x, staffIds: staffBy.combos.get(x.id) ?? [] })),
     staff: members,
+    birthday: await getBirthdayCampaign(organizationId, db),
   };
 }

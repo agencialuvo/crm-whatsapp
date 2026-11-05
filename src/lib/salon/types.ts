@@ -62,6 +62,8 @@ export type SaleOptionsDto = {
   services: { id: string; name: string; priceCents: number; durationMinutes: number; staffIds: string[] }[];
   combos: { id: string; name: string; priceCents: number; durationMinutes: number; staffIds: string[] }[];
   staff: { id: string; name: string }[];
+  /** Campaña de cumpleaños (Ajustes → Marketing): decide si Caja ofrece el descuento y sobre qué servicios. */
+  birthday: { enabled: boolean; percentage: number; serviceIds: string[] };
 };
 
 /** Un ítem de una venta: qué fue, lo que le tocó del total y, si es «Otro», su detalle. */
@@ -160,7 +162,8 @@ export type BoardBooking = {
   /** Hora de pared del negocio, `HH:mm`. */
   time: string;
   durationMinutes: number;
-  contact: { id: string; name: string } | null;
+  /** Con su cumpleaños (día y mes), para saber si hoy corresponde el descuento al cobrar la cita. */
+  contact: { id: string; name: string; birthdayDay?: number | null; birthdayMonth?: number | null } | null;
   staffId: string | null;
   notes: string | null;
   /** El servicio u oferta para el que se agendó (si se indicó). */

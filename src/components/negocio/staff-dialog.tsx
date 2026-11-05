@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { clampPercent } from "@/lib/percent";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { MediaImageField, type ImagenElegida } from "@/components/medios/media-picker";
@@ -145,7 +146,7 @@ export function StaffDialog({
             max={100}
             step={1}
             value={commission}
-            onChange={(e) => setCommission(e.target.value)}
+            onChange={(e) => setCommission(clampPercent(e.target.value))}
             disabled={busy}
           />
         </Field>

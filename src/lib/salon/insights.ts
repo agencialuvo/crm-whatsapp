@@ -94,6 +94,17 @@ export type RepurchaseDto = {
 
 const DAY_MS = 86_400_000;
 
+/**
+ * ¿La fecha de la venta (`AAAA-MM-DD`) cae en el MES de cumpleaños del cliente? La estrategia
+ * del negocio es de todo el mes, no solo del día. Sin mes cargado, o con una fecha ilegible,
+ * es que no.
+ */
+export function isBirthdayMonth(month: number | null | undefined, ymd: string): boolean {
+  if (!month) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  return !!m && Number(m[2]) === month;
+}
+
 /** Días enteros entre dos fechas AAAA-MM-DD (sin zona: las dos ya son días del negocio). */
 export function daysBetween(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);

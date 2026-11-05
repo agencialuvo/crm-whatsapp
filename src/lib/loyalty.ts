@@ -75,6 +75,30 @@ export const MAX_STAMPS_REQUIRED = 50;
 
 export const MAX_MILESTONES = 10;
 
+/** El nombre del premio cuando no se escribió uno: así una tarjeta nunca muestra un premio sin nombre. */
+export function defaultRewardTitle(rewardType: RewardType, discountPercentage?: number | null): string {
+  if (rewardType === "percentage_discount") {
+    return discountPercentage ? `${discountPercentage}% de descuento` : "Descuento";
+  }
+  return rewardType === "service_free" ? "Servicio gratis" : "Producto gratis";
+}
+
+/** Lista de servicios elegidos (sin repetir). Vacía = «todos». */
+export const serviceIdListSchema = z
+  .array(z.string().trim().min(1).max(64))
+  .max(500, "Demasiados servicios")
+  .transform((ids) => [...new Set(ids)]);
+
+/** Solo un descuento o un servicio gratis se canjea «en» ciertos servicios; un producto, no. */
+export function canRestrictServices(rewardType: RewardType): boolean {
+  return rewardType === "service_free" || rewardType === "percentage_discount";
+}
+
+/** Los servicios de un premio, juntando el formato nuevo y el anterior. */
+export function restrictedServices(m: { serviceIds?: string[]; serviceIdRestriction?: string | null }): string[] {
+  return [...new Set([...(m.serviceIds ?? []), ...(m.serviceIdRestriction ? [m.serviceIdRestriction] : [])])];
+}
+
 /** Un premio por hito: se desbloquea al llegar al sello `stamps`. */
 export const loyaltyMilestoneSchema = z
   .object({
@@ -86,17 +110,18 @@ export const loyaltyMilestoneSchema = z
       .int("Debe ser un número entero")
       .min(1, "Mínimo 1 sello")
       .max(MAX_STAMPS_REQUIRED, `Máximo ${MAX_STAMPS_REQUIRED} sellos`),
-    title: z.string().trim().min(1, "Describe el premio").max(120, "Máximo 120 caracteres"),
+    /** Opcional: sin título se usa el nombre del tipo de premio (ver `defaultRewardTitle`). */
+    title: z.string().trim().max(120, "Máximo 120 caracteres").nullish(),
     rewardType: z.enum(REWARD_TYPES),
     /** Solo con `percentage_discount`. */
     discountPercentage: z
       .number({ invalid_type_error: "Escribe el porcentaje" })
       .int("Debe ser un número entero")
-      .min(1, "Mínimo 1%")
+      .min(0, "Mínimo 0%")
       .max(100, "Máximo 100%")
       .nullish()
       .transform((v) => v ?? undefined),
-    /** Solo con `service_free`: el servicio al que aplica (vacío = cualquiera). */
+    /** Formato anterior (un solo servicio). Se acepta y se pliega en `serviceIds`. */
     serviceIdRestriction: z
       .string()
       .trim()
@@ -104,6 +129,8 @@ export const loyaltyMilestoneSchema = z
       .max(64)
       .nullish()
       .transform((v) => v ?? undefined),
+    /** Servicios donde se canjea el premio (descuento o servicio gratis); vacío = cualquiera. */
+    serviceIds: serviceIdListSchema.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.rewardType === "percentage_discount" && v.discountPercentage == null) {
@@ -117,13 +144,13 @@ export const loyaltyMilestoneSchema = z
   // Cada tipo guarda solo lo suyo.
   .transform((v) => ({
     stamps: v.stamps,
-    title: v.title,
+    title: v.title || defaultRewardTitle(v.rewardType, v.discountPercentage),
     rewardType: v.rewardType,
     ...(v.rewardType === "percentage_discount" && v.discountPercentage != null
       ? { discountPercentage: v.discountPercentage }
       : {}),
-    ...(v.rewardType === "service_free" && v.serviceIdRestriction
-      ? { serviceIdRestriction: v.serviceIdRestriction }
+    ...(canRestrictServices(v.rewardType) && restrictedServices(v).length > 0
+      ? { serviceIds: restrictedServices(v) }
       : {}),
   }));
 export type LoyaltyMilestoneDto = z.output<typeof loyaltyMilestoneSchema>;
@@ -139,6 +166,17 @@ export const loyaltySettingsInputSchema = z
     brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color HEX de 6 dígitos (ej. #111827)"),
     /** Imagen de la biblioteca de medios que dibuja cada sello (`null` = el palomito por defecto). */
     stampIconMediaId: z.string().trim().min(1).max(64).nullish(),
+    /** Interruptor del programa; sin enviarlo, queda como estaba. */
+    enabled: z.boolean().optional(),
+    /** @deprecated Ya no se usa: el sello se gana por monto mínimo, sin importar el servicio. Se acepta y se ignora. */
+    eligibleServiceIds: serviceIdListSchema.optional(),
+    /** Monto mínimo de la venta (centavos) para ganar un sello; 0 = cualquier venta; sin enviarlo, queda como estaba. */
+    minStampAmountCents: z
+      .number({ invalid_type_error: "Escribe el monto mínimo" })
+      .int("El monto debe estar en centavos enteros")
+      .min(0, "El monto mínimo no puede ser negativo")
+      .max(100_000_000, "El monto mínimo es demasiado alto")
+      .optional(),
   })
   .superRefine((v, ctx) => {
     const seen = new Set<number>();
@@ -192,8 +230,8 @@ export function milestoneProgress<T extends { stamps: number }>(
 
 /** Lo que Caja informa tras sellar una venta. */
 export type SaleLoyaltyDto = {
-  /** `earned` = +1 sello; `birthday_excluded` = descuento de cumpleaños, no suma. */
-  type: "earned" | "birthday_excluded";
+  /** `earned` = +1 sello; `birthday_excluded` = descuento de cumpleaños, no suma; `redeemed` = canje de un premio. */
+  type: "earned" | "birthday_excluded" | "redeemed";
   currentStamps: number;
   /** Sellos del premio final (cierra la tarjeta). */
   stampsRequired: number;
@@ -218,6 +256,8 @@ export type LoyaltyCardViewDto = {
     cardTitle: string;
     brandColor: string;
     stampIconMediaId: string | null;
+    /** El programa está encendido (apagado, no se suman ni se canjean sellos). */
+    enabled: boolean;
     /** Ruta pública del icono de los sellos (`null` = palomito por defecto). */
     stampIconUrl: string | null;
   };
@@ -247,9 +287,69 @@ export function loyaltyNotice(result: { loyalty: SaleLoyaltyDto | null }): strin
   const l = result.loyalty;
   if (!l) return "";
   if (l.type === "birthday_excluded") return " Descuento de cumpleaños: no suma sello.";
+  if (l.type === "redeemed") return ` Premio canjeado. Le quedan ${l.currentStamps} sellos.`;
   if (l.rewardJustUnlocked) {
     const what = l.unlockedTitle ? `: ${l.unlockedTitle}` : "";
     return ` ¡Premio de fidelidad desbloqueado${what}! (${l.currentStamps}/${l.stampsRequired} sellos)`;
   }
   return ` Sello ${l.currentStamps}/${l.stampsRequired}.`;
+}
+
+/* ---------------------- Marketing: campaña de cumpleaños ---------------------- */
+
+export const BIRTHDAY_DEFAULT_PERCENTAGE = 20;
+
+/** Ajustes → Marketing → Campaña de cumpleaños (PUT /api/loyalty/birthday). */
+export const birthdayCampaignInputSchema = z.object({
+  enabled: z.boolean(),
+  percentage: z
+    .number({ required_error: "Escribe el porcentaje", invalid_type_error: "Escribe el porcentaje" })
+    .int("Debe ser un número entero")
+    .min(0, "Mínimo 0%")
+    .max(100, "Máximo 100%"),
+  /** Servicios con descuento de cumpleaños; vacío = todos. */
+  serviceIds: serviceIdListSchema,
+});
+export type BirthdayCampaignInput = z.output<typeof birthdayCampaignInputSchema>;
+
+/** La campaña tal como la leen Ajustes y Caja. */
+export type BirthdayCampaignDto = {
+  enabled: boolean;
+  percentage: number;
+  serviceIds: string[];
+};
+
+/** Un ítem vendido: un servicio o una oferta (las ofertas también son servicios del negocio). */
+export type SoldItemRef = { serviceId: string | null; comboId?: string | null };
+
+/** ¿Este ítem está en la lista? Las listas guardan ids de servicios (`srv_…`) y de ofertas (`cmb_…`) juntos. */
+function itemIsListed(list: readonly string[], i: SoldItemRef): boolean {
+  return (i.serviceId !== null && list.includes(i.serviceId)) || (!!i.comboId && list.includes(i.comboId));
+}
+
+/**
+ * ¿El descuento de cumpleaños aplica a estos ítems? Sin lista, a todo; con lista, SOLO si cada ítem
+ * (servicio u oferta) está marcado. Un «Otro» no cuenta: no se sabe qué rebaja.
+ */
+export function birthdayAllowsItems(allowedIds: readonly string[], items: readonly SoldItemRef[]): boolean {
+  if (items.length === 0) return false;
+  if (allowedIds.length === 0) return true;
+  return items.every((i) => itemIsListed(allowedIds, i));
+}
+
+/**
+ * ¿La venta suma sello? Sin lista, siempre; con lista, si AL MENOS un ítem (servicio u oferta) da sello
+ * (el resto de la venta no quita el sello).
+ */
+export function stampsAllowItems(eligibleIds: readonly string[], items: readonly SoldItemRef[]): boolean {
+  if (eligibleIds.length === 0) return true;
+  return items.some((i) => itemIsListed(eligibleIds, i));
+}
+
+/**
+ * ¿Esta venta gana 1 sello? Es UNA sola regla para todos los servicios y ofertas: el monto cobrado iguala o
+ * supera el mínimo de la tarjeta (0 = cualquier venta). El tipo de servicio no cuenta.
+ */
+export function saleEarnsStamp(minAmountCents: number, amountCents: number): boolean {
+  return amountCents >= minAmountCents;
 }

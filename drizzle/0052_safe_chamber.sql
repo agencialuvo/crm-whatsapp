@@ -1,0 +1,1 @@
+ALTER TABLE "service_sale" ADD COLUMN "birthday_discount" boolean DEFAULT false NOT NULL;

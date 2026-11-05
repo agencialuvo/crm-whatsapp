@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Cake, Check, Gift, SlidersHorizontal, Stamp } from "lucide-react";
+import { Cake, Check, Gift, Minus, Plus, SlidersHorizontal, Stamp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -245,6 +245,7 @@ export function LoyaltyCardPanel({ contactId, className }: { contactId: string; 
           contactId={contactId}
           contactName={view.contact.name}
           current={stamps}
+          max={required}
           onClose={() => setAdjusting(false)}
           onDone={async (text) => {
             setAdjusting(false);
@@ -268,44 +269,53 @@ export function LoyaltyCardPanel({ contactId, className }: { contactId: string; 
   );
 }
 
+/** El tope por ajuste que acepta el servidor (`stampsChange` va de -100 a 100). */
+const MAX_ADJUST = 100;
+
+const sellos = (n: number) => `${n} sello${n === 1 ? "" : "s"}`;
+
 /**
- * Ajuste manual de sellos (migrar una tarjeta física o corregir un saldo): un número con
- * signo y el motivo, que queda en el historial para auditoría. La tarjeta nunca baja de 0.
+ * Ajuste manual de sellos (migrar una tarjeta física o corregir un saldo): un contador con − y + (sin
+ * escribir números negativos), la vista previa del total y el motivo, que queda en el historial para
+ * auditoría. La tarjeta nunca baja de 0.
  */
 function AdjustDialog({
   contactId,
   contactName,
   current,
+  max,
   onClose,
   onDone,
 }: {
   contactId: string;
   contactName: string;
   current: number;
+  /** La meta de la tarjeta (sellos del último premio): no se puede subir por encima. */
+  max: number;
   onClose: () => void;
   onDone: (message: string) => Promise<void>;
 }) {
-  const [amount, setAmount] = useState("");
+  const [delta, setDelta] = useState(0);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const delta = /^-?\d+$/.test(amount) ? Number(amount) : null;
-  const after = delta === null ? null : current + delta;
-  const amountError =
-    amount !== "" && delta === null
-      ? "Escribe un número entero"
-      : delta === 0
-        ? "El ajuste debe ser distinto de 0"
-        : after !== null && after < 0
-          ? `La tarjeta tiene ${current} sellos: no puedes quitar más de ${current}`
-          : null;
+  const after = current + delta;
+  const canDecrease = after > 0 && delta > -MAX_ADJUST;
+  const canIncrease = delta < MAX_ADJUST && after < max;
   const noteOk = note.trim().length >= MIN_ADJUST_NOTE;
-  const canSubmit = delta !== null && delta !== 0 && !amountError && noteOk && !busy;
+  const canSubmit = delta !== 0 && noteOk && !busy;
+  // Subir se detiene en la meta de la tarjeta; bajar, en 0 (una tarjeta ya por encima de la meta puede bajar).
+  const step = (by: number) =>
+    setDelta((d) => {
+      const next = d + by;
+      const capped = by > 0 ? Math.min(next, Math.max(max - current, d)) : Math.max(next, -current);
+      return Math.max(-MAX_ADJUST, Math.min(MAX_ADJUST, capped));
+    });
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit || delta === null) return;
+    if (!canSubmit) return;
     setBusy(true);
     setError(null);
     try {
@@ -314,7 +324,7 @@ function AdjustDialog({
         json: { contactId, type: "adjusted", stampsChange: delta, notes: note.trim() },
       });
       await onDone(
-        `Ajuste guardado: ${delta > 0 ? `+${delta}` : delta} sello${Math.abs(delta) === 1 ? "" : "s"} a ${contactName}. Ahora tiene ${current + delta}.`
+        `Ajuste guardado: ${delta > 0 ? `+${delta}` : delta} sello${Math.abs(delta) === 1 ? "" : "s"} a ${contactName}. Ahora tiene ${after}.`
       );
     } catch (err) {
       setError(describeError(err));
@@ -325,34 +335,64 @@ function AdjustDialog({
   return (
     <Modal
       title="Ajustar sellos"
-      description={`${contactName} tiene ${current} sello${current === 1 ? "" : "s"}. Usa un número negativo para quitar.`}
+      description={`${contactName} tiene ${sellos(current)} de ${max}. Suma o resta con los botones.`}
       onClose={onClose}
       busy={busy}
       size="sm"
     >
       <form onSubmit={submit} noValidate className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="loy-adj-amount" required>Sellos a sumar o restar</Label>
-          <Input
-            id="loy-adj-amount"
-            inputMode="numeric"
-            value={amount}
-            placeholder="Ej. 5 o -2"
-            // Solo dígitos y un «-» al inicio.
-            onChange={(e) => setAmount(e.target.value.replace(/[^\d-]/g, "").replace(/(?!^)-/g, "").slice(0, 4))}
-            aria-invalid={!!amountError}
-            disabled={busy}
-            className="max-w-[10rem] tabular-nums"
-          />
-          {amountError ? (
-            <p className="text-xs text-danger-text">{amountError}</p>
-          ) : (
-            after !== null && (
-              <p className="text-xs text-text-3">
-                Quedará con <span className="font-semibold text-text-2">{after}</span> sello{after === 1 ? "" : "s"}.
-              </p>
-            )
-          )}
+          <Label htmlFor="loy-adj-amount">Sellos a sumar o restar</Label>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Restar un sello"
+              onClick={() => step(-1)}
+              disabled={busy || !canDecrease}
+            >
+              <Minus className="h-4 w-4" aria-hidden />
+            </Button>
+            <Input
+              id="loy-adj-amount"
+              readOnly
+              value={delta > 0 ? `+${delta}` : String(delta)}
+              aria-live="polite"
+              // Con el teclado también: flechas arriba y abajo.
+              onKeyDown={(e) => {
+                if (e.key === "ArrowUp" && canIncrease) {
+                  e.preventDefault();
+                  step(1);
+                } else if (e.key === "ArrowDown" && canDecrease) {
+                  e.preventDefault();
+                  step(-1);
+                }
+              }}
+              disabled={busy}
+              className={cn(
+                "w-20 text-center text-base font-semibold tabular-nums",
+                delta > 0 && "text-success-text",
+                delta < 0 && "text-danger-text"
+              )}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Sumar un sello"
+              onClick={() => step(1)}
+              disabled={busy || !canIncrease}
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+            </Button>
+          </div>
+          <p className="text-sm text-text-2" role="status">
+            Actual: {sellos(current)} <span aria-hidden>➔</span> Nuevo total:{" "}
+            <span className={cn("font-semibold", delta !== 0 && "text-foreground")}>{sellos(after)}</span>
+          </p>
+          {delta === 0 && <p className="text-xs text-text-3">Usa + o − para cambiar la cantidad de sellos.</p>}
+          {after >= max && <p className="text-xs text-text-3">Máximo de la tarjeta: {sellos(max)}.</p>}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="loy-adj-note" required>Motivo del ajuste</Label>
@@ -364,7 +404,7 @@ function AdjustDialog({
             onChange={(e) => setNote(e.target.value)}
             disabled={busy}
           />
-          <p className="text-xs text-text-3">Queda en el historial de la tarjeta.</p>
+          <p className="text-xs text-text-3">Obligatorio. Queda en el historial de la tarjeta.</p>
         </div>
         <ModalFooter error={error}>
           <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>

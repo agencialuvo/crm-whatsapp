@@ -358,6 +358,27 @@
       "when": 1793424277323,
       "tag": "0050_illegal_sprite",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1793887029653,
+      "tag": "0051_abnormal_the_initiative",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1793888657666,
+      "tag": "0052_safe_chamber",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1793892809581,
+      "tag": "0053_adorable_archangel",
+      "breakpoints": true
     }
   ]
 }

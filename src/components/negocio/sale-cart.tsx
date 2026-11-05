@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { clampPercent } from "@/lib/percent";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { Field, MoneyInput } from "@/components/negocio/fields";
@@ -131,7 +132,10 @@ export function SaleItemsField({
   busy,
   error,
   idPrefix,
+  allow,
 }: {
+  /** Acota lo que se ofrece al agregar (p. ej. solo los servicios del descuento de cumpleaños); lo ya agregado se conserva. */
+  allow?: (value: string) => boolean;
   cart: SaleCart;
   currency: string;
   busy: boolean;
@@ -156,7 +160,7 @@ export function SaleItemsField({
           id={`${idPrefix}-item`}
           value=""
           onChange={cart.add}
-          options={cart.choices}
+          options={allow ? cart.choices.filter((o) => allow(o.value)) : cart.choices}
           placeholder={cart.cart.length > 0 ? "Agregar otro servicio u oferta…" : "Elige qué se vendió…"}
           searchPlaceholder="Buscar servicio u oferta…"
           disabled={busy}
@@ -355,7 +359,7 @@ export function CustomCommissionField({
         max={100}
         step={1}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange(clampPercent(e.target.value))}
         disabled={busy}
         className="w-32"
       />

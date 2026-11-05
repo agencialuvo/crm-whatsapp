@@ -5,6 +5,7 @@ import { Cake, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ContactMatchPanel, useContactMatches } from "@/components/negocio/contact-match";
@@ -23,6 +24,8 @@ import { isPersonName, sanitizePersonName } from "@/lib/salon/staff-fields";
 import { saleInputSchema, type PaymentMethod } from "@/lib/salon/schemas";
 import { itemsAreRestricted, staffAfterItemsChange, staffForItems } from "@/lib/salon/staff-for-item";
 import { formatPeruPhone } from "@/lib/salon/format";
+import { birthdayAllowsItems, restrictedServices, stampsAllowItems, type LoyaltyCardViewDto } from "@/lib/loyalty";
+import { isBirthdayMonth } from "@/lib/salon/insights";
 import type { ContactMatchDto, RegisteredSaleDto, SaleOptionsDto } from "@/lib/salon/types";
 
 /** Código de país fijo (Perú): quien cobra solo escribe los 9 dígitos del celular. */
@@ -40,7 +43,7 @@ const MONTH_OPTIONS: SearchSelectOption[] = MONTH_NAMES.map((m, i) => ({
 export type SaleDialogInitial = {
   /** La cita que se cobra: al guardar queda como realizada. */
   bookingId?: string;
-  contact?: { id: string; name: string } | null;
+  contact?: { id: string; name: string; birthdayDay?: number | null; birthdayMonth?: number | null } | null;
   staffId?: string | null;
 };
 
@@ -97,6 +100,80 @@ export function SaleDialog({
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [customPct, setCustomPct] = useState("");
   const [birthdayDiscount, setBirthdayDiscount] = useState(false);
+  // El descuento se ofrece durante TODO el mes de cumpleaños del cliente (el de la fecha de atención).
+  // Si escribió el celular completo de un cliente ya registrado sin tocar la sugerencia, el
+  // cobro se le hace a ÉL (el servidor lo reconoce por el celular): se usa su cumpleaños.
+  const sameNumber =
+    !contact && !picked && customerPhone.length === PHONE_DIGITS
+      ? matches.find((m) => m.phone.replace(/\D/g, "").endsWith(customerPhone))
+      : undefined;
+  const campaign = options?.birthday;
+  // A quién se le cobra (para consultar lo suyo: uso del beneficio y premios).
+  const resolvedContactId = contact?.id ?? picked?.id ?? sameNumber?.id ?? null;
+  const soldYear = Number(soldOn.slice(0, 4)) || new Date().getFullYear();
+  // Los ítems del carrito: un servicio o una oferta tienen id; «Otro», no.
+  const cartItems = cart.values.map((v) => ({
+    serviceId: v.startsWith("service:") ? v.slice(8) : null,
+    comboId: v.startsWith("combo:") ? v.slice(6) : null,
+  }));
+  // El interruptor se ofrece con la campaña encendida, en el mes de cumpleaños del cliente y si NO lo usó ya
+  // este año (es de una vez por año). Qué servicios admite se avisa al activarlo, no se esconde (Ajustes →
+  // Marketing → Campaña de cumpleaños).
+  const monthOk =
+    !!campaign?.enabled &&
+    isBirthdayMonth(
+      contact ? contact.birthdayMonth : sameNumber ? sameNumber.birthdayMonth : Number(birthdayMonth) || null,
+      soldOn
+    );
+  const usageKey = resolvedContactId ? `${resolvedContactId}:${soldYear}` : "";
+  const [usage, setUsage] = useState<{ key: string; used: boolean } | null>(null);
+  useEffect(() => {
+    if (!monthOk || !resolvedContactId) return;
+    let alive = true;
+    apiFetch<{ used: boolean }>(
+      `/api/negocio/cumpleanos/uso?contactId=${encodeURIComponent(resolvedContactId)}&year=${soldYear}`
+    )
+      .then((r) => alive && setUsage({ key: usageKey, used: r.used }))
+      // Sin poder consultarlo no se ofrece: el servidor igual lo decide al cobrar.
+      .catch(() => alive && setUsage({ key: usageKey, used: true }));
+    return () => {
+      alive = false;
+    };
+  }, [monthOk, resolvedContactId, soldYear, usageKey]);
+  // Un cliente de mostrador sin ficha todavía no pudo usarlo; con ficha, se espera a saberlo.
+  const alreadyUsed = resolvedContactId ? usage?.key !== usageKey || usage.used : false;
+  const isBirthday = monthOk && !alreadyUsed;
+  const birthdayList = campaign?.serviceIds ?? [];
+  const birthdayViolates = cartItems.length > 0 && !birthdayAllowsItems(birthdayList, cartItems);
+
+  const namesOf = (ids: string[]) =>
+    [...(options?.services ?? []), ...(options?.combos ?? [])].filter((x) => ids.includes(x.id)).map((x) => x.name);
+  const [alertMsg, setAlertMsg] = useState<string | null>(null);
+  const birthdayAlert = () =>
+    `El descuento de cumpleaños solo aplica para los siguientes servicios: ${namesOf(birthdayList).join(", ") || "los que configuró el negocio"}.`;
+
+  // Premios de la tarjeta que se pueden canjear en esta venta.
+  const [cardInfo, setCardInfo] = useState<{ contactId: string; view: LoyaltyCardViewDto } | null>(null);
+  useEffect(() => {
+    if (!resolvedContactId) return;
+    let alive = true;
+    apiFetch<LoyaltyCardViewDto>(`/api/loyalty/card?contactId=${encodeURIComponent(resolvedContactId)}`)
+      .then((v) => alive && setCardInfo({ contactId: resolvedContactId, view: v }))
+      .catch(() => alive && setCardInfo(null));
+    return () => {
+      alive = false;
+    };
+  }, [resolvedContactId]);
+  const rewards =
+    resolvedContactId && cardInfo?.contactId === resolvedContactId && cardInfo.view.settings.enabled
+      ? cardInfo.view.availableMilestones
+      : [];
+  const [redeemStamps, setRedeemStamps] = useState("");
+  const redeeming = rewards.find((m) => String(m.stamps) === redeemStamps) ?? null;
+  const rewardAlert = (m: { serviceIds?: string[]; serviceIdRestriction?: string }) =>
+    `Este premio solo se puede canjear en: ${namesOf(restrictedServices(m)).join(", ") || "los servicios que configuró el negocio"}.`;
+  const rewardViolates = (m: { serviceIds?: string[]; serviceIdRestriction?: string } | null) =>
+    !!m && restrictedServices(m).length > 0 && cartItems.length > 0 && !stampsAllowItems(restrictedServices(m), cartItems);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -128,6 +205,9 @@ export function SaleDialog({
     setPicked(null);
     setCustomerName("");
     setCustomerPhone("");
+    // El cumpleaños era de quien se soltó: no se arrastra al siguiente cliente.
+    setBirthdayDay("");
+    setBirthdayMonth("");
   }
 
   async function submit(e: React.FormEvent) {
@@ -136,6 +216,15 @@ export function SaleDialog({
 
     if (!contact && !picked && customerPhone.length > 0 && customerPhone.length !== PHONE_DIGITS) {
       setErrors({ customerPhone: `El celular debe tener ${PHONE_DIGITS} dígitos` });
+      return;
+    }
+
+    if (birthdayDiscount && isBirthday && birthdayViolates) {
+      setAlertMsg(birthdayAlert());
+      return;
+    }
+    if (redeeming && rewardViolates(redeeming)) {
+      setAlertMsg(rewardAlert(redeeming));
       return;
     }
 
@@ -154,7 +243,8 @@ export function SaleDialog({
       paymentMethod: method || undefined,
       customCommissionPercentage:
         canAdjustCommission && customPct.trim() !== "" ? Number(customPct) : null,
-      ...(birthdayDiscount && { birthdayDiscount: true }),
+      ...(birthdayDiscount && isBirthday && { birthdayDiscount: true }),
+      ...(redeeming && !birthdayDiscount && { redeemMilestoneStamps: redeeming.stamps }),
     });
     if (!parsed.success) {
       setErrors(fieldErrors(parsed.error.issues));
@@ -185,6 +275,7 @@ export function SaleDialog({
   const noStaff = options !== null && options.staff.length === 0;
 
   return (
+    <>
     <Modal
       title={initial?.bookingId ? "Cobrar cita" : "Registrar venta"}
       description="Se calcula la comisión de quien atendió y lo que le queda al negocio."
@@ -388,6 +479,15 @@ export function SaleDialog({
             busy={busy}
             error={errors.items ?? errors.serviceId}
             idPrefix="sale"
+            // Con el descuento de cumpleaños activo solo se ofrece lo que él admite.
+            allow={
+              birthdayDiscount && isBirthday && birthdayList.length > 0
+                ? (v) => birthdayAllowsItems(birthdayList, [{
+                    serviceId: v.startsWith("service:") ? v.slice(8) : null,
+                    comboId: v.startsWith("combo:") ? v.slice(6) : null,
+                  }])
+                : undefined
+            }
           />
 
           <SaleAmountField
@@ -400,6 +500,7 @@ export function SaleDialog({
 
           <PaymentMethodField method={method} onChange={setMethod} busy={busy} error={errors.paymentMethod} />
 
+          {isBirthday && (
           <div
             className={
               "rounded-md border px-3 py-2.5 transition-colors " +
@@ -409,15 +510,23 @@ export function SaleDialog({
             <div className="flex items-start gap-3">
               <Cake className="mt-0.5 h-4 w-4 shrink-0 text-text-3" aria-hidden />
               <div className="min-w-0 flex-1 text-sm">
-                <span className="font-medium">Aplicar 20% de descuento de cumpleaños</span>
+                <span className="font-medium">Aplicar {campaign?.percentage ?? 20}% de descuento de cumpleaños</span>
                 <span className="block text-xs text-text-3">No suma sello</span>
               </div>
               <Switch
                 size="sm"
                 checked={birthdayDiscount}
-                onCheckedChange={setBirthdayDiscount}
+                onCheckedChange={(on) => {
+                  // Activarlo con algo no permitido en la venta avisa, sin quitar nada: el cajero corrige.
+                  if (on && birthdayViolates) {
+                    setAlertMsg(birthdayAlert());
+                    return;
+                  }
+                  setBirthdayDiscount(on);
+                  if (on) setRedeemStamps("");
+                }}
                 disabled={busy}
-                label="Aplicar 20% de descuento de cumpleaños (no suma sello)"
+                label={`Aplicar ${campaign?.percentage ?? 20}% de descuento de cumpleaños (no suma sello)`}
               />
             </div>
             {birthdayDiscount && (
@@ -427,6 +536,40 @@ export function SaleDialog({
               </p>
             )}
           </div>
+          )}
+
+          {rewards.length > 0 && (
+            <div className="rounded-md border bg-subtle/50 px-3 py-2.5">
+              <Label htmlFor="sale-redeem">Canjear un premio de fidelidad (opcional)</Label>
+              <SearchSelect
+                id="sale-redeem"
+                value={redeemStamps}
+                onChange={(v) => {
+                  const m = rewards.find((r) => String(r.stamps) === v) ?? null;
+                  // Un premio restringido solo se canjea sobre lo permitido: se avisa y no se elige.
+                  if (m && rewardViolates(m)) {
+                    setAlertMsg(rewardAlert(m));
+                    return;
+                  }
+                  setRedeemStamps(v);
+                  if (v) setBirthdayDiscount(false);
+                }}
+                options={rewards.map((m) => ({ value: String(m.stamps), label: `${m.title} (${m.stamps} sellos)` }))}
+                emptyLabel="Sin canje"
+                emptyShowsPlaceholder
+                placeholder="Sin canje"
+                searchPlaceholder="Buscar premio…"
+                disabled={busy}
+                triggerClassName="mt-1.5 bg-card px-2"
+              />
+              {redeeming && (
+                <p className="mt-2 text-xs text-text-2" role="status">
+                  Se descuentan {redeeming.stamps} sellos de la tarjeta. Ajusta el monto cobrado a mano según el premio;
+                  esta venta no suma sello.
+                </p>
+              )}
+            </div>
+          )}
 
           {canAdjustCommission && (
             <CustomCommissionField
@@ -457,5 +600,18 @@ export function SaleDialog({
         </ModalFooter>
       )}
     </Modal>
+    {alertMsg && (
+      <Modal title="No aplica para esta venta" size="sm" onClose={() => setAlertMsg(null)}>
+        <p role="alert" className="text-sm text-text-2">
+          {alertMsg}
+        </p>
+        <ModalFooter>
+          <Button type="button" onClick={() => setAlertMsg(null)}>
+            Entendido
+          </Button>
+        </ModalFooter>
+      </Modal>
+    )}
+    </>
   );
 }

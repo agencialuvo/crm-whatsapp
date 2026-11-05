@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Check, Plus, Trash2 } from "lucide-react";
+import { ServiceMultiSelect } from "@/components/settings/service-multi-select";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { clampPercent } from "@/lib/percent";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,10 +18,16 @@ import {
   MAX_STAMPS_REQUIRED,
   REWARD_TYPE_LABELS,
   REWARD_TYPES,
+  canRestrictServices,
+  defaultRewardTitle,
+  restrictedServices,
   sortMilestones,
   type RewardType,
 } from "@/lib/loyalty";
-import type { ServiceDto } from "@/lib/salon/types";
+import type { ComboDto, ServiceDto } from "@/lib/salon/types";
+import { MoneyInput } from "@/components/negocio/fields";
+import { centsToInput, money } from "@/lib/salon/format";
+import { parseMoneyToCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 type MilestoneDto = {
@@ -26,7 +35,9 @@ type MilestoneDto = {
   title: string;
   rewardType: RewardType;
   discountPercentage?: number;
+  /** Formato anterior (un servicio); el servidor ya lo entrega plegado en `serviceIds`. */
   serviceIdRestriction?: string;
+  serviceIds?: string[];
 };
 
 type SettingsDto = {
@@ -34,6 +45,8 @@ type SettingsDto = {
   cardTitle: string;
   brandColor: string;
   stampIconMediaId: string | null;
+  enabled: boolean;
+  minStampAmountCents: number;
 };
 
 /** Un premio en edición: los números se teclean como texto. */
@@ -43,12 +56,11 @@ type Row = {
   title: string;
   rewardType: RewardType;
   discount: string;
-  serviceId: string;
+  serviceIds: string[];
 };
 
 const DEFAULT_COLOR = "#111827";
 const COLOR_PRESETS = ["#111827", "#0d5bff", "#157a41", "#b45309", "#be123c", "#7c3aed"];
-const ANY_SERVICE = "__any";
 
 const TYPE_OPTIONS = REWARD_TYPES.map((t) => ({ value: t, label: REWARD_TYPE_LABELS[t] }));
 
@@ -59,15 +71,18 @@ const toRow = (m: MilestoneDto): Row => ({
   title: m.title,
   rewardType: m.rewardType,
   discount: m.discountPercentage != null ? String(m.discountPercentage) : "",
-  serviceId: m.serviceIdRestriction ?? "",
+  serviceIds: restrictedServices(m),
 });
 
 /** Ajustes → Fidelización: los premios por hito del programa de sellos y el aspecto de la tarjeta. */
-export function LoyaltySettingsClient() {
+export function LoyaltySettingsClient({ currency }: { currency: string }) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [services, setServices] = useState<ServiceDto[]>([]);
+  const [offers, setOffers] = useState<ComboDto[]>([]);
+  const [enabled, setEnabled] = useState(true);
+  const [minAmount, setMinAmount] = useState("");
   const [title, setTitle] = useState("");
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [icon, setIcon] = useState<ImagenElegida | null>(null);
@@ -81,15 +96,20 @@ export function LoyaltySettingsClient() {
       .then((s) => {
         if (!alive) return;
         setRows(sortMilestones(s.milestones).map(toRow));
+        setEnabled(s.enabled);
+        setMinAmount(s.minStampAmountCents > 0 ? centsToInput(s.minStampAmountCents) : "");
         setTitle(s.cardTitle);
         setColor(s.brandColor);
         setIcon(s.stampIconMediaId ? { id: s.stampIconMediaId, url: `/api/medios/${s.stampIconMediaId}/archivo` } : null);
         setLoaded(true);
       })
       .catch((err) => alive && setLoadError(describeError(err)));
-    // Los servicios solo alimentan el filtro opcional «servicio gratis de…»: si fallan, se omite.
+    // Los servicios alimentan los selectores de «qué suma sello» y «dónde se canjea»: si fallan, se omiten.
     apiFetch<{ services: ServiceDto[] }>("/api/negocio/servicios")
       .then((r) => alive && setServices(r.services.filter((x) => x.active)))
+      .catch(() => undefined);
+    apiFetch<{ combos: ComboDto[] }>("/api/negocio/ofertas")
+      .then((r) => alive && setOffers(r.combos.filter((x) => x.active)))
       .catch(() => undefined);
     return () => {
       alive = false;
@@ -103,7 +123,7 @@ export function LoyaltySettingsClient() {
     const last = Math.max(0, ...rows.map((r) => Number(r.stamps) || 0));
     setRows((rs) => [
       ...rs,
-      { key: nextKey++, stamps: String(Math.min(MAX_STAMPS_REQUIRED, last + 4)), title: "", rewardType: "service_free", discount: "", serviceId: "" },
+      { key: nextKey++, stamps: String(Math.min(MAX_STAMPS_REQUIRED, last + 4)), title: "", rewardType: "service_free", discount: "", serviceIds: [] },
     ]);
   }
 
@@ -116,8 +136,10 @@ export function LoyaltySettingsClient() {
         title: r.title,
         rewardType: r.rewardType,
         discountPercentage: r.rewardType === "percentage_discount" && r.discount.trim() !== "" ? Number(r.discount) : null,
-        serviceIdRestriction: r.rewardType === "service_free" && r.serviceId ? r.serviceId : null,
+        serviceIds: canRestrictServices(r.rewardType) ? r.serviceIds : [],
       })),
+      enabled,
+      minStampAmountCents: minAmount.trim() === "" ? 0 : (parseMoneyToCents(minAmount) ?? Number.NaN),
       cardTitle: title,
       brandColor: color,
       stampIconMediaId: icon?.id ?? null,
@@ -133,6 +155,8 @@ export function LoyaltySettingsClient() {
     try {
       const saved = await apiFetch<SettingsDto>("/api/loyalty/settings", { method: "PUT", json: parsed.data });
       setRows(sortMilestones(saved.milestones).map(toRow));
+      setEnabled(saved.enabled);
+      setMinAmount(saved.minStampAmountCents > 0 ? centsToInput(saved.minStampAmountCents) : "");
       setNotice({ kind: "ok", text: "Configuración guardada. Las tarjetas ya usan las nuevas reglas." });
     } catch (err) {
       setNotice({ kind: "error", text: describeError(err) });
@@ -150,10 +174,6 @@ export function LoyaltySettingsClient() {
   }
   if (!loaded) return <p className="text-sm text-text-3">Cargando…</p>;
 
-  const serviceOptions = [
-    { value: ANY_SERVICE, label: "Cualquier servicio" },
-    ...services.map((s) => ({ value: s.id, label: s.name })),
-  ];
   const hex = /^#[0-9a-f]{6}$/i.test(color) ? color : DEFAULT_COLOR;
   const numbers = rows.map((r) => Number(r.stamps)).filter((n) => Number.isInteger(n) && n > 0);
   const finalStamps = Math.max(0, ...numbers);
@@ -162,6 +182,68 @@ export function LoyaltySettingsClient() {
 
   return (
     <form onSubmit={save} noValidate className="max-w-2xl space-y-6">
+      <Card>
+        <CardHeader>
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <CardTitle>Tarjeta de fidelización</CardTitle>
+              <CardDescription>
+                Programa de sellos: cada venta que cumple las reglas suma un sello y, al llegar a la meta, el cliente
+                canjea su premio.
+              </CardDescription>
+            </div>
+            <Switch
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              disabled={saving}
+              label={enabled ? "Apagar la tarjeta de fidelización" : "Encender la tarjeta de fidelización"}
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p className={cn("text-sm", enabled ? "text-success-text" : "text-text-3")} role="status">
+            {enabled
+              ? "Programa encendido."
+              : "Programa apagado: ninguna venta suma sello. Las tarjetas y los sellos que ya existen se conservan."}
+          </p>
+        </CardContent>
+      </Card>
+
+      {enabled && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Monto mínimo para ganar un sello</CardTitle>
+            <CardDescription>
+              Una sola regla para todos los servicios: cualquier venta que iguale o supere este monto suma 1 sello,
+              sea un corte, una limpieza facial o un tinte. Déjalo vacío para que toda venta con cliente sume sello. Los premios, en cambio, sí se canjean solo en los servicios que elijas abajo.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1.5">
+            <Label htmlFor="loy-min-amount">Monto mínimo por venta</Label>
+            <div className="max-w-[10rem]">
+              <MoneyInput
+                id="loy-min-amount"
+                value={minAmount}
+                onChange={setMinAmount}
+                currency={currency}
+                disabled={saving}
+                invalid={!!errors.minStampAmountCents}
+              />
+            </div>
+            {errors.minStampAmountCents ? (
+              <p className="text-xs text-danger-text">{errors.minStampAmountCents}</p>
+            ) : (
+              <p className="text-xs text-text-3">
+                {minAmount.trim() !== "" && parseMoneyToCents(minAmount)
+                  ? `Una venta de ${money(parseMoneyToCents(minAmount)!, currency)} o más suma 1 sello; una menor, no.`
+                  : "Sin monto mínimo: toda venta con cliente identificado suma 1 sello."}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {enabled && (
       <Card>
         <CardHeader>
           <CardTitle>Premios por hito</CardTitle>
@@ -193,12 +275,12 @@ export function LoyaltySettingsClient() {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <Label htmlFor={`loy-title-${r.key}`} required>Premio</Label>
+                      <Label htmlFor={`loy-title-${r.key}`}>Título del premio <span className="font-normal text-text-3">(opcional)</span></Label>
                       <Input
                         id={`loy-title-${r.key}`}
                         value={r.title}
                         maxLength={120}
-                        placeholder="Ej. Corte gratis, 20% de descuento"
+                        placeholder={defaultRewardTitle(r.rewardType, r.discount ? Number(r.discount) : null)}
                         onChange={(e) => patchRow(r.key, { title: e.target.value })}
                         aria-invalid={!!err("title")}
                         disabled={saving}
@@ -240,7 +322,7 @@ export function LoyaltySettingsClient() {
                             id={`loy-discount-${r.key}`}
                             inputMode="numeric"
                             value={r.discount}
-                            onChange={(e) => patchRow(r.key, { discount: e.target.value.replace(/\D/g, "").slice(0, 3) })}
+                            onChange={(e) => patchRow(r.key, { discount: clampPercent(e.target.value) })}
                             className="max-w-[8rem] tabular-nums"
                             aria-invalid={!!err("discountPercentage")}
                             disabled={saving}
@@ -252,21 +334,24 @@ export function LoyaltySettingsClient() {
                         )}
                       </div>
                     )}
-                    {r.rewardType === "service_free" && services.length > 0 && (
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`loy-service-${r.key}`}>Aplica a</Label>
-                        <SearchSelect
-                          id={`loy-service-${r.key}`}
-                          value={r.serviceId || ANY_SERVICE}
-                          onChange={(v) => patchRow(r.key, { serviceId: v === ANY_SERVICE ? "" : v })}
-                          options={serviceOptions}
-                          searchPlaceholder="Buscar servicio…"
-                          disabled={saving}
-                          triggerClassName="bg-card px-2"
-                        />
-                      </div>
-                    )}
                   </div>
+                  {canRestrictServices(r.rewardType) && services.length + offers.length > 0 && (
+                    <div className="space-y-1.5">
+                      <Label>
+                        {r.rewardType === "percentage_discount" ? "Se puede canjear en" : "El servicio u oferta gratis puede ser"}
+                      </Label>
+                      <ServiceMultiSelect
+                        idPrefix={`loy-redeem-${r.key}`}
+                        services={services}
+                        offers={offers}
+                        value={r.serviceIds}
+                        onChange={(ids) => patchRow(r.key, { serviceIds: ids })}
+                        currency={currency}
+                        disabled={saving}
+                        emptyHint="Sin marcar ninguno, se puede canjear en cualquier servicio."
+                      />
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -282,10 +367,12 @@ export function LoyaltySettingsClient() {
             Agregar premio
           </Button>
           <p className="text-xs text-text-3">
-            Hasta {MAX_MILESTONES} premios, entre el sello 1 y el {MAX_STAMPS_REQUIRED}. Ej: 4 → 20% de descuento, 8 → corte gratis.
+            Hasta {MAX_MILESTONES} premios, entre el sello 1 y el {MAX_STAMPS_REQUIRED}. La meta de la tarjeta es el
+            último hito. Ej: 4 → 20% de descuento, 8 → corte gratis.
           </p>
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -390,7 +477,7 @@ export function LoyaltySettingsClient() {
               })}
             </div>
             <ul className="mt-2 space-y-0.5 text-xs text-text-3">
-              {sortMilestones(rows.map((r) => ({ stamps: Number(r.stamps) || 0, title: r.title.trim() || "—" }))).map(
+              {sortMilestones(rows.map((r) => ({ stamps: Number(r.stamps) || 0, title: r.title.trim() || defaultRewardTitle(r.rewardType, r.discount ? Number(r.discount) : null) }))).map(
                 (m, i) => (
                   <li key={i}>
                     Sello {m.stamps || "–"}: {m.title}

@@ -1,0 +1,1 @@
+ALTER TABLE "loyalty_settings" ADD COLUMN "min_stamp_amount_cents" integer DEFAULT 0 NOT NULL;

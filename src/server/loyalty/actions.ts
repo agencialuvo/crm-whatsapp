@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import type { PostgresJsQueryResultHKT } from "drizzle-orm/postgres-js";
@@ -6,7 +6,17 @@ import { getDb, schema } from "@/lib/db";
 import type { LoyaltyMilestone } from "@/lib/db/schema";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import { MIN_ADJUST_NOTE, milestoneProgress, sortMilestones, type LoyaltySettingsInput } from "@/lib/loyalty";
+import {
+  MIN_ADJUST_NOTE,
+  milestoneProgress,
+  restrictedServices,
+  saleEarnsStamp,
+  sortMilestones,
+  stampsAllowItems,
+  type BirthdayCampaignDto,
+  type BirthdayCampaignInput,
+  type LoyaltySettingsInput,
+} from "@/lib/loyalty";
 import { normalizeMx } from "@/lib/meta/client";
 import { SalonError } from "@/server/business/http";
 
@@ -89,6 +99,154 @@ export async function getLoyaltySettings(
   return created;
 }
 
+/** Todos los servicios y ofertas de la lista son de esta organización (se guardan juntos: `srv_…` y `cmb_…`). */
+async function assertServicesExist(db: DbExecutor, organizationId: string, ids: string[], message: string): Promise<void> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return;
+  const s = schema.service;
+  const c = schema.combo;
+  const [services, combos] = await Promise.all([
+    db.select({ id: s.id }).from(s).where(scoped(s.organizationId, organizationId, inArray(s.id, unique))),
+    db.select({ id: c.id }).from(c).where(scoped(c.organizationId, organizationId, inArray(c.id, unique))),
+  ]);
+  if (services.length + combos.length !== unique.length) throw new SalonError("service_not_found", 404, message);
+}
+
+/** La campaña de cumpleaños (Ajustes → Marketing); crea los ajustes por defecto si faltan. */
+export async function getBirthdayCampaign(
+  organizationId: string,
+  db: DbExecutor = getDb()
+): Promise<BirthdayCampaignDto> {
+  const s = await getLoyaltySettings(organizationId, db);
+  return { enabled: s.birthdayEnabled, percentage: s.birthdayPercentage, serviceIds: s.birthdayServiceIds };
+}
+
+export async function updateBirthdayCampaign(
+  organizationId: string,
+  input: BirthdayCampaignInput
+): Promise<BirthdayCampaignDto> {
+  const db = getDb();
+  await getLoyaltySettings(organizationId, db); // garantiza la fila
+  await assertServicesExist(db, organizationId, input.serviceIds, "Un servicio elegido ya no existe");
+  const [row] = await db
+    .update(settingsT)
+    .set({
+      birthdayEnabled: input.enabled,
+      birthdayPercentage: input.percentage,
+      birthdayServiceIds: input.serviceIds,
+      updatedAt: new Date(),
+    })
+    .where(scoped(settingsT.organizationId, organizationId))
+    .returning();
+  if (!row) throw new SalonError("loyalty_settings_unavailable", 404, "No se pudo guardar la campaña");
+  return { enabled: row.birthdayEnabled, percentage: row.birthdayPercentage, serviceIds: row.birthdayServiceIds };
+}
+
+/**
+ * ¿Este cliente ya usó su descuento de cumpleaños en ese AÑO? Es un beneficio de una vez por año.
+ * Cuenta una venta con el descuento aplicado y, para las anteriores a que existiera la marca en la venta,
+ * la constancia «sin sello» que todavía cuelga de una venta que existe (una venta anulada se borra y deja
+ * libre el beneficio).
+ */
+export async function birthdayUsedInYear(
+  db: DbExecutor,
+  organizationId: string,
+  contactId: string,
+  year: number
+): Promise<boolean> {
+  const from = new Date(Date.UTC(year, 0, 1));
+  const to = new Date(Date.UTC(year + 1, 0, 1));
+  const sale = schema.serviceSale;
+  const [bySale] = await db
+    .select({ id: sale.id })
+    .from(sale)
+    .where(
+      scoped(
+        sale.organizationId,
+        organizationId,
+        eq(sale.contactId, contactId),
+        eq(sale.birthdayDiscount, true),
+        gte(sale.createdAt, from),
+        lt(sale.createdAt, to)
+      )
+    )
+    .limit(1);
+  if (bySale) return true;
+  const [byTx] = await db
+    .select({ id: txT.id })
+    .from(txT)
+    .innerJoin(cardT, eq(cardT.id, txT.cardId))
+    .where(
+      scoped(
+        txT.organizationId,
+        organizationId,
+        eq(cardT.contactId, contactId),
+        eq(txT.type, "birthday_excluded"),
+        sql`${txT.saleId} is not null`,
+        gte(txT.createdAt, from),
+        lt(txT.createdAt, to)
+      )
+    )
+    .limit(1);
+  return !!byTx;
+}
+
+/**
+ * Canjear un premio DENTRO de una venta: el hito debe existir, la tarjeta alcanzarlo y, si el premio se
+ * restringe a ciertos servicios u ofertas, la venta debe incluir al menos uno. Si algo no cuadra, la venta
+ * entera falla (no se cobra sin canjear ni se canjea sin cobrar). Va en la transacción de la venta.
+ */
+export async function redeemInSale(
+  tx: DbExecutor,
+  p: {
+    organizationId: string;
+    contactId: string;
+    saleId: string;
+    staffId: string;
+    milestoneStamps: number;
+    items: { serviceId: string | null; comboId: string | null }[];
+  }
+): Promise<RegisterLoyaltyTransactionResult> {
+  const settings = await getLoyaltySettings(p.organizationId, tx);
+  if (!settings.enabled) {
+    throw new SalonError("loyalty_disabled", 422, "La tarjeta de fidelización está apagada: no se puede canjear.");
+  }
+  const milestone = settings.milestones.find((m) => m.stamps === p.milestoneStamps);
+  if (!milestone) throw new SalonError("milestone_not_found", 422, "Ese premio ya no está en el programa");
+  const allowed = restrictedServices(milestone);
+  if (allowed.length > 0 && !stampsAllowItems(allowed, p.items)) {
+    const names = await namesOf(tx, p.organizationId, allowed);
+    throw new SalonError(
+      "reward_not_allowed",
+      422,
+      `Este premio solo se puede canjear en: ${names.join(", ") || "los servicios que elegiste"}.`
+    );
+  }
+  return registerLoyaltyTransaction(
+    {
+      organizationId: p.organizationId,
+      contactId: p.contactId,
+      staffId: p.staffId,
+      saleId: p.saleId,
+      type: "redeemed",
+      milestoneStamps: p.milestoneStamps,
+      notes: `Canje en caja: ${milestone.title}`,
+    },
+    tx
+  );
+}
+
+/** Los nombres de unos servicios u ofertas (para los mensajes). */
+async function namesOf(db: DbExecutor, organizationId: string, ids: string[]): Promise<string[]> {
+  const s = schema.service;
+  const c = schema.combo;
+  const [services, combos] = await Promise.all([
+    db.select({ id: s.id, name: s.name }).from(s).where(scoped(s.organizationId, organizationId, inArray(s.id, ids))),
+    db.select({ id: c.id, name: c.name }).from(c).where(scoped(c.organizationId, organizationId, inArray(c.id, ids))),
+  ]);
+  return [...services, ...combos].map((x) => x.name);
+}
+
 /**
  * Guarda la configuración del programa: los hitos (ordenados por sello; ya traen solo lo
  * suyo según su tipo), el icono de los sellos y el aspecto de la tarjeta. El icono y los
@@ -113,17 +271,12 @@ export async function updateLoyaltySettings(
     if (media.kind !== "image") throw new SalonError("media_not_image", 422, "El icono del sello debe ser una imagen");
   }
 
-  const serviceIds = [...new Set(input.milestones.flatMap((m) => (m.serviceIdRestriction ? [m.serviceIdRestriction] : [])))];
-  if (serviceIds.length > 0) {
-    const s = schema.service;
-    const found = await db
-      .select({ id: s.id })
-      .from(s)
-      .where(scoped(s.organizationId, organizationId, inArray(s.id, serviceIds)));
-    if (found.length !== serviceIds.length) {
-      throw new SalonError("service_not_found", 404, "Un servicio elegido para un premio ya no existe");
-    }
-  }
+  await assertServicesExist(
+    db,
+    organizationId,
+    input.milestones.flatMap((m) => m.serviceIds ?? []),
+    "Un servicio elegido ya no existe"
+  );
 
   const [row] = await db
     .update(settingsT)
@@ -132,6 +285,8 @@ export async function updateLoyaltySettings(
       stampIconMediaId: iconId,
       cardTitle: input.cardTitle,
       brandColor: input.brandColor.toLowerCase(),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.minStampAmountCents !== undefined ? { minStampAmountCents: input.minStampAmountCents } : {}),
       updatedAt: new Date(),
     })
     .where(scoped(settingsT.organizationId, organizationId))
@@ -309,10 +464,23 @@ export async function registerLoyaltyTransaction(
           totalStampsEarned: delta > 0 ? sql`${cardT.totalStampsEarned} + ${delta}` : cardT.totalStampsEarned,
           updatedAt: now,
         })
-        .where(delta < 0 ? and(mine, gte(cardT.currentStamps, -delta)) : mine)
+        // Ni bajo 0 ni por encima de la meta de la tarjeta (el último premio): más sellos no tienen sentido.
+        .where(
+          delta < 0
+            ? and(mine, gte(cardT.currentStamps, -delta))
+            : finalStamps > 0
+              ? and(mine, lte(cardT.currentStamps, finalStamps - delta))
+              : mine
+        )
         .returning();
       if (!updated) {
-        throw new SalonError("not_enough_stamps", 409, "El ajuste dejaría la tarjeta con sellos negativos");
+        throw new SalonError(
+          delta < 0 ? "not_enough_stamps" : "above_card_goal",
+          409,
+          delta < 0
+            ? "El ajuste dejaría la tarjeta con sellos negativos"
+            : `La tarjeta tiene un máximo de ${finalStamps} sellos: el ajuste lo superaría.`
+        );
       }
     } else {
       // birthday_excluded: no altera sellos; se relee la tarjeta para devolver su estado actual.
@@ -449,9 +617,14 @@ export async function stampSale(
     saleId: string;
     staffId: string;
     birthdayDiscount: boolean;
+    /** Lo cobrado: decide si la venta da sello (monto mínimo de la tarjeta, sin importar el servicio). */
+    amountCents: number;
   }
 ): Promise<RegisterLoyaltyTransactionResult | null> {
   try {
+    const settings = await getLoyaltySettings(p.organizationId, tx);
+    // Programa apagado, o la venta no llega al monto mínimo: no hay tarjeta que tocar.
+    if (!settings.enabled || !saleEarnsStamp(settings.minStampAmountCents, p.amountCents)) return null;
     return await registerLoyaltyTransaction(
       {
         organizationId: p.organizationId,
@@ -469,6 +642,41 @@ export async function stampSale(
     console.error("[loyalty] no se pudo sellar la venta", p.saleId, err);
     return null;
   }
+}
+
+/**
+ * Anular una venta que canjeó un premio devuelve los sellos del canje (y descuenta el premio entregado),
+ * dejando constancia. Va dentro de la transacción de la anulación, antes de borrar la venta.
+ */
+export async function reverseSaleRedemption(
+  tx: DbExecutor,
+  organizationId: string,
+  saleId: string
+): Promise<void> {
+  const [redeemed] = await tx
+    .select({ cardId: txT.cardId, stampsChange: txT.stampsChange })
+    .from(txT)
+    .where(scoped(txT.organizationId, organizationId, eq(txT.saleId, saleId), eq(txT.type, "redeemed")))
+    .limit(1);
+  if (!redeemed) return;
+  const back = Math.abs(redeemed.stampsChange);
+  await tx
+    .update(cardT)
+    .set({
+      currentStamps: sql`${cardT.currentStamps} + ${back}`,
+      totalRewardsRedeemed: sql`GREATEST(${cardT.totalRewardsRedeemed} - 1, 0)`,
+      updatedAt: new Date(),
+    })
+    .where(scoped(cardT.organizationId, organizationId, eq(cardT.id, redeemed.cardId)));
+  await tx.insert(txT).values({
+    id: newId("loyaltyTransaction"),
+    organizationId,
+    cardId: redeemed.cardId,
+    saleId: null,
+    type: "adjusted",
+    stampsChange: back,
+    notes: "Venta anulada: se devuelven los sellos del canje",
+  });
 }
 
 /**

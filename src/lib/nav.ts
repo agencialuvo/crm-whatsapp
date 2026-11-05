@@ -181,7 +181,7 @@ export function settingsSections({
   tiktok = false,
   salon = false,
 }: {
-  /** 031 — "Fidelización" existe solo con la bandera SALON. */
+  /** 031 — «Marketing» (campaña de cumpleaños y tarjeta de fidelización) existe solo con la bandera SALON. */
   salon?: boolean;
   agenda?: boolean;
   /** 016 — "Anuncios" existe solo con la bandera ATRIBUCION. */
@@ -214,12 +214,20 @@ export function settingsSections({
     { href: "/ajustes/equipo", label: "Equipo" },
   ];
   if (atribucion) negocio.push({ href: "/ajustes/anuncios", label: "Anuncios" });
-  if (salon) negocio.push({ href: "/ajustes/fidelizacion", label: "Fidelización" });
+
+  // Marketing (retención y recompra): solo con el módulo del salón, igual que la fidelización que ya tenía.
+  const marketing: SettingsLink[] = salon
+    ? [
+        { href: "/ajustes/cumpleanos", label: "Campaña de cumpleaños" },
+        { href: "/ajustes/fidelizacion", label: "Tarjeta de fidelización" },
+      ]
+    : [];
 
   return [
     { title: "Canales", links: canales },
     { title: "Agente", links: agente },
     { title: "Negocio", links: negocio },
+    ...(marketing.length > 0 ? [{ title: "Marketing", links: marketing }] : []),
     // Lo personal de quien inició sesión, no de la organización: lo ve cualquier rol.
     {
       title: "Cuenta",

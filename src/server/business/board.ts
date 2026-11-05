@@ -161,6 +161,8 @@ export async function getBoard(
         booking: schema.booking,
         contactId: schema.contact.id,
         contactName: schema.contact.name,
+        contactBirthdayDay: schema.contact.birthdayDay,
+        contactBirthdayMonth: schema.contact.birthdayMonth,
         saleId: schema.serviceSale.id,
         serviceName: schema.service.name,
         comboName: schema.combo.name,
@@ -204,7 +206,14 @@ export async function getBoard(
         time: timeInTz(startUtc, tz),
         durationMinutes: r.booking.durationMinutes,
         contact:
-          r.contactId && r.contactName ? { id: r.contactId, name: r.contactName } : null,
+          r.contactId && r.contactName
+            ? {
+                id: r.contactId,
+                name: r.contactName,
+                birthdayDay: r.contactBirthdayDay,
+                birthdayMonth: r.contactBirthdayMonth,
+              }
+            : null,
         staffId: r.booking.staffId,
         notes: r.booking.notes,
         itemName: r.comboName ?? r.serviceName ?? null,

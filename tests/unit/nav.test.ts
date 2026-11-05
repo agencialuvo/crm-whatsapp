@@ -142,6 +142,15 @@ describe("ajustes en tres secciones", () => {
     });
   });
 
+  it("Marketing existe solo con SALON, entre Negocio y Cuenta, con campaña de cumpleaños y tarjeta", () => {
+    expect(settingsSections({}).map((s) => s.title)).not.toContain("Marketing");
+    const sections = settingsSections({ salon: true });
+    expect(sections.map((s) => s.title)).toEqual(["Canales", "Agente", "Negocio", "Marketing", "Cuenta"]);
+    expect(links(sections).Marketing).toEqual(["Campaña de cumpleaños", "Tarjeta de fidelización"]);
+    // La fidelización ya no cuelga de Negocio.
+    expect(links(sections).Negocio).toEqual(["Marca", "Plantillas", "Equipo"]);
+  });
+
   it("con todo encendido, cada pantalla de Ajustes tiene exactamente un enlace", () => {
     const all = settingsSections({
       agenda: true,

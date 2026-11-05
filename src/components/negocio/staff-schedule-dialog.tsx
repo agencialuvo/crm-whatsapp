@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { clampPercent } from "@/lib/percent";
 import { Input } from "@/components/ui/input";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
@@ -256,7 +257,7 @@ export function StaffScheduleDialog({
               max={100}
               step={1}
               value={global}
-              onChange={(e) => setGlobal(e.target.value)}
+              onChange={(e) => setGlobal(clampPercent(e.target.value))}
               disabled={busy}
               className="w-32"
             />
@@ -288,7 +289,7 @@ export function StaffScheduleDialog({
                         step={1}
                         placeholder={global.trim() || String(s.defaultCommissionPercentage)}
                         value={overrides[s.id] ?? ""}
-                        onChange={(e) => setOverrides((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                        onChange={(e) => setOverrides((prev) => ({ ...prev, [s.id]: clampPercent(e.target.value) }))}
                         disabled={busy}
                         className="w-20"
                       />

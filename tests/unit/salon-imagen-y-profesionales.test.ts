@@ -132,6 +132,7 @@ describe("caja: quién puede cobrar qué", () => {
       { id: B, name: "Beto" },
       { id: C, name: "Carla" },
     ],
+    birthday: { enabled: true, percentage: 20, serviceIds: [] },
   };
 
   it("un servicio con lista restringe a esos profesionales", () => {

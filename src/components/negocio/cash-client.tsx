@@ -75,6 +75,8 @@ export function CashClient({
   const [viewing, setViewing] = useState<SaleRowDto | null>(null);
   // La ficha del cliente de una venta (si el contacto sigue existiendo).
   const [fichaId, setFichaId] = useState<string | null>(null);
+  /** Nombre del cliente y ojo abren la MISMA ficha; una venta sin cliente solo tiene su detalle. */
+  const openClient = (r: SaleRowDto) => (r.contactId ? setFichaId(r.contactId) : setViewing(r));
   const [notice, setNotice] = useState<string | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
 
@@ -369,7 +371,7 @@ export function CashClient({
                           <td className="max-w-[10rem] truncate px-2 py-2">
                             <button
                               type="button"
-                              onClick={() => (r.contactId ? setFichaId(r.contactId) : setViewing(r))}
+                              onClick={() => openClient(r)}
                               title={r.contactId ? "Ver la ficha del cliente" : "Ver el detalle de la venta"}
                               className="max-w-full truncate rounded-sm text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
@@ -406,9 +408,13 @@ export function CashClient({
                             <Button
                               variant="ghost"
                               size="icon"
-                              aria-label={`Ver el detalle de la venta de ${r.customerName}`}
-                              title="Ver detalle"
-                              onClick={() => setViewing(r)}
+                              aria-label={
+                                r.contactId
+                                  ? `Ver la ficha de ${r.customerName}`
+                                  : `Ver el detalle de la venta de ${r.customerName}`
+                              }
+                              title={r.contactId ? "Ver ficha del cliente" : "Ver detalle"}
+                              onClick={() => openClient(r)}
                             >
                               <Eye className="h-4 w-4" aria-hidden />
                             </Button>

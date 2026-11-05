@@ -352,6 +352,8 @@ export const serviceSale = pgTable(
     paymentMethod: text("payment_method", {
       enum: ["efectivo", "yape_plin", "tarjeta", "otro"],
     }).notNull(),
+    /** Se aplicó el descuento de cumpleaños: sostiene «una vez por año» por cliente. */
+    birthdayDiscount: boolean("birthday_discount").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
@@ -511,7 +513,10 @@ export type LoyaltyMilestone = {
   title: string;           // Título corto (ej: "20% Descuento", "Corte Gratis")
   rewardType: "service_free" | "percentage_discount" | "product_free";
   discountPercentage?: number; // Opcional si es porcentaje
-  serviceIdRestriction?: string; // Opcional si aplica a un servicio específico
+  /** @deprecated Un solo servicio (formato anterior). Se lee como `serviceIds: [id]`. */
+  serviceIdRestriction?: string;
+  /** Servicios donde se puede canjear el premio (descuento o servicio gratis). Vacío/ausente = cualquiera. */
+  serviceIds?: string[];
 };
 
 /* ============================================================
@@ -615,6 +620,21 @@ export const loyaltySettings = pgTable(
     milestones: jsonb("milestones").$type<LoyaltyMilestone[]>().notNull().default([
       { stamps: 10, title: "Corte de cabello gratis", rewardType: "service_free" }
     ]),
+
+    /** Interruptor del programa de sellos: apagado, ninguna venta suma sello. */
+    enabled: boolean("enabled").notNull().default(true),
+    /** Servicios que dan sello al venderse. Vacío = todos. */
+    eligibleServiceIds: jsonb("eligible_service_ids").$type<string[]>().notNull().default([]),
+    /** Monto mínimo de la venta (centavos) para ganar 1 sello. 0 = cualquier venta suma. */
+    minStampAmountCents: integer("min_stamp_amount_cents").notNull().default(0),
+
+    /* Campaña de cumpleaños (Ajustes → Marketing): vive aquí porque comparte el sello «sin sello». */
+    /** Interruptor de la campaña: apagada, Caja no ofrece el descuento de cumpleaños. */
+    birthdayEnabled: boolean("birthday_enabled").notNull().default(true),
+    /** Porcentaje de la rebaja de cumpleaños. */
+    birthdayPercentage: integer("birthday_percentage").notNull().default(20),
+    /** Servicios sobre los que aplica el descuento de cumpleaños. Vacío = todos. */
+    birthdayServiceIds: jsonb("birthday_service_ids").$type<string[]>().notNull().default([]),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
