@@ -57,11 +57,11 @@ export const BULK_COLUMNS: Record<BulkModule, BulkColumn[]> = {
     {
       key: "descripcion",
       required: false,
-      help: "Obligatoria en las ofertas (qué incluye); opcional en servicios",
+      help: "Opcional: en las ofertas, qué incluye",
       examples: ["Corte con máquina y tijera", "Corte + barba + mascarilla"],
     },
     { key: "precio", required: true, help: "En soles, ej. 25 o 25.50", examples: ["25", "60"] },
-    { key: "duracion_min", required: true, help: "Minutos, de 5 a 600", examples: ["30", "75"] },
+    { key: "duracion_min", required: false, help: "Opcional. Minutos, de 5 a 600", examples: ["30", "75"] },
     {
       key: "comision_pct",
       required: false,
@@ -182,8 +182,11 @@ export function parseServiceRow(row: number, c: Cells): ParsedRow<ServiceRow> {
 
   const priceCents = parseMoneyToCents(c.precio ?? "");
   if (priceCents === null) errors.push({ row, column: "precio", message: "Escribe el precio en soles (ej. 25 o 25.50)" });
-  const duration = parseInteger(c.duracion_min ?? "");
-  if (duration === null) errors.push({ row, column: "duracion_min", message: "Escribe la duración en minutos (número entero)" });
+  // La duración es opcional: vacía = sin duración definida.
+  const durationRaw = (c.duracion_min ?? "").trim();
+  const duration = durationRaw === "" ? null : parseInteger(durationRaw);
+  const durationBad = durationRaw !== "" && duration === null;
+  if (durationBad) errors.push({ row, column: "duracion_min", message: "Escribe la duración en minutos (número entero) o déjala vacía" });
   const active = parseBool(c.activo ?? "", true);
   if (active === null) errors.push({ row, column: "activo", message: "Escribe «si» o «no»" });
 
@@ -194,7 +197,7 @@ export function parseServiceRow(row: number, c: Cells): ParsedRow<ServiceRow> {
     if (!imageRef) errors.push({ row, column: "imagen_url", message: "La imagen debe ser una URL copiada desde Medios" });
   }
 
-  if (!kind || priceCents === null || duration === null || active === null) {
+  if (!kind || priceCents === null || durationBad || active === null) {
     return { ok: false, row, errors };
   }
 
@@ -219,7 +222,7 @@ export function parseServiceRow(row: number, c: Cells): ParsedRow<ServiceRow> {
   const kw = (c.palabra_clave ?? "").trim();
   const parsed = comboInputSchema.safeParse({
     name: c.nombre ?? "",
-    description: c.descripcion ?? "",
+    description: (c.descripcion ?? "").trim() || null,
     priceCents,
     durationMinutes: duration,
     keywordTrigger: kw ? normalizeKeyword(kw) : null,

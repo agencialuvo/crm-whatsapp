@@ -42,9 +42,12 @@ describe("filas de servicios y ofertas", () => {
     expect(r.ok && r.data.imageRef).toBe(MED);
   });
 
-  it("una oferta exige descripción y normaliza su palabra clave", () => {
+  it("una oferta normaliza su palabra clave; la descripción y la duración son opcionales", () => {
     const base = { tipo: "Oferta", nombre: "Combo Fresh", precio: "60.50", duracion_min: "75", palabra_clave: "combo fresco!" };
-    expect(parseServiceRow(3, base).ok).toBe(false);
+    // Sin descripción: sigue siendo una fila válida.
+    expect(parseServiceRow(3, base).ok).toBe(true);
+    const sinDuracion = parseServiceRow(3, { ...base, duracion_min: "", descripcion: "Corte + barba" });
+    expect(sinDuracion.ok && sinDuracion.data.input.durationMinutes).toBeNull();
     const ok = parseServiceRow(3, { ...base, descripcion: "Corte + barba" });
     expect(ok.ok && ok.data.kind === "oferta" && ok.data.input.keywordTrigger).toBe("COMBO_FRESCO");
     expect(ok.ok && ok.data.input.priceCents).toBe(6050);

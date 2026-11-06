@@ -7,6 +7,7 @@ import {
   getSettings,
   upsertSettings,
 } from "@/server/agenda/settings";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,8 @@ export const dynamic = "force-dynamic";
  */
 export const GET = withAuth(async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const settings = await getSettings(session.organizationId);
   return Response.json({ settings });
 });
@@ -56,6 +59,8 @@ const putSchema = z.object({
  */
 export const PUT = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
 

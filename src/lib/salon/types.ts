@@ -17,7 +17,8 @@ export type ServiceDto = {
   name: string;
   description: string | null;
   priceCents: number;
-  durationMinutes: number;
+  /** `null` = sin duración definida: la agenda usa su franja estándar. */
+  durationMinutes: number | null;
   defaultCommissionPercentage: number;
   active: boolean;
   /** Imagen de la biblioteca de Medios (id y su URL), o `null`. */
@@ -30,9 +31,11 @@ export type ServiceDto = {
 export type ComboDto = {
   id: string;
   name: string;
+  /** Vacío si no se escribió (es opcional). */
   description: string;
   priceCents: number;
-  durationMinutes: number;
+  /** `null` = sin duración definida: la agenda usa su franja estándar. */
+  durationMinutes: number | null;
   keywordTrigger: string | null;
   active: boolean;
   imageMediaId: string | null;
@@ -59,8 +62,8 @@ export type StaffDto = {
 /** Lo mínimo para armar una venta: SIN comisiones (lo ve todo el equipo). */
 export type SaleOptionsDto = {
   /** `staffIds` vacío = lo da todo el equipo. */
-  services: { id: string; name: string; priceCents: number; durationMinutes: number; staffIds: string[] }[];
-  combos: { id: string; name: string; priceCents: number; durationMinutes: number; staffIds: string[] }[];
+  services: { id: string; name: string; priceCents: number; durationMinutes: number | null; staffIds: string[] }[];
+  combos: { id: string; name: string; priceCents: number; durationMinutes: number | null; staffIds: string[] }[];
   staff: { id: string; name: string }[];
   /** Campaña de cumpleaños (Ajustes → Marketing): decide si Caja ofrece el descuento y sobre qué servicios. */
   birthday: { enabled: boolean; percentage: number; serviceIds: string[] };

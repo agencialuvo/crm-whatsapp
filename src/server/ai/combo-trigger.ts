@@ -61,13 +61,17 @@ export function detectComboTrigger<T extends TriggerCombo>(
  * datos, no como órdenes, y el precio sale formateado en la moneda del negocio.
  */
 export function buildComboTriggerInstruction(combo: TriggerCombo, currency: string): string {
+  // La descripción es opcional: sin ella se salta ese paso (y no se inventa qué incluye).
+  const steps = [
+    "Salúdalo reconociendo que vio la promoción.",
+    ...(combo.description.trim() ? [`Dile qué incluye: ${combo.description}`] : []),
+    `Dile el precio especial: ${money(combo.priceCents, currency)}.`,
+    "Cierra invitándolo a agendar y pregúntale qué día y hora le conviene.",
+  ];
   return [
     "INSTRUCCIÓN PRIORITARIA PARA ESTE TURNO — el cliente llegó por una promoción activa.",
     `Su mensaje contiene la palabra clave de la oferta «${combo.name}». Respóndele con {"action":"reply"}:`,
-    "1. Salúdalo reconociendo que vio la promoción.",
-    `2. Dile qué incluye: ${combo.description}`,
-    `3. Dile el precio especial: ${money(combo.priceCents, currency)}.`,
-    "4. Cierra invitándolo a agendar y pregúntale qué día y hora le conviene.",
+    ...steps.map((t, i) => `${i + 1}. ${t}`),
     "Usa exactamente esos datos; no inventes beneficios ni precios distintos.",
   ].join("\n");
 }

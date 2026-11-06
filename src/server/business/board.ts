@@ -397,6 +397,8 @@ export async function createBoardBooking(
   if (!item) throw new SalonError("item_not_found", 404, "El servicio u oferta no existe o está inactivo.");
 
   const settings = await getSettings(organizationId);
+  // Sin duración definida, la cita ocupa la franja estándar de la agenda.
+  const durationMinutes = item.durationMinutes ?? settings.slotMinutes;
   const day = dayIsoInTz(new Date(startMs), settings.timezone);
   const board = await getBoard(organizationId, day);
 
@@ -405,7 +407,7 @@ export async function createBoardBooking(
   if (slot.past) throw new SalonError("slot_past", 409, "Esa hora ya pasó.");
 
   // Las franjas que la cita ocupa: desde la hora elegida hasta que acaba el servicio.
-  const endMs = startMs + item.durationMinutes * 60_000;
+  const endMs = startMs + durationMinutes * 60_000;
   const span = board.slots.filter(
     (s) => Date.parse(s.startUtc) < endMs && Date.parse(s.endUtc) > startMs
   );
@@ -413,7 +415,7 @@ export async function createBoardBooking(
     throw new SalonError(
       "slot_too_short",
       409,
-      `${item.name} dura ${item.durationMinutes} min y no cabe: el negocio cierra antes. Elige una hora más temprana.`
+      `${item.name} dura ${durationMinutes} min y no cabe: el negocio cierra antes. Elige una hora más temprana.`
     );
   }
   if (span.some((s) => s.blocked)) {
@@ -457,7 +459,7 @@ export async function createBoardBooking(
       staffId,
       serviceId: input.serviceId ?? null,
       comboId: input.comboId ?? null,
-      durationMinutes: item.durationMinutes,
+      durationMinutes,
       notes: input.notes ?? null,
       source: "manual",
       requireOffer: false,

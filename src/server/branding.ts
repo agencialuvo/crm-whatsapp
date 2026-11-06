@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import {
   DEFAULT_BRANDING,
@@ -56,6 +56,36 @@ export async function getBranding(
   organizationId?: string | null
 ): Promise<Branding> {
   return (await getBrandingContext(organizationId)).branding;
+}
+
+/**
+ * La marca con la que se le habla a UNA persona (sus correos): la de SU negocio, no la de «la única
+ * organización de la instancia» — con varios negocios eso devolvía el primero que hubiera, y los
+ * correos de todos salían a nombre de otro. Sin negocio todavía (un registro sin verificar) o
+ * sin cuenta, la marca de la plataforma (`DEFAULT_BRANDING`).
+ */
+export async function getBrandingForUser(userId: string | null | undefined): Promise<Branding> {
+  if (!userId) return DEFAULT_BRANDING;
+  const [row] = await getDb()
+    .select({ metadata: schema.organization.metadata })
+    .from(schema.member)
+    .innerJoin(schema.organization, eq(schema.organization.id, schema.member.organizationId))
+    .where(eq(schema.member.userId, userId))
+    .orderBy(asc(schema.member.createdAt))
+    .limit(1);
+  if (!row) return DEFAULT_BRANDING;
+  const meta = parseMetadata(row.metadata);
+  return normalizeBranding((meta.branding as Partial<Branding> | undefined) ?? null);
+}
+
+/** Igual, por correo (el restablecimiento solo conoce la dirección). Una dirección sin cuenta → marca de la plataforma. */
+export async function getBrandingForEmail(email: string): Promise<Branding> {
+  const [row] = await getDb()
+    .select({ id: schema.user.id })
+    .from(schema.user)
+    .where(sql`lower(${schema.user.email}) = ${email.trim().toLowerCase()}`)
+    .limit(1);
+  return getBrandingForUser(row?.id);
 }
 
 export async function saveBranding(

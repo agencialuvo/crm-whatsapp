@@ -34,7 +34,7 @@ export const dynamic = "force-dynamic";
 const AGENCY_NAME = "Agencia Luvo";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const branding = await getBranding().catch(() => DEFAULT_BRANDING);
+  const branding = DEFAULT_BRANDING;
   const producto = productName([...enabledChannels()]);
   // Sin sesión (inicio de sesión, recuperación) la pestaña lleva siempre el
   // nombre de la agencia; dentro del sistema, la marca de la organización.

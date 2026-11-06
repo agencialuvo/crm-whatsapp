@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  * Moneda, zona y «hoy» se resuelven aquí y bajan como props, igual que en Caja.
  */
 export default async function HistorialDeTurnosPage() {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "finances" });
   const [{ currency }, timezone] = await Promise.all([
     getBranding(session.organizationId),
     businessTimezone(session.organizationId),

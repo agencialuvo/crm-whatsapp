@@ -3,6 +3,7 @@ import { canConfigure } from "@/lib/auth/roles";
 import { loyaltyTransactionInputSchema } from "@/lib/loyalty";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
 import { registerLoyaltyTransaction } from "@/server/loyalty/actions";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ export const dynamic = "force-dynamic";
 export const POST = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "member");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "loyalty");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, loyaltyTransactionInputSchema);
   if (!body.ok) return body.response;
   if (body.data.type === "adjusted" && !canConfigure(session.role)) {

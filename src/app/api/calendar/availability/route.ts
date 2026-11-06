@@ -3,6 +3,7 @@ import { dayIsoInTz, timeInTz, dayLabelInTz } from "@/lib/time/slots";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { computeAvailability } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
  */
 export const GET = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
 
   const url = new URL(req.url);
   const from = url.searchParams.get("from");

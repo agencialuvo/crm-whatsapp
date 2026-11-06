@@ -16,7 +16,7 @@ export default async function GastosPage({
 }: {
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "finances" });
   // Desde Caja llega el periodo que se estaba revisando.
   const { from, to } = await searchParams;
   const isDay = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);

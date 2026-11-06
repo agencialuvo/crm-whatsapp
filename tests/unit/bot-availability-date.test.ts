@@ -1,6 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CalendarSettings } from "@/server/agenda/settings";
 
+// El candado por plan consulta la BD: estas pruebas son de otra cosa (rol, rangos, fechas), así que lo dejan pasar.
+vi.mock("@/server/business/saas-guard", () => ({ moduleGate: async () => null, getPlanAccess: async () => ({ unrestricted: true, modules: [], planName: "test" }) }));
+
 /**
  * `GET /api/bot/availability` con `date` (R10): lo que la ruta REGISTRA como
  * oferta y lo que contesta. El motor de huecos es el de verdad; solo se

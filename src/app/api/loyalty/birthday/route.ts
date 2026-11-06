@@ -2,6 +2,7 @@ import { parseBody, withAuth } from "@/lib/api";
 import { birthdayCampaignInputSchema } from "@/lib/loyalty";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
 import { getBirthdayCampaign, updateBirthdayCampaign } from "@/server/loyalty/actions";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session) => {
   const denied = salonGate(session, "member");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, ["loyalty", "finances"]);
+  if (planBlocked) return planBlocked;
   try {
     return Response.json(await getBirthdayCampaign(session.organizationId));
   } catch (err) {
@@ -20,6 +23,8 @@ export const GET = withAuth(async (session) => {
 export const PUT = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "loyalty");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, birthdayCampaignInputSchema);
   if (!body.ok) return body.response;
   try {

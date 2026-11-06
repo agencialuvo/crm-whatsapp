@@ -8,6 +8,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const session = vi.hoisted(() => ({ role: "member", organizationId: "org_a", userId: "usr_1" }));
 const registrar = vi.hoisted(() => vi.fn());
+// El candado por plan consulta la BD: esta prueba es de otra cosa (roles), así que lo deja pasar.
+vi.mock("@/server/business/saas-guard", () => ({ moduleGate: async () => null, getPlanAccess: async () => ({ unrestricted: true, modules: [], planName: "test" }) }));
 
 vi.mock("@/lib/auth/session", () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},

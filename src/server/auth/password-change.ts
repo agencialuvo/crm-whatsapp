@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { verifyPassword } from "better-auth/crypto";
 import { getDb, schema } from "@/lib/db";
 import { consumeOtp, createOtp, OTP_TTL_SECONDS, type OtpResult } from "@/server/auth/otp";
-import { getBranding } from "@/server/branding";
+import { getBranding, getBrandingForUser } from "@/server/branding";
 import { passwordResetAvailable } from "@/server/email/config";
 import { sendMail } from "@/server/email/mailer";
 import { passwordChangeCodeEmail, passwordChangedAlertEmail } from "@/server/email/templates";
@@ -37,13 +37,13 @@ export async function verifyCurrentPassword(userId: string, password: string): P
 /** Genera un código nuevo (el anterior deja de valer) y lo manda por correo. */
 export async function issueChangeCode(userId: string, email: string): Promise<void> {
   const code = await createOtp("password-change", userId);
-  const branding = await getBranding().catch(() => null);
+  const branding = await getBrandingForUser(userId).catch(() => null);
   const mail = passwordChangeCodeEmail({
     code,
     minutes: Math.round(OTP_TTL_SECONDS / 60),
     productName: branding?.name ?? "",
   });
-  await sendMail({ to: email, ...mail });
+  await sendMail({ to: email, ...mail, fromName: branding?.name });
 }
 
 /** Comprueba el código y, si es el correcto, lo gasta. */
@@ -76,7 +76,7 @@ export async function notifyPasswordChanged(input: {
   });
   await Promise.all(
     recipients.map((to) =>
-      sendMail({ to, ...mail }).catch((err) =>
+      sendMail({ to, ...mail, fromName: branding?.name }).catch((err) =>
         console.error(
           "[auth] no se pudo enviar el aviso de cambio de contraseña:",
           err instanceof Error ? err.message : "error"

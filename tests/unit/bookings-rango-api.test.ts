@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// El candado por plan consulta la BD: estas pruebas son de otra cosa (rol, rangos, fechas), así que lo dejan pasar.
+vi.mock("@/server/business/saas-guard", () => ({ moduleGate: async () => null, getPlanAccess: async () => ({ unrestricted: true, modules: [], planName: "test" }) }));
+
 /**
  * 215 (raíz) — `GET /api/bookings?from=&to=` de punta a punta hasta la BD
  * (falsa): el rango se corta a la medianoche del NEGOCIO, pasa por `scoped()`,

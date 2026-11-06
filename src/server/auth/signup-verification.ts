@@ -3,7 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { createOtp, OTP_TTL_SECONDS } from "@/server/auth/otp";
 import { onOwnerRegistered } from "@/server/auth/on-signup";
 import { verifyCurrentPassword } from "@/server/auth/password-change";
-import { getBranding } from "@/server/branding";
+import { getBrandingForUser } from "@/server/branding";
 import { sendMail } from "@/server/email/mailer";
 import { signupCodeEmail } from "@/server/email/templates";
 
@@ -53,13 +53,14 @@ export async function findPendingSignupWithPassword(email: string, password: str
 /** Genera el código y lo manda al correo de la cuenta. Lanza si el correo falla. */
 export async function sendSignupCode(user: Pick<PendingSignup, "id" | "email">): Promise<void> {
   const code = await createOtp("signup-verify", user.id);
-  const branding = await getBranding().catch(() => null);
+  // Sin negocio todavía (se crea al verificar): la marca de la plataforma, no la de otro negocio.
+  const branding = await getBrandingForUser(user.id).catch(() => null);
   const mail = signupCodeEmail({
     code,
     minutes: Math.round(OTP_TTL_SECONDS / 60),
     productName: branding?.name ?? "",
   });
-  await sendMail({ to: user.email, ...mail });
+  await sendMail({ to: user.email, ...mail, fromName: branding?.name });
 }
 
 /**

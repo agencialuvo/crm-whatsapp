@@ -2,6 +2,7 @@ import { apiError, withAuth } from "@/lib/api";
 import { BULK_FILENAMES, BULK_MODULES, type BulkModule } from "@/lib/salon/bulk";
 import { buildTemplate } from "@/server/business/bulk-import";
 import { salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "salon");
+  if (planBlocked) return planBlocked;
   const modulo = new URL(req.url).searchParams.get("modulo");
   if (!BULK_MODULES.includes(modulo as BulkModule)) {
     return apiError(422, "invalid_query", "modulo debe ser servicios, equipo o clientes");

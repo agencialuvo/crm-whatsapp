@@ -2,6 +2,7 @@ import { apiError, withAuth } from "@/lib/api";
 import { BULK_MAX_BYTES, BULK_MODULES, type BulkModule } from "@/lib/salon/bulk";
 import { runImport } from "@/server/business/bulk-import";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ export const dynamic = "force-dynamic";
 export const POST = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "salon");
+  if (planBlocked) return planBlocked;
 
   const modulo = new URL(req.url).searchParams.get("modulo");
   if (!BULK_MODULES.includes(modulo as BulkModule)) {

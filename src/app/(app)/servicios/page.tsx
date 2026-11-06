@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 /** Módulo SALON — servicios regulares y ofertas de publicidad. Solo dueño/administrador. */
 export default async function ServiciosPage() {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "salon" });
   const { currency } = await getBranding(session.organizationId);
   return (
     <NegocioPage title="Servicios">

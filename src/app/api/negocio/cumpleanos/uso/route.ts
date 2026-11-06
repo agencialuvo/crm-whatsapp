@@ -3,6 +3,7 @@ import { withAuth } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
 import { birthdayUsedInYear } from "@/server/loyalty/actions";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,8 @@ const querySchema = z.object({
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "member");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, ["loyalty", "finances"]);
+  if (planBlocked) return planBlocked;
   const url = new URL(req.url);
   const parsed = querySchema.safeParse({
     contactId: url.searchParams.get("contactId"),

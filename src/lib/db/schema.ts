@@ -140,7 +140,8 @@ export const service = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     priceCents: integer("price_cents").notNull(), // en centavos (ej: 2500 = S/ 25.00)
-    durationMinutes: integer("duration_minutes").notNull().default(30), // relativo/estimado
+    /** Opcional: sin duración definida (`null`) la agenda usa su franja estándar (`slotMinutes`). */
+    durationMinutes: integer("duration_minutes"),
     photoUrl: text("photo_url"), // Sin uso (queda por compatibilidad): la imagen vive en `imageMediaId`
     /** Imagen elegida de la biblioteca (Medios). Si el medio se borra, queda sin imagen. */
     imageMediaId: text("image_media_id").references(() => mediaLibraryItem.id, {
@@ -181,7 +182,8 @@ export const combo = pgTable(
     name: text("name").notNull(), // ej: "Oferta Fresh"
     description: text("description").notNull(), // "Incluye corte, mascarilla, masajes..."
     priceCents: integer("price_cents").notNull(),
-    durationMinutes: integer("duration_minutes").notNull().default(60),
+    /** Opcional: sin duración definida (`null`) la agenda usa su franja estándar (`slotMinutes`). */
+    durationMinutes: integer("duration_minutes"),
     /**
      * Palabra clave para enganchar con anuncios de Meta/TikTok (ej: "COMBO_FRESH").
      * Se guarda normalizada (MAYÚSCULAS, sin espacios) y es única por negocio.
@@ -588,6 +590,136 @@ export const userUiPreferences = pgTable(
   },
   (t) => [
     uniqueIndex("user_ui_preferences_org_user_uq").on(t.organizationId, t.userId),
+  ]
+);
+
+/* ============================================================
+ * Módulo SaaS: Suscripciones, Planes y Categorías de Sector
+ * ============================================================ */
+
+/**
+ * Planes de suscripción disponibles en la plataforma SaaS (ej: Básico, Pro, Enterprise).
+ * Define los límites y los módulos habilitados por defecto para cada nivel.
+ */
+export const plan = pgTable(
+  "plan",
+  {
+    id: text("id").primaryKey(), // prefix: 'plan'
+    name: text("name").notNull(), // Ej: "Pro", "Enterprise"
+    slug: text("slug").notNull().unique(), // Ej: "pro", "enterprise"
+    description: text("description"),
+    priceMonthlyCents: integer("price_monthly_cents").notNull().default(0),
+    
+    /** Límites y capacidades del plan en formato JSON */
+    features: jsonb("features").$type<{
+      maxStaff?: number; // Límite de personal (-1 = ilimitado)
+      maxMonthlyAiTurns?: number; // Límite de turnos de IA al mes
+      channels: ("whatsapp" | "instagram" | "messenger" | "tiktok")[];
+      modules: ("agenda" | "salon" | "atribucion" | "loyalty" | "finances")[];
+    }>().notNull(),
+
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    check("plan_price_nonneg", sql`${t.priceMonthlyCents} >= 0`),
+  ]
+);
+
+/**
+ * Suscripción activa de una organización en la plataforma SaaS.
+ */
+export const subscription = pgTable(
+  "subscription",
+  {
+    id: text("id").primaryKey(), // prefix: 'sub'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => plan.id),
+    
+    status: text("status", { enum: ["trialing", "active", "past_due", "canceled", "paused"] })
+      .notNull()
+      .default("trialing"),
+    
+    currentPeriodStart: timestamp("current_period_start").notNull().defaultNow(),
+    currentPeriodEnd: timestamp("current_period_end").notNull(),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("subscription_org_uq").on(t.organizationId),
+    index("subscription_status_idx").on(t.status),
+  ]
+);
+
+/**
+ * Categorías de sector preconfiguradas (Templates base).
+ * Ejemplo: Barbería/Salón, Clínica/Salud, Consultoría/Servicios, Inmobiliaria.
+ */
+export const businessCategory = pgTable(
+  "business_category",
+  {
+    id: text("id").primaryKey(), // prefix: 'bcat'
+    key: text("key").notNull().unique(), // ej: 'salon', 'health', 'services'
+    name: text("name").notNull(), // ej: 'Salón de Belleza / Barbería'
+    description: text("description"),
+    
+    /** Vocabulario / Etiquetas adaptadas al sector para la interfaz (UI) */
+    labels: jsonb("labels").$type<{
+      staffName: string; // ej: "Barbero", "Doctor", "Especialista"
+      serviceName: string; // ej: "Corte", "Consulta", "Servicio"
+      resourceName: string; // ej: "Silla", "Consultorio", "Cabina"
+      clientName: string; // ej: "Cliente", "Paciente"
+    }>().notNull(),
+
+    /** Módulos y banderas encendidas por defecto para este sector */
+    defaultModules: jsonb("default_modules").$type<string[]>().notNull().default([]),
+    
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  }
+);
+
+/**
+ * Perfil de negocio y personalizaciones libres (Overrides) por organización.
+ * Permite adaptar la categoría base a los requerimientos específicos del cliente.
+ */
+export const businessProfile = pgTable(
+  "business_profile",
+  {
+    id: text("id").primaryKey(), // prefix: 'bpro'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => businessCategory.id),
+    
+    /** Personalizaciones o cambios específicos (Overrides) sobre los labels de la categoría */
+    customLabels: jsonb("custom_labels").$type<Record<string, string>>().notNull().default({}),
+    
+    /** Reglas o instrucciones especiales inyectadas directamente al prompt de la IA */
+    customAiPromptRules: text("custom_ai_prompt_rules"),
+
+    /**
+     * Si el propietario ya eligió su sector. `pending`: el negocio nació con el sector por defecto y
+     * el panel le ofrece elegir (un modal que se puede omitir); `skipped`: lo dejó para después;
+     * `chosen`: lo eligió. El valor por defecto es `chosen` a propósito: una fila que no pasó por
+     * el alta (creada a mano o anterior a esto) nunca debe mostrar el asistente.
+     */
+    sectorStatus: text("sector_status", { enum: ["pending", "skipped", "chosen"] })
+      .notNull()
+      .default("chosen"),
+    
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("business_profile_org_uq").on(t.organizationId),
   ]
 );
 

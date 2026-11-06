@@ -22,6 +22,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { canConfigure } from "@/lib/auth/roles";
+import type { PlanModule } from "@/lib/plan-modules";
+
+export type { PlanModule };
 
 /**
  * #87 — El modelo del menú, separado del componente que lo pinta.
@@ -39,6 +42,10 @@ export type NavItem = {
   icon: LucideIcon;
   /** Muestra el contador de no leídos (solo la Bandeja). */
   badge?: boolean;
+  /** Módulo del plan que da acceso a esta entrada; sin él, la entrada es libre. */
+  module?: PlanModule;
+  /** El plan activo no incluye el módulo: se pinta restringida (insignia «Pro»), no se oculta. */
+  locked?: boolean;
 };
 
 export type NavGroup = {
@@ -78,7 +85,16 @@ export function appNavGroups({
   agenda = false,
   salon = false,
   role,
+  activeModules,
 }: {
+  /**
+   * Módulos que incluye el plan de la organización. Las entradas de un módulo que
+   * NO esté en la lista salen con `locked` (llamada a mejorar el plan) en vez de
+   * desaparecer. `undefined` = sin datos del plan (cargando, o sin plan): nada se
+   * restringe. Ojo: esto no sustituye a las banderas de despliegue ni al rol, que
+   * siguen decidiendo si la entrada EXISTE; el plan solo decide si está bloqueada.
+   */
+  activeModules?: readonly string[];
   /** 015 — "Citas" solo existe si esta instancia encendió la agenda. */
   agenda?: boolean;
   /** Módulo SALON — Panel, Caja, Servicios, Equipo y Clientes (la agenda por sillas vive dentro de Citas). */
@@ -92,23 +108,23 @@ export function appNavGroups({
   // La agenda por sillas no es un ítem aparte: es la vista principal de Citas
   // (con su calendario y bloqueos en otra pestaña).
   const trabajo: NavItem[] = [
-    ...(salonManager ? [{ href: "/panel", label: "Panel", icon: LayoutDashboard }] : []),
+    ...(salonManager ? [{ href: "/panel", label: "Panel", icon: LayoutDashboard, module: "finances" as const }] : []),
     ...(NAV_V2
       ? [
           { href: "/bandeja", label: "Bandeja", icon: Inbox, badge: true },
           { href: "/pipeline", label: "Pipeline", icon: Kanban },
         ]
       : []),
-    ...(salonManager ? [{ href: "/caja", label: "Caja", icon: Wallet }] : []),
-    ...(agenda ? [{ href: "/citas", label: "Citas", icon: CalendarDays }] : []),
-    ...(salonManager ? [{ href: "/clientes", label: "Clientes", icon: UserCheck }] : []),
+    ...(salonManager ? [{ href: "/caja", label: "Caja", icon: Wallet, module: "finances" as const }] : []),
+    ...(agenda ? [{ href: "/citas", label: "Citas", icon: CalendarDays, module: "agenda" as const }] : []),
+    ...(salonManager ? [{ href: "/clientes", label: "Clientes", icon: UserCheck, module: "salon" as const }] : []),
   ];
   const gestion: NavItem[] = [
     ...(salonManager
       ? [
-          { href: "/servicios", label: "Servicios", icon: Scissors },
-          { href: "/equipo", label: "Equipo", icon: UsersRound },
-          { href: "/gastos", label: "Gastos", icon: Receipt },
+          { href: "/servicios", label: "Servicios", icon: Scissors, module: "salon" as const },
+          { href: "/equipo", label: "Equipo", icon: UsersRound, module: "salon" as const },
+          { href: "/gastos", label: "Gastos", icon: Receipt, module: "finances" as const },
         ]
       : []),
     { href: "/contactos", label: "Contactos", icon: Users },
@@ -123,7 +139,9 @@ export function appNavGroups({
     { title: "Trabajo", items: trabajo },
     { title: "Gestión y equipo", items: gestion },
   ].filter((g) => g.items.length > 0);
-  if (!NAV_V2) return [...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }];
+  if (!NAV_V2) {
+    return markLocked([...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
+  }
 
   const agente: NavItem[] = [];
   // Un miembro del equipo no puede hacer ninguno de los pasos de la guía.
@@ -137,7 +155,18 @@ export function appNavGroups({
   groups.push({ title: "Agente", items: agente });
   // 019 — Se mide al final: primero se atiende y se organiza.
   groups.push({ items: [{ href: "/resultados", label: "Resultados", icon: ChartColumn }] });
-  return [...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }];
+  return markLocked([...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
+}
+
+/** Marca como `locked` las entradas cuyo módulo no incluye el plan. Sin datos del plan, no toca nada. */
+function markLocked(groups: NavGroup[], activeModules: readonly string[] | undefined): NavGroup[] {
+  if (!activeModules) return groups;
+  return groups.map((g) => ({
+    ...g,
+    items: g.items.map((item) =>
+      item.module && !activeModules.includes(item.module) ? { ...item, locked: true } : item
+    ),
+  }));
 }
 
 /**
@@ -180,7 +209,10 @@ export function settingsSections({
   messenger = false,
   tiktok = false,
   salon = false,
+  sector = false,
 }: {
+  /** «Tipo de negocio» existe solo si la organización tiene perfil de sector (módulo SaaS). */
+  sector?: boolean;
   /** 031 — «Marketing» (campaña de cumpleaños y tarjeta de fidelización) existe solo con la bandera SALON. */
   salon?: boolean;
   agenda?: boolean;
@@ -214,6 +246,7 @@ export function settingsSections({
     { href: "/ajustes/equipo", label: "Equipo" },
   ];
   if (atribucion) negocio.push({ href: "/ajustes/anuncios", label: "Anuncios" });
+  if (sector) negocio.push({ href: "/ajustes/sector", label: "Tipo de negocio" });
 
   // Marketing (retención y recompra): solo con el módulo del salón, igual que la fidelización que ya tenía.
   const marketing: SettingsLink[] = salon

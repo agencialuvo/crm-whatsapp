@@ -3,6 +3,7 @@ import { expenseItemInputSchema } from "@/lib/salon/expenses";
 import { periodFromRequest } from "@/server/analytics/period";
 import { createExpense, getExpensesReport } from "@/server/business/expenses";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   try {
     const url = new URL(req.url);
     const period = await periodFromRequest(session.organizationId, url);
@@ -32,6 +35,8 @@ export const GET = withAuth(async (session, req: Request) => {
 export const POST = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, expenseItemInputSchema);
   if (!body.ok) return body.response;
   try {

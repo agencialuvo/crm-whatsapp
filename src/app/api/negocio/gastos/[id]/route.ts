@@ -2,6 +2,7 @@ import { parseBody, withAuth } from "@/lib/api";
 import { expenseItemInputSchema } from "@/lib/salon/expenses";
 import { deleteExpense, updateExpense } from "@/server/business/expenses";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,8 @@ type Params = { params: Promise<{ id: string }> };
 export const PUT = withAuth(async (session, req: Request, ctx: Params) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, expenseItemInputSchema);
   if (!body.ok) return body.response;
   const { id } = await ctx.params;
@@ -26,6 +29,8 @@ export const PUT = withAuth(async (session, req: Request, ctx: Params) => {
 export const DELETE = withAuth(async (session, _req: Request, ctx: Params) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   const { id } = await ctx.params;
   try {
     await deleteExpense(session.organizationId, id);

@@ -21,6 +21,9 @@ vi.mock("@/server/business/bulk-import", async (orig) => ({
 import { POST } from "@/app/api/negocio/carga-masiva/route";
 import { GET } from "@/app/api/negocio/carga-masiva/plantilla/route";
 
+// El candado por plan consulta la BD: estas pruebas son de otra cosa (rol, rangos, fechas), así que lo dejan pasar.
+vi.mock("@/server/business/saas-guard", () => ({ moduleGate: async () => null, getPlanAccess: async () => ({ unrestricted: true, modules: [], planName: "test" }) }));
+
 function upload(modulo: string) {
   const form = new FormData();
   form.append("file", new File([new Uint8Array([80, 75, 3, 4])], "x.xlsx"));

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 /** Ajustes → Marketing → Tarjeta de fidelización. Solo con la bandera SALON y solo dueño o administrador. */
 export default async function LoyaltySettingsPage() {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "loyalty" });
   const { currency } = await getBranding(session.organizationId);
   return <LoyaltySettingsClient currency={currency} />;
 }

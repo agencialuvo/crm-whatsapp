@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronUp, LogOut, X } from "lucide-react";
+import { ChevronUp, Lock, LogOut, X } from "lucide-react";
 import type { Branding } from "@/lib/branding";
 import { cn, initials } from "@/lib/utils";
 import {
@@ -16,7 +16,8 @@ import { signOut } from "@/lib/auth/client";
 import { goToSettingsAnchor } from "@/lib/settings-scroll";
 import { useEvents } from "@/components/use-events";
 import { BrandLogo } from "@/components/brand-mark";
-import { ConfirmDialog } from "@/components/negocio/modal";
+import { ConfirmDialog, Modal } from "@/components/negocio/modal";
+import { useOrganizationContext } from "@/hooks/use-organization-context";
 
 /**
  * Un renglón del menú, como el `side-item` del mockup de la landing: texto
@@ -64,6 +65,9 @@ export function AppNav({
   const [unread, setUnread] = useState(0);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Entrada bloqueada por el plan sobre la que se pulsó: abre la invitación a mejorar.
+  const [upsell, setUpsell] = useState<NavItem | null>(null);
+  const { context } = useOrganizationContext();
   const menuRef = useRef<HTMLDivElement>(null);
 
   // El menú del usuario se cierra al navegar, con Escape y al tocar fuera.
@@ -105,12 +109,38 @@ export function AppNav({
   });
 
   // #87 — Qué hay en el menú y en qué grupo lo decide `appNavGroups`; aquí
-  // solo se pinta.
-  const allGroups = appNavGroups({ agenda, salon, role });
+  // solo se pinta. Los módulos del plan llegan por el contexto de la organización;
+  // mientras carga (o si falla) no hay datos del plan y nada se bloquea.
+  const allGroups = appNavGroups({
+    agenda,
+    salon,
+    role,
+    activeModules: context?.plan.features.modules,
+  });
   const groups = allGroups.filter((g) => !g.bottom);
   const bottomGroup = allGroups.find((g) => g.bottom);
 
   function renderItem(item: NavItem) {
+    // El plan no incluye este módulo: se ve, atenuado y con «Pro», pero no navega.
+    if (item.locked) {
+      return (
+        <button
+          key={item.href}
+          type="button"
+          onClick={() => setUpsell(item)}
+          title="No incluido en tu plan"
+          className={cn(navItemClass(false), "w-full text-left opacity-60 hover:opacity-100")}
+        >
+          <item.icon className="h-5 w-5 shrink-0 text-text-3" strokeWidth={1.8} aria-hidden />
+          <span className="flex-1">{item.label}</span>
+          <span className="flex items-center gap-1 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-text">
+            <Lock className="h-2.5 w-2.5" strokeWidth={2.2} aria-hidden />
+            Pro
+          </span>
+          <span className="sr-only">: no incluido en tu plan</span>
+        </button>
+      );
+    }
     const active = isNavActive(pathname, item.href);
     return (
       <Link
@@ -271,6 +301,20 @@ export function AppNav({
           </button>
         </div>
       </aside>
+      {upsell && (
+        <Modal
+          title={`${upsell.label} no está en tu plan`}
+          description={`Tu plan${context ? ` ${context.plan.name}` : ""} no incluye este módulo.`}
+          onClose={() => setUpsell(null)}
+          size="sm"
+        >
+          <p className="text-sm text-text-2">
+            {role === "owner" || role === "admin"
+              ? "Mejora tu plan para activarlo: las pantallas y los datos del módulo quedarán disponibles al instante."
+              : "Pídele al propietario o a un administrador que mejore el plan para activarlo."}
+          </p>
+        </Modal>
+      )}
       {confirmingSignOut && (
         <ConfirmDialog
           title="Cerrar sesión"

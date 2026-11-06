@@ -4,7 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { createOtp, OTP_TTL_SECONDS } from "@/server/auth/otp";
-import { getBranding } from "@/server/branding";
+import { getBrandingForUser } from "@/server/branding";
 import { sendMail } from "@/server/email/mailer";
 import { loginCodeEmail, twoFactorSetupCodeEmail } from "@/server/email/templates";
 
@@ -61,25 +61,25 @@ export async function findUserByEmail(email: string): Promise<LoginUser | null> 
 /** Genera el código de acceso y lo manda al correo de la cuenta. Lanza si el correo falla. */
 export async function sendLoginCode(user: Pick<LoginUser, "id" | "email">): Promise<void> {
   const code = await createOtp("login-2fa", user.id);
-  const branding = await getBranding().catch(() => null);
+  const branding = await getBrandingForUser(user.id).catch(() => null);
   const mail = loginCodeEmail({
     code,
     minutes: Math.round(OTP_TTL_SECONDS / 60),
     productName: branding?.name ?? "",
   });
-  await sendMail({ to: user.email, ...mail });
+  await sendMail({ to: user.email, ...mail, fromName: branding?.name });
 }
 
 /** Manda el código de PRUEBA con el que se confirma que el correo llega antes de activar el 2FA. */
 export async function sendSetupCode(user: Pick<LoginUser, "id" | "email">): Promise<void> {
   const code = await createOtp("2fa-setup", user.id);
-  const branding = await getBranding().catch(() => null);
+  const branding = await getBrandingForUser(user.id).catch(() => null);
   const mail = twoFactorSetupCodeEmail({
     code,
     minutes: Math.round(OTP_TTL_SECONDS / 60),
     productName: branding?.name ?? "",
   });
-  await sendMail({ to: user.email, ...mail });
+  await sendMail({ to: user.email, ...mail, fromName: branding?.name });
 }
 
 /* ------------------------------ códigos de respaldo ------------------------------ */

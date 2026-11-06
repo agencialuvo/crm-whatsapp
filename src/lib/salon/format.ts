@@ -77,8 +77,9 @@ export function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-/** "30 min", "1 h", "1 h 30 min". */
-export function durationLabel(minutes: number): string {
+/** "30 min", "1 h", "1 h 30 min"; `null` = el servicio no fija duración. */
+export function durationLabel(minutes: number | null): string {
+  if (minutes === null) return "Sin duración";
   if (minutes < 60) return `${minutes} min`;
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;

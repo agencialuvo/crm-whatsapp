@@ -299,7 +299,7 @@ export function CatalogClient({ currency }: { currency: string }) {
                   </div>
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-text-2">
-                  {durationLabel(s.durationMinutes)}
+                  {s.durationMinutes === null ? "—" : durationLabel(s.durationMinutes)}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums">
                   {money(s.priceCents, currency)}
@@ -395,7 +395,7 @@ export function CatalogClient({ currency }: { currency: string }) {
                 )}
               </td>
               <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-text-2">
-                {durationLabel(c.durationMinutes)}
+                {c.durationMinutes === null ? "—" : durationLabel(c.durationMinutes)}
               </td>
               <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums">
                 {money(c.priceCents, currency)}

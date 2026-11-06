@@ -31,6 +31,7 @@ import { agendaEnabled } from "@/server/agenda/flag";
 import { bookSlot, offerSlots } from "@/server/agenda/agent";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { salonEnabled } from "@/server/business/flag";
+import { getPlanAccess } from "@/server/business/saas-guard";
 import { notifyHandoff } from "@/server/notifications/service";
 import { getComboTriggerInstruction } from "@/server/ai/barbershop-context";
 
@@ -250,7 +251,8 @@ export async function runAgentTurn(
     .where(eq(schema.pipelineStage.organizationId, organizationId))
     .orderBy(asc(schema.pipelineStage.position));
 
-  const agenda = agendaEnabled();
+  // La agenda del agente exige la bandera Y que el plan la incluya (sin plan, sin restricción).
+  const agenda = agendaEnabled() && (await getPlanAccess(organizationId).then((a) => a.unrestricted || a.modules.includes("agenda")));
 
   /**
    * 015 — Los huecos vigentes, con su instante exacto.

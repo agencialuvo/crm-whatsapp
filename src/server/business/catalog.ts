@@ -181,7 +181,7 @@ export async function createService(
         name: input.name,
         description: input.description ?? null,
         priceCents: input.priceCents,
-        durationMinutes: input.durationMinutes,
+        durationMinutes: input.durationMinutes ?? null,
         defaultCommissionPercentage:
           input.defaultCommissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE,
         active: input.active ?? true,
@@ -269,9 +269,10 @@ export async function createCombo(
           id: newId("combo"),
           organizationId,
           name: input.name,
-          description: input.description,
+          // La columna no admite nulo: «sin descripción» se guarda como texto vacío.
+          description: input.description ?? "",
           priceCents: input.priceCents,
-          durationMinutes: input.durationMinutes,
+          durationMinutes: input.durationMinutes ?? null,
           keywordTrigger: input.keywordTrigger ?? null,
           active: input.active ?? true,
           imageMediaId: input.imageMediaId ?? null,
@@ -297,7 +298,7 @@ export async function updateCombo(
       await assertRefs(tx, organizationId, patch);
       const set = {
         ...(patch.name !== undefined && { name: patch.name }),
-        ...(patch.description !== undefined && { description: patch.description }),
+        ...(patch.description !== undefined && { description: patch.description ?? "" }),
         ...(patch.priceCents !== undefined && { priceCents: patch.priceCents }),
         ...(patch.durationMinutes !== undefined && {
           durationMinutes: patch.durationMinutes,

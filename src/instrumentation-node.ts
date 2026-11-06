@@ -4,6 +4,7 @@ import { mediaDirStatus } from "@/server/media-dir";
 import { leerConfigDespacho } from "@/server/brains/config";
 import { iniciarWorker, tanda } from "@/server/dispatch/worker";
 import { cifrarSecretosEnClaro } from "@/server/zernio/secreto-guardado";
+import { seedPlatformCatalog } from "@/server/seed/platform-catalog";
 
 /**
  * 008 — Aviso al arranque si MEDIA_DIR no es escribible. Sin esto, el primer
@@ -102,5 +103,21 @@ export function resumeDispatch(): void {
     console.error(
       "[boot] BRAIN_DISPATCH_URL está definida pero falta BOT_API_KEY (mínimo 16 caracteres): el despacho al cerebro queda INACTIVO."
     );
+  }
+}
+
+/**
+ * Catálogo base de la plataforma (categorías de sector y plan por defecto).
+ * Idempotente y nunca tumba el arranque: si la BD aún no está lista o la tabla
+ * no existe, se reintenta en el próximo arranque.
+ */
+export async function seedPlatformData(): Promise<void> {
+  try {
+    const r = await seedPlatformCatalog();
+    if (r.categories + r.plans > 0) {
+      console.log(`[boot] catálogo de plataforma: ${r.categories} categoría(s) y ${r.plans} plan(es) nuevos`);
+    }
+  } catch (err) {
+    console.error("[boot] no se pudo sembrar el catálogo de plataforma:", err instanceof Error ? err.message : err);
   }
 }

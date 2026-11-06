@@ -11,6 +11,7 @@ import { agendaEnabled } from "@/server/agenda/flag";
 import { getSettings } from "@/server/agenda/settings";
 import { getBranding } from "@/server/branding";
 import { salonEnabled } from "@/server/business/flag";
+import { requirePlanModule } from "@/server/business/page-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,7 @@ export default async function BookingsPage({
   if (!agendaEnabled()) notFound();
   const session = await getSessionOrNull();
   if (!session) redirect("/iniciar-sesion");
+  await requirePlanModule(session, "agenda");
 
   const settings = await getSettings(session.organizationId);
   const params = await searchParams;

@@ -46,7 +46,7 @@ export function ServiceDialog({
   const [staffSelected, setStaffSelected] = useState<string[]>(item?.staffIds ?? []);
   const [description, setDescription] = useState(item?.description ?? "");
   const [price, setPrice] = useState(item ? centsToInput(item.priceCents) : "");
-  const [duration, setDuration] = useState(String(item?.durationMinutes ?? 30));
+  const [duration, setDuration] = useState(item?.durationMinutes != null ? String(item.durationMinutes) : "");
   const [commission, setCommission] = useState(
     String(item?.defaultCommissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE)
   );
@@ -65,7 +65,7 @@ export function ServiceDialog({
       name,
       description,
       priceCents: cents ?? Number.NaN,
-      durationMinutes: toInt(duration),
+      durationMinutes: duration.trim() === "" ? null : toInt(duration),
       defaultCommissionPercentage: toInt(commission),
       active,
       imageMediaId: image?.id ?? null,
@@ -155,7 +155,7 @@ export function ServiceDialog({
             />
           </Field>
           <Field
-            label="Duración" required
+            label="Duración (opcional)"
             htmlFor="srv-duration"
             error={errors.durationMinutes}
             hint="Horas y minutos: 00:30 es media hora."

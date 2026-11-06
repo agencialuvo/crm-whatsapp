@@ -16,7 +16,29 @@ export type MailMessage = {
   subject: string;
   text: string;
   html?: string;
+  /**
+   * Nombre con el que sale el remitente (la marca del negocio de quien recibe). La dirección sigue
+   * siendo la de `SMTP_FROM`; solo cambia el nombre que se ve. Sin él, el de `SMTP_FROM`.
+   */
+  fromName?: string;
 };
+
+/** Solo la dirección de un remitente `Nombre <correo@dominio>` o `correo@dominio`. */
+export function senderAddress(from: string): string {
+  const m = /<([^<>]+)>\s*$/.exec(from.trim());
+  return (m ? m[1]! : from).trim();
+}
+
+/** El nombre que se ve en el remitente, sin saltos de línea ni caracteres que rompan el encabezado. */
+export function cleanSenderName(name: string): string {
+  return name.replace(/[\r\n\t"<>\\]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+}
+
+/** El `from` de nodemailer: el nombre de la marca (si hay) sobre la dirección de la instancia. */
+export function buildFrom(configFrom: string, fromName?: string): string | { name: string; address: string } {
+  const name = fromName ? cleanSenderName(fromName) : "";
+  return name ? { name, address: senderAddress(configFrom) } : configFrom;
+}
 
 export class EmailNotConfiguredError extends Error {
   constructor() {
@@ -51,7 +73,7 @@ export async function sendMail(message: MailMessage): Promise<void> {
 
   try {
     await transport.sendMail({
-      from: config.from,
+      from: buildFrom(config.from, message.fromName),
       to: message.to,
       subject: message.subject,
       text: message.text,

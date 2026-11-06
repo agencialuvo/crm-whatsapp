@@ -82,7 +82,8 @@ export function NewBookingDialog({
     const list = kind === "service" ? options?.services : kind === "combo" ? options?.combos : undefined;
     return list?.find((x) => x.id === id) ?? null;
   }, [itemValue, options]);
-  const duration = item?.durationMinutes ?? 0;
+  // Sin duración definida, la cita ocupa la franja estándar de la agenda.
+  const duration = item ? (item.durationMinutes ?? board.slotMinutes) : 0;
 
   /** Las franjas que cubriría una cita que empieza en `slot` y dura `minutes`. */
   const spanOf = useMemo(
@@ -456,7 +457,13 @@ export function NewBookingDialog({
               label="Servicio / oferta" required
               htmlFor="nb-item"
               error={errors.serviceId ?? errors.comboId}
-              hint={item ? `Dura ${durationLabel(item.durationMinutes)}.` : undefined}
+              hint={
+                item
+                  ? item.durationMinutes === null
+                    ? `Sin duración definida: ocupa ${durationLabel(board.slotMinutes)}.`
+                    : `Dura ${durationLabel(item.durationMinutes)}.`
+                  : undefined
+              }
             >
               <SearchSelect
                 id="nb-item"

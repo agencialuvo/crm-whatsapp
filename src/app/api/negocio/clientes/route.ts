@@ -2,6 +2,7 @@ import { parseBody, withAuth } from "@/lib/api";
 import { clientCreateSchema } from "@/lib/salon/schemas";
 import { createSalonClient, listSalonClients } from "@/server/business/clients";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "salon");
+  if (planBlocked) return planBlocked;
   try {
     const params = new URL(req.url).searchParams;
     // `limit` (1-50) acota la lista: lo usa el alta para sugerir coincidencias.
@@ -29,6 +32,8 @@ export const GET = withAuth(async (session, req: Request) => {
 export const POST = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "salon");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, clientCreateSchema);
   if (!body.ok) return body.response;
   try {

@@ -9,6 +9,7 @@ import {
   saveGoogleCredentials,
   secretLast4,
 } from "@/server/agenda/connectors/google-credentials";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,8 @@ export const dynamic = "force-dynamic";
 
 export const GET = withAuth(async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const creds = await getGoogleCredentials(session.organizationId);
   if (!creds) return Response.json({ connection: null });
   return Response.json({
@@ -36,6 +39,8 @@ const credsSchema = z.object({
 
 export const PUT = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   if (!canConfigure(session.role)) {
     return apiError(403, "forbidden", "Solo el dueño o un administrador puede hacer esto");
   }
@@ -67,6 +72,8 @@ export const PUT = withAuth(async (session, req: Request) => {
 
 export const DELETE = withAuth(async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   if (!canConfigure(session.role)) {
     return apiError(403, "forbidden", "Solo el dueño o un administrador puede hacer esto");
   }

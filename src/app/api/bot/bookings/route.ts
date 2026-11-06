@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
+import { moduleGate } from "@/server/business/saas-guard";
 import {
   createSessionBooking,
   rescheduleForConversation,
@@ -92,6 +93,8 @@ async function guard(req: Request): Promise<Gate> {
       response: apiError(409, "no_org", "La instancia aún no tiene organización"),
     };
   }
+  const planBlocked = await moduleGate(organizationId, "agenda");
+  if (planBlocked) return { response: planBlocked };
   return { organizationId };
 }
 

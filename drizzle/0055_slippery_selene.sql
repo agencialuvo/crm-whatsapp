@@ -1,0 +1,1 @@
+ALTER TABLE "business_profile" ADD COLUMN "sector_status" text DEFAULT 'chosen' NOT NULL;

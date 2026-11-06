@@ -45,7 +45,7 @@ export function ComboDialog({
   const [staffSelected, setStaffSelected] = useState<string[]>(item?.staffIds ?? []);
   const [description, setDescription] = useState(item?.description ?? "");
   const [price, setPrice] = useState(item ? centsToInput(item.priceCents) : "");
-  const [duration, setDuration] = useState(String(item?.durationMinutes ?? 60));
+  const [duration, setDuration] = useState(item?.durationMinutes != null ? String(item.durationMinutes) : "");
   const [keyword, setKeyword] = useState(item?.keywordTrigger ?? "");
   const [active, setActive] = useState(item?.active ?? true);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -61,7 +61,7 @@ export function ComboDialog({
       name,
       description,
       priceCents: parseMoneyToCents(price) ?? Number.NaN,
-      durationMinutes: toInt(duration),
+      durationMinutes: duration.trim() === "" ? null : toInt(duration),
       keywordTrigger: keyword,
       active,
       imageMediaId: image?.id ?? null,
@@ -127,13 +127,13 @@ export function ComboDialog({
           error={errors.staffIds}
         />
 
-        <Field label="Qué incluye" required htmlFor="cmb-desc" error={errors.description}>
+        <Field label="Descripción (opcional)" htmlFor="cmb-desc" error={errors.description}>
           <Textarea
             id="cmb-desc"
             rows={3}
             value={description}
             maxLength={500}
-            placeholder="Corte, mascarilla negra y masaje de cuello"
+            placeholder="Qué incluye la oferta: corte, mascarilla negra y masaje de cuello"
             onChange={(e) => setDescription(e.target.value)}
             disabled={busy}
           />
@@ -151,10 +151,10 @@ export function ComboDialog({
             />
           </Field>
           <Field
-            label="Duración" required
+            label="Duración (opcional)"
             htmlFor="cmb-duration"
             error={errors.durationMinutes}
-            hint="Horas y minutos: 01:00 es una hora."
+            hint="Horas y minutos: 00:30 es media hora."
           >
             <DurationInput
               id="cmb-duration"

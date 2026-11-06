@@ -130,6 +130,10 @@ ok(
   `${res.headers.get("content-type")} ${buf.length}B`
 );
 
+// El logo es de UN negocio: sin sesión no se entrega (antes salía el del primer negocio de la base).
+const anonimo = Buffer.from(await (await fetch(`${BASE}/api/branding/favicon?v=${subidaJson?.favicon?.version}`)).arrayBuffer());
+ok("sin sesión NO se sirve el logo del negocio", !anonimo.equals(PNG_1X1));
+
 console.log("\n== El logo subido se ve también donde se ve la marca ==");
 // Antes solo cambiaba la pestaña: la barra lateral y el login seguían con la
 // inicial, y quien subía su logo no lo veía por ningún lado.

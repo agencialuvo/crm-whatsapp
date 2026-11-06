@@ -21,7 +21,7 @@ export default async function CajaPage({
   searchParams: Promise<{ fecha?: string; venta?: string }>;
 }) {
   const params = await searchParams;
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "finances" });
   const [{ currency }, timezone] = await Promise.all([
     getBranding(session.organizationId),
     businessTimezone(session.organizationId),

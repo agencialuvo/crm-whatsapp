@@ -1,6 +1,7 @@
 import { withAuth } from "@/lib/api";
 import { getShiftDetail } from "@/server/business/cash-shifts";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,8 @@ type Params = { params: Promise<{ id: string }> };
 export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   const { id } = await ctx.params;
   try {
     return Response.json({ shift: await getShiftDetail(session.organizationId, id.slice(0, 64)) });

@@ -1,4 +1,4 @@
-import { getBranding } from "@/server/branding";
+import { getBrandingForEmail } from "@/server/branding";
 import { sendMail } from "@/server/email/mailer";
 import { resetCodeEmail } from "@/server/email/templates";
 
@@ -40,14 +40,14 @@ export async function sendResetCode(input: {
   type: string;
 }): Promise<void> {
   if (input.type !== "forget-password") return;
-  const branding = await getBranding().catch(() => null);
+  const branding = await getBrandingForEmail(input.email).catch(() => null);
   const mail = resetCodeEmail({
     code: input.otp,
     minutes: Math.round(RESET_CODE_TTL_SECONDS / 60),
     productName: branding?.name ?? "",
   });
   try {
-    await sendMail({ to: input.email, ...mail });
+    await sendMail({ to: input.email, ...mail, fromName: branding?.name });
   } catch (err) {
     // Sin el código en el log: solo qué falló. El cliente ve el mismo «te
     // enviamos un código» de siempre (no se revela si la cuenta existe).

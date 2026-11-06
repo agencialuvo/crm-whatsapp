@@ -3,6 +3,7 @@ import { canConfigure } from "@/lib/auth/roles";
 import { loyaltyCardQuerySchema } from "@/lib/loyalty";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
 import { getLoyaltyCardView } from "@/server/loyalty/actions";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "member");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, ["loyalty", "finances"]);
+  if (planBlocked) return planBlocked;
   const q = new URL(req.url).searchParams;
   const parsed = loyaltyCardQuerySchema.safeParse({
     contactId: q.get("contactId") ?? undefined,

@@ -4,6 +4,7 @@ import { apiError } from "@/lib/api";
 import { scoped } from "@/lib/db/tenant";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
+import { moduleGate } from "@/server/business/saas-guard";
 import { addDaysISO, todayInTz } from "@/lib/time/slots";
 import {
   buildCandidateSlots,
@@ -62,6 +63,8 @@ export async function GET(req: Request) {
   if (!organizationId) {
     return apiError(409, "no_org", "La instancia aún no tiene organización");
   }
+  const planBlocked = await moduleGate(organizationId, "agenda");
+  if (planBlocked) return planBlocked;
 
   const url = new URL(req.url);
   const conversationId = url.searchParams.get("conversationId");

@@ -3,6 +3,7 @@ import { historyQuerySchema, type ShiftHistoryDto } from "@/lib/salon/cash-shift
 import { periodFromRequest } from "@/server/analytics/period";
 import { listShifts } from "@/server/business/cash-shifts";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   const url = new URL(req.url);
   const query = historyQuerySchema.safeParse({
     limit: url.searchParams.get("limit") ?? undefined,

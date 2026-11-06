@@ -59,6 +59,15 @@ describe("buildComboTriggerInstruction", () => {
     expect(text.replace(String.fromCharCode(160), " ")).toContain("S/ 45.00");
   });
 
+  it("sin descripción (es opcional) salta «qué incluye» y renumera, sin inventar nada", () => {
+    const sin = buildComboTriggerInstruction({ ...fresh, description: "" }, "PEN");
+    expect(sin).not.toContain("qué incluye");
+    expect(sin).toContain("1. Salúdalo");
+    expect(sin).toContain("2. Dile el precio especial");
+    expect(sin).toContain("3. Cierra invitándolo");
+    expect(sin).not.toContain("4.");
+  });
+
   it("ordena saludar reconociendo la promoción y no inventar", () => {
     expect(text).toContain("Salúdalo reconociendo");
     expect(text).toContain("no inventes");

@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  * resuelven aquí, igual que en Caja.
  */
 export default async function PanelPage() {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "finances" });
   const [{ currency }, timezone] = await Promise.all([
     getBranding(session.organizationId),
     businessTimezone(session.organizationId),

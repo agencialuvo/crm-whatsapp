@@ -1,3 +1,4 @@
+import { getSessionOrNull } from "@/lib/auth/session";
 import { readMediaFile } from "@/server/whatsapp/media";
 import { getBrandingContext } from "@/server/branding";
 import { DEFAULT_BRANDING } from "@/lib/branding";
@@ -21,9 +22,11 @@ function cabeceras(mime: string, cacheable: boolean): HeadersInit {
     "x-content-type-options": "nosniff",
     // La URL lleva `?v=` y cambia con la marca, así que se puede cachear
     // fuerte. Sin ese sufijo —alguien pidiendo la ruta pelada— no.
+    // Depende de la sesión (cada negocio tiene su logo): nunca en una caché compartida.
     "cache-control": cacheable
-      ? "public, max-age=31536000, immutable"
-      : "public, max-age=60",
+      ? "private, max-age=31536000, immutable"
+      : "private, max-age=60",
+    vary: "cookie",
   };
 }
 
@@ -36,7 +39,13 @@ function cabeceras(mime: string, cacheable: boolean): HeadersInit {
 export async function GET(req: Request) {
   const cacheable = new URL(req.url).searchParams.has("v");
 
-  const ctx = await getBrandingContext().catch(() => null);
+  // El logo es el del negocio de QUIEN lo pide (su sesión). Antes se tomaba «la única
+  // organización de la instancia», que con varios negocios es el primero: todos veían el
+  // logo de Brothers. Sin sesión (login, registro) no hay negocio: el icono de la plataforma.
+  const session = await getSessionOrNull();
+  const ctx = session
+    ? await getBrandingContext(session.organizationId).catch(() => null)
+    : null;
   const branding = ctx?.branding ?? DEFAULT_BRANDING;
 
   if (ctx?.organizationId && branding.favicon) {
@@ -55,6 +64,6 @@ export async function GET(req: Request) {
   // Sin logo propio (o si el archivo se perdió): el icono de Agencia Luvo.
   return new Response(null, {
     status: 307,
-    headers: { location: DEFAULT_FAVICON_SRC, "cache-control": "public, max-age=60" },
+    headers: { location: DEFAULT_FAVICON_SRC, "cache-control": "private, max-age=60", vary: "cookie" },
   });
 }

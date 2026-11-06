@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
+// El candado por plan consulta la BD: esta prueba es de otra cosa (roles), así que lo deja pasar.
+vi.mock("@/server/business/saas-guard", () => ({ moduleGate: async () => null, getPlanAccess: async () => ({ unrestricted: true, modules: [], planName: "test" }) }));
 
 /**
  * Control de acceso (RBAC) en las rutas de configuración: solo `owner`/`admin`

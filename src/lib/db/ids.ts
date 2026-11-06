@@ -19,6 +19,11 @@ const prefixes = {
   testRun: "run",
   testCase: "case",
   mediaAsset: "ma",
+  // SaaS & Multi-sector
+  plan: "plan",
+  subscription: "sub",
+  businessCategory: "bcat",
+  businessProfile: "bpro",
   // Módulo Medios — la biblioteca de imágenes y videos
   mediaLibraryItem: "med",
   // 015 — motor de agenda

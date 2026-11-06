@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  * dueño/administrador (muestra lo que cada cliente ha gastado).
  */
 export default async function ClientesPage() {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "salon" });
   const [{ currency }, timezone] = await Promise.all([
     getBranding(session.organizationId),
     businessTimezone(session.organizationId),

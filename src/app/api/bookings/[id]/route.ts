@@ -8,6 +8,7 @@ import {
   retryMeetingLink,
 } from "@/server/agenda/service";
 import { bookingErrorResponse } from "@/server/agenda/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,8 @@ const patchSchema = z.discriminatedUnion("action", [
  */
 export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const { id } = await ctx.params;
   const body = await parseBody(req, patchSchema);
   if (!body.ok) return body.response;

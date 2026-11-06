@@ -7,6 +7,7 @@ import { getExpensesTotalCents } from "@/server/business/financial-funnel";
 import { periodFromRequest } from "@/server/analytics/period";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
 import { getSalesReport, registerServiceSale } from "@/server/business/sales-service";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   try {
     const period = await periodFromRequest(session.organizationId, new URL(req.url));
     // `?staffId=` acota el reporte a un profesional (auditoría rápida).
@@ -57,6 +60,8 @@ export const GET = withAuth(async (session, req: Request) => {
 export const POST = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "member");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, saleInputSchema);
   if (!body.ok) return body.response;
   if (!canConfigure(session.role) && (body.data.customCommissionPercentage != null || body.data.soldOn)) {

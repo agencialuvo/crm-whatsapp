@@ -9,6 +9,7 @@ import {
   saveZoomCredentials,
   secretLast4,
 } from "@/server/agenda/connectors/zoom-credentials";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ export const dynamic = "force-dynamic";
 
 export const GET = withAuth(async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const creds = await getZoomCredentials(session.organizationId);
   if (!creds) return Response.json({ connection: null });
   return Response.json({
@@ -39,6 +42,8 @@ const credsSchema = z.object({
 /** Guarda validando ANTES contra Zoom: unas credenciales que no sirven no llegan a la base. */
 export const PUT = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   if (!canConfigure(session.role)) {
     return apiError(403, "forbidden", "Solo el dueño o un administrador puede hacer esto");
   }
@@ -67,6 +72,8 @@ export const PUT = withAuth(async (session, req: Request) => {
 
 export const DELETE = withAuth(async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   if (!canConfigure(session.role)) {
     return apiError(403, "forbidden", "Solo el dueño o un administrador puede hacer esto");
   }

@@ -9,6 +9,9 @@ import { agendaEnabled } from "@/server/agenda/flag";
 import { salonEnabled } from "@/server/business/flag";
 import { avisoIaDe } from "@/server/ai/aviso";
 import { AvisoIaBanner } from "@/components/avisos/aviso-ia";
+import { SectorSetupModal } from "@/components/onboarding/sector-setup-modal";
+import { canConfigure } from "@/lib/auth/roles";
+import { getSectorSetup, listBusinessSectors } from "@/server/business/sector-setup";
 
 export default async function AppLayout({
   children,
@@ -23,6 +26,13 @@ export default async function AppLayout({
   // bot roto. Se resuelve en el servidor y en el layout para que se vea desde
   // CUALQUIER pantalla, no solo desde el panel de un contacto (#85).
   const aviso = await avisoIaDe(session.organizationId);
+  // Asistente de sector: solo quien configura, y solo mientras el negocio no haya elegido ni lo haya dejado
+  // para después. Un fallo aquí (p. ej. migración pendiente) nunca tumba la app: simplemente no se ofrece.
+  const sectorSetup = canConfigure(session.role)
+    ? await getSectorSetup(session.organizationId).catch(() => null)
+    : null;
+  const sectorsToOffer =
+    sectorSetup?.status === "pending" ? await listBusinessSectors().catch(() => []) : [];
 
   return (
     <>
@@ -42,6 +52,9 @@ export default async function AppLayout({
       >
         {children}
       </AppShell>
+      {sectorSetup?.status === "pending" && sectorsToOffer.length > 0 && (
+        <SectorSetupModal sectors={sectorsToOffer} currentKey={sectorSetup.categoryKey} />
+      )}
     </>
   );
 }

@@ -97,8 +97,25 @@ describe("combos", () => {
     expect(comboInputSchema.safeParse({ ...ok, keywordTrigger: "x".repeat(41) }).success).toBe(false);
   });
 
-  it("exige contar qué incluye", () => {
-    expect(comboInputSchema.safeParse({ ...ok, description: "" }).success).toBe(false);
+  it("la descripción es opcional: vacía o ausente se guarda como «sin descripción»", () => {
+    expect(comboInputSchema.parse({ ...ok, description: "" }).description).toBeNull();
+    expect(comboInputSchema.parse({ ...ok, description: "   " }).description).toBeNull();
+    const { description: _omit, ...sinDescripcion } = ok;
+    expect(comboInputSchema.safeParse(sinDescripcion).success).toBe(true);
+    expect(comboInputSchema.parse({ ...ok, description: " Corte y barba " }).description).toBe("Corte y barba");
+    expect(comboInputSchema.safeParse({ ...ok, description: "x".repeat(501) }).success).toBe(false);
+  });
+
+  it("la duración es opcional en servicios y ofertas; si viene, se valida", () => {
+    const { durationMinutes: _d, ...sinDuracion } = ok;
+    expect(serviceInputSchema.parse(sinDuracion).durationMinutes).toBeUndefined();
+    expect(serviceInputSchema.parse({ ...sinDuracion, durationMinutes: null }).durationMinutes).toBeNull();
+    expect(comboInputSchema.parse({ ...ok, durationMinutes: null }).durationMinutes).toBeNull();
+    expect(comboInputSchema.safeParse({ ...ok, durationMinutes: 3 }).success).toBe(false);
+    expect(comboInputSchema.safeParse({ ...ok, durationMinutes: Number.NaN }).success).toBe(false);
+    // En un PATCH, `null` borra la duración y la ausencia no la toca.
+    expect(servicePatchSchema.parse({ durationMinutes: null })).toEqual({ durationMinutes: null });
+    expect(servicePatchSchema.parse({ name: "Nuevo" })).toEqual({ name: "Nuevo" });
   });
 
   it("PATCH parcial", () => {

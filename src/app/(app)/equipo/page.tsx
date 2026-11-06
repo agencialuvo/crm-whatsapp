@@ -16,7 +16,7 @@ const DAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 } as 
  * que quien arma el turno de alguien vea contra qué lo está comparando.
  */
 export default async function EquipoPage() {
-  const session = await requireSalonPage({ manage: true });
+  const session = await requireSalonPage({ manage: true, module: "salon" });
   const settings = await getSettings(session.organizationId);
   const businessHours: Record<number, string> = {};
   for (const key of WEEKDAYS) {

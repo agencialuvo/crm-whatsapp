@@ -4,6 +4,7 @@ import { todayInTz } from "@/lib/time/slots";
 import { periodFromRequest } from "@/server/analytics/period";
 import { getDashboard } from "@/server/business/dashboard";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,8 @@ export const dynamic = "force-dynamic";
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
   if (denied) return denied;
+  const planBlocked = await moduleGate(session.organizationId, "finances");
+  if (planBlocked) return planBlocked;
   try {
     const period = await periodFromRequest(session.organizationId, new URL(req.url));
     const today = todayInTz(new Date(), period.timezone);

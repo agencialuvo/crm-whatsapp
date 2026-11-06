@@ -6,6 +6,7 @@ import { listBookings, listBookingsInRange } from "@/server/agenda/queries";
 import { getSettings } from "@/server/agenda/settings";
 import { createBlock, createSessionBooking } from "@/server/agenda/service";
 import { bookingErrorResponse, bookingPayload } from "@/server/agenda/http";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,8 @@ export const dynamic = "force-dynamic";
  */
 export const GET = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const url = new URL(req.url);
   const query = parseRangeQuery(url.searchParams.get("from"), url.searchParams.get("to"));
   if (!query.ok) return apiError(422, "invalid_range", query.message);
@@ -73,6 +76,8 @@ const postSchema = z.discriminatedUnion("kind", [
  */
 export const POST = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   const body = await parseBody(req, postSchema);
   if (!body.ok) return body.response;
 

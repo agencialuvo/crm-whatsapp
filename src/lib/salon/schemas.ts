@@ -89,15 +89,23 @@ const staffIds = z
 
 /* ------------------------------ servicios ------------------------------ */
 
+/**
+ * Duración OPCIONAL: sin ella (`null`) el servicio no fija cuánto dura y la agenda usa su franja estándar.
+ * `undefined` = no viene (en un PATCH, no se toca); `null` = sin duración (en un PATCH, la borra).
+ */
+const optionalDuration = z
+  .number({ invalid_type_error: "Escribe una duración válida" })
+  .int("La duración debe ser un número entero de minutos")
+  .min(5, "La duración mínima es de 5 minutos")
+  .max(600, "La duración máxima es de 600 minutos")
+  .nullish()
+  .transform((v) => (v === undefined ? undefined : (v ?? null)));
+
 export const serviceInputSchema = z.object({
   name,
   description: optionalText(500),
   priceCents: cents,
-  durationMinutes: z
-    .number({ invalid_type_error: "Escribe la duración" })
-    .int("La duración debe ser un número entero de minutos")
-    .min(5, "La duración mínima es de 5 minutos")
-    .max(600, "La duración máxima es de 600 minutos"),
+  durationMinutes: optionalDuration,
   /** Qué parte del servicio se queda el profesional si nadie pacta otra. */
   defaultCommissionPercentage: percentage.optional(),
   active: z.boolean().optional(),
@@ -142,11 +150,8 @@ const keyword = z
 
 export const comboInputSchema = z.object({
   name,
-  description: z
-    .string({ required_error: "Cuenta qué incluye la oferta" })
-    .trim()
-    .min(3, "Cuenta qué incluye la oferta")
-    .max(500, "Admite hasta 500 caracteres"),
+  /** Opcional: lo que quiera contar de la oferta (qué incluye, condiciones). Sin texto se guarda vacío. */
+  description: optionalText(500),
   priceCents: cents,
   durationMinutes: serviceInputSchema.shape.durationMinutes,
   keywordTrigger: keyword,

@@ -4,6 +4,7 @@ import { canConfigure } from "@/lib/auth/roles";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { googleConnector } from "@/server/agenda/connectors/google";
 import { getGoogleCredentials } from "@/server/agenda/connectors/google-credentials";
+import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,8 @@ const schema = z.object({
 /** Probar sin guardar; con los campos vacíos prueba lo ya guardado. */
 export const POST = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
+  const planBlocked = await moduleGate(session.organizationId, "agenda");
+  if (planBlocked) return planBlocked;
   if (!canConfigure(session.role)) {
     return apiError(403, "forbidden", "Solo el dueño o un administrador puede hacer esto");
   }

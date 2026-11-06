@@ -102,7 +102,7 @@ ${
     ? serviciosActivos
         .map(
           (s) =>
-            `- ${s.name}: ${money(s.price, currency)} (${s.duration} min).${s.description || ""}${loDan("service", s.id, quienes.services.get(s.id))}`
+            `- ${s.name}: ${money(s.price, currency)} ${s.duration ? ` (${s.duration} min)` : ""}.${s.description || ""}${loDan("service", s.id, quienes.services.get(s.id))}`
         )
         .join("\n")
     : "No hay servicios regulares configurados aún."
@@ -115,7 +115,7 @@ ${
     ? combosActivos
         .map(
           (c) =>
-            `- [Disparador / Palabra Clave: ${c.keyword ?? "Ninguna"}] ${c.name}: ${money(c.price, currency)} - Incluye:${c.description}${loDan("combo", c.id, quienes.combos.get(c.id))}`
+            `- [Disparador / Palabra Clave: ${c.keyword ?? "Ninguna"}] ${c.name}: ${money(c.price, currency)} ${c.description ? ` - Incluye:${c.description}` : ""}${loDan("combo", c.id, quienes.combos.get(c.id))}`
         )
         .join("\n")
     : "No hay ofertas activas por el momento."
