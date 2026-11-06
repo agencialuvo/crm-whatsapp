@@ -28,7 +28,7 @@ const NONE: never[] = [];
 
 /**
  * Módulo SALON — el equipo: alta de profesionales (nombre, teléfono, estado),
- * su porcentaje de comisión (50 % por defecto) y su horario semanal con los
+ * su porcentaje de comisión y su horario semanal con los
  * días libres.
  *
  * Eliminar solo procede mientras no tenga ventas; con historial, la API

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_COMMISSION_PERCENTAGE,
   resolveCommissionPercentage,
   splitAmount,
 } from "@/lib/salon/commission";
@@ -11,9 +10,12 @@ import {
  */
 
 describe("resolveCommissionPercentage", () => {
-  it("sin nada configurado paga el 50 % por defecto", () => {
-    expect(resolveCommissionPercentage({})).toEqual({ percentage: 50, source: "default" });
-    expect(DEFAULT_COMMISSION_PERCENTAGE).toBe(50);
+  it("sin nada configurado NO hay comisión: no existe un porcentaje por defecto", () => {
+    expect(resolveCommissionPercentage({})).toEqual({ percentage: 0, source: "none" });
+    expect(splitAmount(5000, resolveCommissionPercentage({}).percentage)).toEqual({
+      staffCommissionCents: 0,
+      businessNetCents: 5000,
+    });
   });
 
   it("manda lo más específico: venta → pacto → profesional → servicio", () => {
@@ -45,8 +47,8 @@ describe("resolveCommissionPercentage", () => {
       source: "staff",
     });
     expect(resolveCommissionPercentage({ custom: -1, staffService: Number.NaN })).toEqual({
-      percentage: 50,
-      source: "default",
+      percentage: 0,
+      source: "none",
     });
   });
 });

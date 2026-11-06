@@ -200,7 +200,7 @@ async function resolveLines(
 
 /**
  * Reparto de una venta: lo que le toca a cada ítem del total y la comisión.
- * Regla: venta → profesional × servicio → profesional → servicio → 50 %. Se
+ * Regla: venta → profesional × servicio → profesional → servicio; sin ninguno, 0 %. Se
  * calcula POR ÍTEM (cada servicio puede tener su porcentaje) sobre lo que le
  * tocó del total cobrado; la comisión de la venta es la suma.
  */

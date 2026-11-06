@@ -8,15 +8,13 @@
  * exige con un CHECK).
  */
 
-/** Lo que se paga al profesional cuando nadie configuró otra cosa. */
-export const DEFAULT_COMMISSION_PERCENTAGE = 50;
-
 export type CommissionSource =
   | "custom"
   | "staff_service"
   | "staff"
   | "service"
-  | "default";
+  /** Nadie configuró un porcentaje: no hay comisión (0 %). */
+  | "none";
 
 export type CommissionSources = {
   /** Un porcentaje puntual para ESTA venta (descuento, acuerdo del día). */
@@ -35,7 +33,8 @@ function valid(pct: number | null | undefined): pct is number {
 
 /**
  * Qué porcentaje manda. De lo más específico a lo más general:
- * la venta → profesional × servicio → profesional → servicio → 50 %.
+ * la venta → profesional × servicio → profesional → servicio. NO hay porcentaje por defecto:
+ * si nadie lo configuró, no hay comisión (0 %) y todo el monto es del negocio.
  * Un valor fuera de 0-100 se ignora (cae al siguiente) en vez de repartir mal.
  */
 export function resolveCommissionPercentage(src: CommissionSources): {
@@ -48,7 +47,7 @@ export function resolveCommissionPercentage(src: CommissionSources): {
   }
   if (valid(src.staff)) return { percentage: src.staff, source: "staff" };
   if (valid(src.service)) return { percentage: src.service, source: "service" };
-  return { percentage: DEFAULT_COMMISSION_PERCENTAGE, source: "default" };
+  return { percentage: 0, source: "none" };
 }
 
 /**

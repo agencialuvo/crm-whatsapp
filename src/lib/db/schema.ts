@@ -148,7 +148,7 @@ export const service = pgTable(
       onDelete: "set null",
     }),
     /** Porcentaje de comisión por defecto para este servicio (0-100) */
-    defaultCommissionPercentage: integer("default_commission_percentage").default(50),
+    defaultCommissionPercentage: integer("default_commission_percentage"),
     active: boolean("active").notNull().default(true),
     /**
      * El servicio «Otro» de la organización: un cobro a criterio cuyo monto se

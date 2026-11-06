@@ -266,9 +266,11 @@ async function main() {
   }
   const corte = (await api("/api/negocio/servicios", {
     method: "POST",
-    body: { name: `Corte ${RUN}`, description: "Clásico", priceCents: 2500, durationMinutes: 30 },
+    body: { name: `Corte ${RUN}`, description: "Clásico", priceCents: 2500, durationMinutes: 30, defaultCommissionPercentage: 50 },
   })).json?.service;
-  ok("crea «Corte» (201) con comisión por defecto 50 %", corte?.defaultCommissionPercentage === 50 && corte?.priceCents === 2500);
+  ok("crea «Corte» (201) con la comisión que se le escribió (50 %)", corte?.defaultCommissionPercentage === 50 && corte?.priceCents === 2500);
+  const sinCom = (await api("/api/negocio/servicios", { method: "POST", body: { name: `SinCom ${RUN}`, priceCents: 1000 } })).json?.service;
+  ok("un servicio SIN comisión escrita queda en null (no hay porcentaje por defecto)", sinCom?.defaultCommissionPercentage === null);
   const barba = (await api("/api/negocio/servicios", {
     method: "POST",
     body: { name: `Barba ${RUN}`, priceCents: 1500, durationMinutes: 20, defaultCommissionPercentage: 40 },
@@ -621,7 +623,8 @@ async function main() {
 
   await page.getByRole("button", { name: "Nuevo profesional" }).first().click();
   const sd = page.getByRole("dialog", { name: "Nuevo profesional" });
-  ok("la comisión nace en 50 %", (await sd.getByLabel("Comisión (%)").inputValue()) === "50");
+  ok("la comisión nace vacía (sin porcentaje por defecto)", (await sd.getByLabel("Comisión (% opcional)").inputValue()) === "");
+  await sd.getByLabel("Comisión (% opcional)").fill("50");
   await sd.getByRole("button", { name: "Dar de alta" }).click();
   ok("sin nombre se avisa", (await sd.innerText()).includes("al menos 2 caracteres"));
   await sd.getByLabel("Nombre").fill(`Marta UI ${RUN}`);

@@ -19,7 +19,8 @@ export type ServiceDto = {
   priceCents: number;
   /** `null` = sin duración definida: la agenda usa su franja estándar. */
   durationMinutes: number | null;
-  defaultCommissionPercentage: number;
+  /** `null` = sin comisión definida para el servicio. */
+  defaultCommissionPercentage: number | null;
   active: boolean;
   /** Imagen de la biblioteca de Medios (id y su URL), o `null`. */
   imageMediaId: string | null;

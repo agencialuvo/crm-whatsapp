@@ -9,15 +9,14 @@ import { MediaImageField, type ImagenElegida } from "@/components/medios/media-p
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Field, fieldErrors, PhoneInput } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
-import { DEFAULT_COMMISSION_PERCENTAGE } from "@/lib/salon/commission";
 import { staffInputSchema } from "@/lib/salon/schemas";
 import { phoneToDigits, sanitizePersonName, STAFF_PHONE_DIGITS } from "@/lib/salon/staff-fields";
 import type { StaffDto } from "@/lib/salon/types";
 
 /**
  * Módulo SALON — alta y edición de un profesional (barbero, esteticista,
- * manicurista). La comisión nace en 50 % y se puede vaciar: sin porcentaje
- * propio manda el del servicio. Su horario y las comisiones por servicio se
+ * manicurista). La comisión es opcional y nace vacía: sin porcentaje
+ * propio manda el del servicio, y sin ninguno no hay comisión. Su horario y las comisiones por servicio se
  * configuran después, en el otro diálogo.
  *
  * Campos estrictos, igual que en la API: el nombre solo lleva letras y espacios
@@ -42,9 +41,7 @@ export function StaffDialog({
     const digits = phoneToDigits(item?.phone);
     return digits.length > STAFF_PHONE_DIGITS ? digits.slice(-STAFF_PHONE_DIGITS) : digits;
   });
-  const [commission, setCommission] = useState(
-    item ? (item.globalCommissionPercentage?.toString() ?? "") : String(DEFAULT_COMMISSION_PERCENTAGE)
-  );
+  const [commission, setCommission] = useState(item?.globalCommissionPercentage?.toString() ?? "");
   const [active, setActive] = useState(item?.active ?? true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -133,10 +130,10 @@ export function StaffDialog({
         </Field>
 
         <Field
-          label="Comisión (%)"
+          label="Comisión (% opcional)"
           htmlFor="stf-commission"
           error={errors.globalCommissionPercentage}
-          hint="Lo que se queda por cada servicio. Vacío: manda el porcentaje del servicio."
+          hint="Opcional. Lo que se queda por cada servicio. Vacío: manda el porcentaje del servicio."
         >
           <Input
             id="stf-commission"

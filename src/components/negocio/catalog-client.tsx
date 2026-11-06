@@ -305,7 +305,7 @@ export function CatalogClient({ currency }: { currency: string }) {
                   {money(s.priceCents, currency)}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-text-2">
-                  {s.defaultCommissionPercentage}%
+                  {s.defaultCommissionPercentage === null ? "—" : `${s.defaultCommissionPercentage}%`}
                 </td>
                 <td className="px-4 py-3">
                   <Switch

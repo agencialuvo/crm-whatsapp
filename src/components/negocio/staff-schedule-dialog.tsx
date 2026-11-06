@@ -40,7 +40,7 @@ function rowsFrom(staff: StaffDto): DayRow[] {
  *
  * Comisiones: el porcentaje global del profesional y, opcionalmente, uno
  * pactado por servicio. Orden de prioridad al cobrar: la venta → este pacto →
- * el global → el del servicio → 50 %.
+ * el global → el del servicio; sin ninguno, no hay comisión.
  */
 const MODE_OPTIONS = [
   { value: "negocio", label: "Horario del negocio" },
@@ -287,7 +287,7 @@ export function StaffScheduleDialog({
                         min={0}
                         max={100}
                         step={1}
-                        placeholder={global.trim() || String(s.defaultCommissionPercentage)}
+                        placeholder={global.trim() || (s.defaultCommissionPercentage === null ? "" : String(s.defaultCommissionPercentage))}
                         value={overrides[s.id] ?? ""}
                         onChange={(e) => setOverrides((prev) => ({ ...prev, [s.id]: clampPercent(e.target.value) }))}
                         disabled={busy}

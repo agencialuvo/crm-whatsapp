@@ -29,7 +29,8 @@ export function ItemViewDialog({
   if (target.kind === "service") {
     rows.push({
       label: "Comisión por defecto",
-      value: `${target.item.defaultCommissionPercentage}%`,
+      value:
+        target.item.defaultCommissionPercentage === null ? "Sin comisión" : `${target.item.defaultCommissionPercentage}%`,
     });
   } else {
     rows.push({

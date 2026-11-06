@@ -12,7 +12,6 @@ import { DurationInput, Field, fieldErrors, MoneyInput, toInt } from "@/componen
 import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { StaffSelect, staffIdsToSend, type StaffOption } from "@/components/negocio/staff-select";
 import { parseMoneyToCents } from "@/lib/money";
-import { DEFAULT_COMMISSION_PERCENTAGE } from "@/lib/salon/commission";
 import { centsToInput } from "@/lib/salon/format";
 import { serviceInputSchema } from "@/lib/salon/schemas";
 import type { ServiceDto } from "@/lib/salon/types";
@@ -47,9 +46,7 @@ export function ServiceDialog({
   const [description, setDescription] = useState(item?.description ?? "");
   const [price, setPrice] = useState(item ? centsToInput(item.priceCents) : "");
   const [duration, setDuration] = useState(item?.durationMinutes != null ? String(item.durationMinutes) : "");
-  const [commission, setCommission] = useState(
-    String(item?.defaultCommissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE)
-  );
+  const [commission, setCommission] = useState(item?.defaultCommissionPercentage?.toString() ?? "");
   const [active, setActive] = useState(item?.active ?? true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -66,7 +63,7 @@ export function ServiceDialog({
       description,
       priceCents: cents ?? Number.NaN,
       durationMinutes: duration.trim() === "" ? null : toInt(duration),
-      defaultCommissionPercentage: toInt(commission),
+      defaultCommissionPercentage: commission.trim() === "" ? null : toInt(commission),
       active,
       imageMediaId: image?.id ?? null,
       staffIds: staffToSend.staffIds,
@@ -171,10 +168,10 @@ export function ServiceDialog({
         </div>
 
         <Field
-          label="Comisión por defecto (%)"
+          label="Comisión por defecto (% opcional)"
           htmlFor="srv-commission"
           error={errors.defaultCommissionPercentage}
-          hint="Lo que se queda quien atiende, si no tiene un porcentaje propio."
+          hint="Opcional. Lo que se queda quien atiende, si no tiene un porcentaje propio. Vacío: sin comisión."
         >
           <Input
             id="srv-commission"

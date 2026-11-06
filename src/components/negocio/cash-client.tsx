@@ -32,7 +32,7 @@ const COMMISSION_SOURCE_LABEL: Record<RegisteredSaleDto["commissionSource"], str
   staff_service: "pacto con el profesional para este servicio",
   staff: "porcentaje del profesional",
   service: "porcentaje del servicio",
-  default: "porcentaje por defecto",
+  none: "sin comisión configurada"
 };
 
 function percent(part: number, whole: number): string {

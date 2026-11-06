@@ -106,8 +106,8 @@ export const serviceInputSchema = z.object({
   description: optionalText(500),
   priceCents: cents,
   durationMinutes: optionalDuration,
-  /** Qué parte del servicio se queda el profesional si nadie pacta otra. */
-  defaultCommissionPercentage: percentage.optional(),
+  /** Qué parte del servicio se queda el profesional si nadie pacta otra. Opcional: sin valor, no hay comisión. */
+  defaultCommissionPercentage: percentage.nullish(),
   active: z.boolean().optional(),
   imageMediaId,
   staffIds,
@@ -206,7 +206,7 @@ export const staffInputSchema = z.object({
   name: staffName,
   phone,
   active: z.boolean().optional(),
-  /** `null` = sin porcentaje propio: manda el del servicio o el 50 %. */
+  /** `null` = sin porcentaje propio: manda el del servicio; sin ninguno, no hay comisión. */
   globalCommissionPercentage: percentage.nullable().optional(),
   /** Foto de la biblioteca de Medios; `null` la quita, ausente no la toca. */
   imageMediaId,

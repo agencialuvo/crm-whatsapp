@@ -4,7 +4,6 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { normalizeMx } from "@/lib/meta/client";
-import { DEFAULT_COMMISSION_PERCENTAGE } from "@/lib/salon/commission";
 import {
   BULK_COLUMNS,
   BULK_MAX_BYTES,
@@ -231,7 +230,7 @@ export async function importServices(organizationId: string, rows: SheetRow[]): 
         description: data.input.description ?? null,
         priceCents: data.input.priceCents,
         durationMinutes: data.input.durationMinutes ?? null,
-        defaultCommissionPercentage: data.input.defaultCommissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE,
+        defaultCommissionPercentage: data.input.defaultCommissionPercentage ?? null,
         active: data.input.active ?? true,
         imageMediaId: data.imageRef,
       });

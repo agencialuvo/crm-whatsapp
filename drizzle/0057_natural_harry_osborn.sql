@@ -1,0 +1,1 @@
+ALTER TABLE "service" ALTER COLUMN "default_commission_percentage" DROP DEFAULT;

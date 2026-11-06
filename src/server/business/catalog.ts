@@ -2,7 +2,6 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import { DEFAULT_COMMISSION_PERCENTAGE } from "@/lib/salon/commission";
 import type { ComboInput, ServiceInput } from "@/lib/salon/schemas";
 import type { ComboDto, ServiceDto } from "@/lib/salon/types";
 import { comboStaffMap, serviceStaffMap } from "@/server/business/catalog-staff";
@@ -41,8 +40,7 @@ function toServiceDto(r: ServiceRow, staffIds: string[]): ServiceDto {
     description: r.description,
     priceCents: r.priceCents,
     durationMinutes: r.durationMinutes,
-    defaultCommissionPercentage:
-      r.defaultCommissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE,
+    defaultCommissionPercentage: r.defaultCommissionPercentage ?? null,
     active: r.active,
     imageMediaId: r.imageMediaId,
     imageUrl: imageUrlOf(r.imageMediaId),
@@ -182,8 +180,7 @@ export async function createService(
         description: input.description ?? null,
         priceCents: input.priceCents,
         durationMinutes: input.durationMinutes ?? null,
-        defaultCommissionPercentage:
-          input.defaultCommissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE,
+        defaultCommissionPercentage: input.defaultCommissionPercentage ?? null,
         active: input.active ?? true,
         imageMediaId: input.imageMediaId ?? null,
       })
