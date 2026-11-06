@@ -419,6 +419,11 @@ Embedded Signup. Hay dos formas de obtenerlo:
    **URL del webhook** y el **verify token** que Vocero te muestra, y suscribe
    el campo `messages` (y `message_template_status_update` si usarás
    plantillas). Es una sola vez por app.
+   **Si tu equipo responde desde la app de WhatsApp Business del celular**
+   (coexistencia), suscribe también **`smb_message_echoes`**: sin ese campo
+   Meta no envía esas respuestas y no aparecen en la bandeja. Se marca en el
+   mismo lugar (WhatsApp → Configuration → Webhook fields) y aplica aunque el
+   webhook ya estuviera configurado.
 5. Recomendado: agrega `META_APP_SECRET` (App Secret de tu app) a las
    variables de la instancia para la verificación de firma de cada evento.
 

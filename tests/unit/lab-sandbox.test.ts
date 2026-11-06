@@ -43,6 +43,12 @@ function thenableChain(rows: unknown[]) {
   return chain;
 }
 
+// El anuncio de origen no es parte de lo que esta prueba mide: sin esto su consulta consumiría un
+// turno de la cola de selects simulados y desordenaría el resto.
+vi.mock("@/server/attribution/store", () => ({
+  getAttributionForConversation: async () => null,
+}));
+
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
     select: () => thenableChain(selectQueue.shift() ?? []),

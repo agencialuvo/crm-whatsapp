@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { getAttributionForConversation } from "@/server/attribution/store";
 import { scoped } from "@/lib/db/tenant";
 import { moveLeadToStage as moveLeadThroughHistory } from "@/server/leads/stage-history";
 import { getEnv } from "@/lib/env";
@@ -178,6 +179,14 @@ export async function runAgentTurn(
   // comportamiento configurado aunque el agente aún no esté encendido.
   if (!conversation.isTest && !profile.enabled) return;
 
+  // De qué anuncio llegó (si llegó de uno). Es contexto: si la consulta falla, el turno sigue sin él.
+  const attribution = await getAttributionForConversation(organizationId, conversationId).catch(
+    (err) => {
+      console.error("[agente] no se pudo leer el anuncio de origen:", err);
+      return null;
+    }
+  );
+
   const recientes = await db
     .select()
     .from(schema.message)
@@ -293,7 +302,13 @@ export async function runAgentTurn(
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: buildAgentSystemPrompt({ profile, kb, stages, agenda }),
+      content: buildAgentSystemPrompt({
+        profile,
+        kb,
+        stages,
+        agenda,
+        anuncio: attribution ? { headline: attribution.headline, body: attribution.body } : null,
+      }),
     },
     ...history
       .filter((m) => m.text)
