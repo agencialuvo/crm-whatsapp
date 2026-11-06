@@ -1,3 +1,4 @@
+import { eq, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 
@@ -118,4 +119,38 @@ export async function seedPlatformCatalog(
     .onConflictDoNothing({ target: schema.plan.slug })
     .returning({ id: schema.plan.id });
   return { categories: categories.length, plans: plans.length };
+}
+
+/**
+ * Los negocios creados ANTES del módulo SaaS no tienen perfil de negocio, y sin él «Ajustes → Tipo de
+ * negocio» no aparece. Se les crea uno con el sector por defecto y estado `skipped` (no se les
+ * interrumpe con el asistente: lo cambian cuando quieran). NO se les crea suscripción: sin ella
+ * el negocio sigue con acceso completo y nada de lo que ya usan queda restringido. Idempotente.
+ */
+export async function backfillBusinessProfiles(db: Db = getDb(), defaultKey = "salon"): Promise<number> {
+  const [category] = await db
+    .select({ id: schema.businessCategory.id })
+    .from(schema.businessCategory)
+    .where(eq(schema.businessCategory.key, defaultKey))
+    .limit(1);
+  if (!category) return 0;
+  const sinPerfil = await db
+    .select({ id: schema.organization.id })
+    .from(schema.organization)
+    .leftJoin(schema.businessProfile, eq(schema.businessProfile.organizationId, schema.organization.id))
+    .where(isNull(schema.businessProfile.id));
+  if (sinPerfil.length === 0) return 0;
+  const creados = await db
+    .insert(schema.businessProfile)
+    .values(
+      sinPerfil.map((o) => ({
+        id: newId("businessProfile"),
+        organizationId: o.id,
+        categoryId: category.id,
+        sectorStatus: "skipped" as const,
+      }))
+    )
+    .onConflictDoNothing()
+    .returning({ id: schema.businessProfile.id });
+  return creados.length;
 }

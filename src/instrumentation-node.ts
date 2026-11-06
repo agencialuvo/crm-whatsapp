@@ -4,7 +4,7 @@ import { mediaDirStatus } from "@/server/media-dir";
 import { leerConfigDespacho } from "@/server/brains/config";
 import { iniciarWorker, tanda } from "@/server/dispatch/worker";
 import { cifrarSecretosEnClaro } from "@/server/zernio/secreto-guardado";
-import { seedPlatformCatalog } from "@/server/seed/platform-catalog";
+import { backfillBusinessProfiles, seedPlatformCatalog } from "@/server/seed/platform-catalog";
 
 /**
  * 008 — Aviso al arranque si MEDIA_DIR no es escribible. Sin esto, el primer
@@ -114,6 +114,8 @@ export function resumeDispatch(): void {
 export async function seedPlatformData(): Promise<void> {
   try {
     const r = await seedPlatformCatalog();
+    const perfiles = await backfillBusinessProfiles();
+    if (perfiles > 0) console.log(`[boot] ${perfiles} negocio(s) anteriores recibieron su perfil de sector`);
     if (r.categories + r.plans > 0) {
       console.log(`[boot] catálogo de plataforma: ${r.categories} categoría(s) y ${r.plans} plan(es) nuevos`);
     }
