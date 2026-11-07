@@ -407,6 +407,20 @@
       "when": 1793994502038,
       "tag": "0057_natural_harry_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1793998000000,
+      "tag": "0058_otro_sin_comision_heredada",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1793999000000,
+      "tag": "0059_servicios_sin_comision_por_defecto",
+      "breakpoints": true
     }
   ]
 }

@@ -65,7 +65,7 @@ export const BULK_COLUMNS: Record<BulkModule, BulkColumn[]> = {
     {
       key: "comision_pct",
       required: false,
-      help: "Solo servicios: % para el profesional (0 a 100). Vacío: 50",
+      help: "Solo servicios: % para el profesional (0 a 100). Vacío: sin comisión",
       examples: ["50", ""],
     },
     {

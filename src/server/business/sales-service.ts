@@ -158,7 +158,8 @@ async function resolveLines(
         note: raw.other ? (raw.note?.trim() ?? null) : null,
         other: !!raw.other,
         baseCents: raw.other ? (raw.amountCents ?? 0) : svc.priceCents,
-        defaultPct: svc.defaultCommissionPercentage,
+        // «Otro» no tiene porcentaje propio (cobro a criterio): solo comisiona lo del profesional o el puntual.
+        defaultPct: raw.other ? null : svc.defaultCommissionPercentage,
       });
     } else {
       const [cmb] = await tx
