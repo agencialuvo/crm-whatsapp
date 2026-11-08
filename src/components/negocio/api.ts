@@ -62,3 +62,8 @@ export function describeError(err: unknown): string {
   if (err instanceof ApiError) return err.message;
   return "Ocurrió un error inesperado. Inténtalo de nuevo.";
 }
+
+/** El código HTTP de un error de la API (`404`, `409`…), o `null` si no vino de ella (sin red, error propio). */
+export function apiErrorStatus(err: unknown): number | null {
+  return err instanceof ApiError ? err.status : null;
+}

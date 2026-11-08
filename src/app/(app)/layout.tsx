@@ -7,6 +7,7 @@ import { accentCssVariables } from "@/lib/branding";
 import { AppShell } from "@/components/app-shell";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { salonEnabled } from "@/server/business/flag";
+import { automationsEnabled } from "@/server/automation/flag";
 import { avisoIaDe } from "@/server/ai/aviso";
 import { AvisoIaBanner } from "@/components/avisos/aviso-ia";
 import { SectorSetupModal } from "@/components/onboarding/sector-setup-modal";
@@ -48,6 +49,7 @@ export default async function AppLayout({
         // cliente: no puede —ni debe— leer variables de entorno.
         agenda={agendaEnabled()}
         salon={salonEnabled()}
+        automations={automationsEnabled()}
         aviso={<AvisoIaBanner aviso={aviso} />}
       >
         {children}

@@ -26,6 +26,7 @@ export function AppShell({
   role,
   agenda = false,
   salon = false,
+  automations = false,
   aviso = null,
   children,
 }: {
@@ -38,6 +39,8 @@ export function AppShell({
   agenda?: boolean;
   /** Módulo SALON (barberías, salones): lo decide el servidor. */
   salon?: boolean;
+  /** Automatizaciones (mensajes y esperas programados): lo decide el servidor. */
+  automations?: boolean;
   /**
    * Franja de aviso por encima de TODA la aplicación (#85).
    *
@@ -85,6 +88,7 @@ export function AppShell({
         role={role}
         agenda={agenda}
         salon={salon}
+        automations={automations}
         open={navOpen}
         onClose={() => setNavOpen(false)}
       />

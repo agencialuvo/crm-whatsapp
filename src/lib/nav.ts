@@ -19,6 +19,7 @@ import {
   Users,
   UsersRound,
   Wallet,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { canConfigure } from "@/lib/auth/roles";
@@ -84,6 +85,7 @@ export const NAV_V2 = process.env.NEXT_PUBLIC_NAV_V2 === "on";
 export function appNavGroups({
   agenda = false,
   salon = false,
+  automations = false,
   role,
   activeModules,
 }: {
@@ -99,6 +101,8 @@ export function appNavGroups({
   agenda?: boolean;
   /** Módulo SALON — Panel, Caja, Servicios, Equipo y Clientes (la agenda por sillas vive dentro de Citas). */
   salon?: boolean;
+  /** Automatizaciones: mensajes y esperas programados. Solo existe si la instancia lo enciende (`AUTOMATIONS`). */
+  automations?: boolean;
   /** #86 — La guía de inicio solo para quien puede configurar. */
   role?: string | null;
 }): NavGroup[] {
@@ -129,6 +133,10 @@ export function appNavGroups({
       : []),
     { href: "/contactos", label: "Contactos", icon: Users },
     { href: "/medios", label: "Medios", icon: Images },
+    // Configura mensajes automáticos a clientes: solo dueño o administrador, y solo con la bandera.
+    ...(automations && canConfigure(role)
+      ? [{ href: "/automatizaciones", label: "Automatizaciones", icon: Zap }]
+      : []),
   ];
   const sistema: NavItem[] = [
     { href: "/notificaciones", label: "Notificaciones", icon: Bell },

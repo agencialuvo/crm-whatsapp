@@ -41,6 +41,7 @@ export function AppNav({
   role,
   agenda = false,
   salon = false,
+  automations = false,
   open = false,
   onClose,
 }: {
@@ -56,6 +57,8 @@ export function AppNav({
   agenda?: boolean;
   /** Módulo SALON: lo decide el servidor, igual que `agenda`. */
   salon?: boolean;
+  /** Automatizaciones: lo decide el servidor (`AUTOMATIONS`), igual que `agenda`. */
+  automations?: boolean;
   /** Solo aplica por debajo de `lg`: en escritorio el lateral es fijo. */
   open?: boolean;
   onClose?: () => void;
@@ -114,6 +117,7 @@ export function AppNav({
   const allGroups = appNavGroups({
     agenda,
     salon,
+    automations,
     role,
     activeModules: context?.plan.features.modules,
   });
