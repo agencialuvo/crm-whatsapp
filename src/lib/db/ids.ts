@@ -63,6 +63,10 @@ const prefixes = {
   // Cuadre de caja y preferencias de vista
   cashRegisterShift: "shf",
   userUiPreferences: "pref",
+  // Automatizaciones — flujos, pasos y cola de ejecución
+  automationFlow: "aut",
+  automationStep: "stp",
+  automationQueue: "que",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

@@ -1881,6 +1881,83 @@ export const conversionEvent = pgTable(
   ]
 );
 
+/** Automatización. */
+
+export const automationFlow = pgTable(
+  "automation_flow",
+  {
+    id: text("id").primaryKey(), // prefix: 'aut'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(), // ej: "Flujo de Cumpleaños"
+    triggerType: text("trigger_type", {
+      enum: ["birthday", "booking_reminder", "tag_added", "manual"],
+    }).notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [index("automation_flow_org_idx").on(t.organizationId, t.active)]
+);
+
+export const automationStep = pgTable(
+  "automation_step",
+  {
+    id: text("id").primaryKey(), // prefix: 'stp'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => automationFlow.id, { onDelete: "cascade" }),
+    stepType: text("step_type", {
+      enum: ["delay", "send_whatsapp", "condition", "add_tag"],
+    }).notNull(),
+    /** 
+     * Configuración interna del nodo (JSON):
+     * Ej para delay: { "amount": 1, "unit": "days", "sendAtHour": 10 }
+     * Ej para mensaje: { "templateId": "...", "content": "Hola {{name}}..." }
+     */
+    config: jsonb("config").notNull(),
+    positionX: integer("position_x").notNull().default(0),
+    positionY: integer("position_y").notNull().default(0),
+  },
+  (t) => [index("automation_step_flow_idx").on(t.flowId)]
+);
+
+export const automationQueue = pgTable(
+  "automation_queue",
+  {
+    id: text("id").primaryKey(), // prefix: 'que'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => automationFlow.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => automationStep.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: ["pending", "processing", "completed", "cancelled", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    scheduledFor: timestamp("scheduled_for").notNull(), // Cuándo debe ejecutarse
+    error: text("error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("automation_queue_status_scheduled_idx").on(t.status, t.scheduledFor),
+    index("automation_queue_org_contact_idx").on(t.organizationId, t.contactId),
+  ]
+);
+
+
 /** Conexión del negocio con su dataset de Meta (token cifrado en reposo). */
 export const capiSettings = pgTable(
   "capi_settings",

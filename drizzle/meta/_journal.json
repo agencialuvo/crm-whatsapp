@@ -421,6 +421,13 @@
       "when": 1793999000000,
       "tag": "0059_servicios_sin_comision_por_defecto",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1794158578257,
+      "tag": "0060_redundant_whizzer",
+      "breakpoints": true
     }
   ]
 }
