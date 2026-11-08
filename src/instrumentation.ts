@@ -5,12 +5,20 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { checkMediaDir, cleanupOrphanRuns, encryptLegacySecrets, resumeDispatch, seedPlatformData } =
+    const {
+      checkMediaDir,
+      cleanupOrphanRuns,
+      encryptLegacySecrets,
+      resumeAutomations,
+      resumeDispatch,
+      seedPlatformData,
+    } =
       await import("./instrumentation-node");
     await checkMediaDir();
     await cleanupOrphanRuns();
     await encryptLegacySecrets();
     await seedPlatformData();
     resumeDispatch();
+    resumeAutomations();
   }
 }

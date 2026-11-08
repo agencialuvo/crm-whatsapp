@@ -38,6 +38,9 @@ export const envSchema = z.object({
   // defecto — sin él toda su superficie responde 404 y la UI no lo menciona.
   // Ej.: SALON=on (la agenda por sillas necesita además AGENDA=on)
   SALON: z.string().optional(),
+  // Automatizaciones: el worker que ejecuta los flujos de `automation_queue` (mensajes y esperas
+  // programados). Apagado por defecto — sin él no arranca y la cola no se toca. Ej.: AUTOMATIONS=on
+  AUTOMATIONS: z.string().optional(),
   // Correo saliente (opcional): solo para restablecer la contraseña con un
   // código. Apuntan al servidor SMTP del propio negocio; sin SMTP_HOST y
   // SMTP_FROM la función se apaga y lo demás funciona igual. Se leen de

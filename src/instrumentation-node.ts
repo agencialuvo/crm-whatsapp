@@ -107,6 +107,23 @@ export function resumeDispatch(): void {
 }
 
 /**
+ * Automatizaciones: arranca el worker de la cola solo si la instancia lo enciende (`AUTOMATIONS=on`).
+ * Import dinámico: apagado, ni se cargan los módulos de envío. Un fallo aquí nunca tumba el arranque.
+ */
+export function resumeAutomations(): void {
+  if (process.env.AUTOMATIONS === undefined) return;
+  void import("@/server/automation/flag")
+    .then(async ({ automationsEnabled }) => {
+      if (!automationsEnabled()) return;
+      const { startAutomationWorker, tickAutomations } = await import("@/server/automation/worker");
+      startAutomationWorker();
+      void tickAutomations();
+      console.log("[boot] automatizaciones activas");
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar el worker de automatizaciones:", err));
+}
+
+/**
  * Catálogo base de la plataforma (categorías de sector y plan por defecto).
  * Idempotente y nunca tumba el arranque: si la BD aún no está lista o la tabla
  * no existe, se reintenta en el próximo arranque.
