@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
  * tomas caídas, la idempotencia del log y un flujo recorrido de punta a punta.
  *
  * Necesita una base con las migraciones aplicadas, así que NO corre con `pnpm test`: se enciende con
- *   RUN_DB_TESTS=1 pnpm vitest run tests/unit/automation-queue.test.ts
+ *   pnpm test:db   (secuencial: estas suites comparten la base y la cola)
  * (toma `DATABASE_URL` del entorno o del `.env`). Crea sus propios datos y los borra al terminar.
  * Las tareas vencidas de OTRAS organizaciones que existan en esa base no se tocan, pero esta suite
  * asume que no hay tareas vencidas ajenas en la organización que elige (la primera).

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
  * puerta del embudo (`moveLeadToStage` / `recordLeadCreated`) y que el índice único evita duplicados.
  *
  * Necesita una base con las migraciones aplicadas, así que NO corre con `pnpm test`:
- *   RUN_DB_TESTS=1 pnpm vitest run tests/unit/automation-triggers-live.test.ts
+ *   pnpm test:db   (secuencial: estas suites comparten la base y la cola)
  * Crea sus propios contactos, flujos y leads y los borra al terminar (borrar el contacto y el flujo
  * arrastra cola, bitácora de etapas y conversación por cascada).
  */
