@@ -1,4 +1,5 @@
 import { apiError } from "@/lib/api";
+import { logsQuerySchema, type LogsQuery } from "@/lib/automation-schemas";
 import { canConfigure } from "@/lib/auth/roles";
 import type { SessionContext } from "@/lib/auth/session";
 import { automationsEnabled } from "@/server/automation/flag";
@@ -39,4 +40,20 @@ export function automationGate(session: SessionContext): Response | null {
 export function automationErrorResponse(err: unknown): Response {
   if (err instanceof AutomationError) return apiError(err.status, err.code, err.message);
   throw err;
+}
+
+/** Query del historial (`status`, `limit`, `offset`) → valores validados, o la `Response` 422 que corta la petición. */
+export function parseLogsQuery(req: Request): { ok: true; data: LogsQuery } | { ok: false; response: Response } {
+  const params = new URL(req.url).searchParams;
+  const raw: Record<string, string> = {};
+  for (const key of ["status", "limit", "offset"]) {
+    const v = params.get(key);
+    if (v !== null && v !== "") raw[key] = v;
+  }
+  const parsed = logsQuerySchema.safeParse(raw);
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map((i) => `${i.path.join(".") || "query"}: ${i.message}`).join("; ");
+    return { ok: false, response: apiError(422, "invalid_query", detail) };
+  }
+  return { ok: true, data: parsed.data };
 }

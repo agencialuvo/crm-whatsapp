@@ -125,3 +125,20 @@ export function parseStepConfig(
   }
   return { ok: true, value: parsed.data as Record<string, unknown> };
 }
+
+/* ─── Monitoreo: historial de ejecuciones ─── */
+
+/** Filtros del historial. `skipped` agrupa los dos motivos de salto (frecuencia y baja del contacto). */
+export const LOG_STATUS_FILTERS = ["success", "failed", "skipped", "skipped_rate_limit", "skipped_opt_out"] as const;
+export type LogStatusFilter = (typeof LOG_STATUS_FILTERS)[number];
+
+export const LOGS_DEFAULT_LIMIT = 25;
+export const LOGS_MAX_LIMIT = 100;
+
+/** Query del historial: filtro por estado y paginación simple (`limit` + `offset`). */
+export const logsQuerySchema = z.object({
+  status: z.enum(LOG_STATUS_FILTERS).optional(),
+  limit: z.coerce.number().int().min(1).max(LOGS_MAX_LIMIT).default(LOGS_DEFAULT_LIMIT),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+});
+export type LogsQuery = z.infer<typeof logsQuerySchema>;
