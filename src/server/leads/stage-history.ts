@@ -4,6 +4,7 @@ import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import type { LossReason, StageChangeSource } from "@/lib/types";
 import { reportStageChange } from "@/server/attribution/conversions";
+import { onLeadCreated, onLeadStageChanged } from "@/server/automation/triggers";
 
 /**
  * La ÚNICA puerta que escribe `lead.stage_id`.
@@ -161,6 +162,17 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
     });
   }
 
+  // Automatizaciones: entrar a una etapa puede disparar un flujo. Igual que lo anterior, ya fuera de la
+  // transacción y sin poder fallar hacia arriba (`onLeadStageChanged` nunca lanza), y apagado no hace nada.
+  if (result.ok && result.changed) {
+    await onLeadStageChanged({
+      organizationId: input.organizationId,
+      leadId: result.lead.id,
+      contactId: result.lead.contactId,
+      toStageId: result.lead.stageId,
+    });
+  }
+
   return result;
 }
 
@@ -219,6 +231,13 @@ export async function recordLeadCreated(input: {
     // con motivo, y aquí nunca hay uno que capturar.
     lossReason: null,
     lossNote: null,
+  });
+
+  // Automatizaciones: un lead nuevo puede disparar un flujo `lead_created`. Nunca lanza.
+  await onLeadCreated({
+    organizationId: input.organizationId,
+    leadId: input.leadId,
+    contactId: input.contactId,
   });
 }
 

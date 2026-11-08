@@ -2,6 +2,7 @@ import { sendText } from "@/server/inbox/send";
 import { sendTemplate } from "@/server/whatsapp/templates";
 import { processRow, type Deps, type Row } from "@/server/automation/engine";
 import * as queue from "@/server/automation/queue";
+import { runBirthdayTrigger } from "@/server/automation/triggers";
 
 /**
  * Automatizaciones — el worker: cada cierto tiempo toma las tareas vencidas de `automation_queue` y
@@ -87,3 +88,45 @@ export function stopAutomationWorker(): void {
   s.timer = null;
 }
 
+
+/**
+ * El barrido de cumpleaños corre al arrancar y cada rato, no «una vez al día»: es idempotente (una vez
+ * por contacto, flujo y año), así que repetirlo es gratis, y a cambio no depende de que la app estuviera
+ * encendida a una hora exacta ni de la zona horaria de cada negocio.
+ */
+const TRIGGER_INTERVAL_MS = 30 * 60_000;
+
+type TriggerState = { timer: NodeJS.Timeout | null; running: boolean };
+const gt = globalThis as unknown as { __voceroAutomationTriggers?: TriggerState };
+const triggerState = (): TriggerState =>
+  (gt.__voceroAutomationTriggers ??= { timer: null, running: false });
+
+/** Una pasada del barrido. Nunca lanza. */
+export async function tickTriggers(now: Date = new Date()): Promise<void> {
+  const s = triggerState();
+  if (s.running) return;
+  s.running = true;
+  try {
+    const run = await runBirthdayTrigger(now);
+    if (run.enqueued > 0) {
+      console.log(`[automatizaciones] cumpleaños: ${run.enqueued} saludo(s) en cola`);
+    }
+  } catch (err) {
+    console.error("[automatizaciones] el barrido de disparadores falló:", err);
+  } finally {
+    s.running = false;
+  }
+}
+
+export function startTriggerScheduler(): void {
+  const s = triggerState();
+  if (s.timer) return;
+  s.timer = setInterval(() => void tickTriggers(), TRIGGER_INTERVAL_MS);
+  s.timer.unref?.();
+}
+
+export function stopTriggerScheduler(): void {
+  const s = triggerState();
+  if (s.timer) clearInterval(s.timer);
+  s.timer = null;
+}

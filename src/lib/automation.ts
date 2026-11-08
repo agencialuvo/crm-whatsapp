@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zonedWallClockToUtc } from "@/lib/time/slots";
 
 /**
  * Motor de automatizaciones — reglas puras (sin base de datos ni red).
@@ -107,3 +108,62 @@ export function decideSend(input: {
   }
   return templateOk ? { kind: "template" } : { kind: "fail", error: OUT_OF_WINDOW_ERROR };
 }
+
+/* ─── Disparadores ─── */
+
+/** Hora local (del negocio) a la que sale el saludo de cumpleaños si el flujo no dice otra. */
+export const BIRTHDAY_DEFAULT_HOUR = 10;
+
+/** `automation_flow.trigger_config`: `toStageId` acota `stage_changed`; `hour` fija el saludo de cumpleaños. */
+export const flowTriggerConfigSchema = z.object({
+  toStageId: z.string().trim().min(1).nullish(),
+  hour: z.number().int().min(0).max(23).optional(),
+});
+export type FlowTriggerConfig = z.infer<typeof flowTriggerConfigSchema>;
+
+/** Un JSON ausente o dañado no apaga el flujo: se cae a los valores por defecto (sin acotar, 10:00). */
+export function parseTriggerConfig(raw: unknown): FlowTriggerConfig {
+  const parsed = flowTriggerConfigSchema.safeParse(raw ?? {});
+  return parsed.success ? parsed.data : {};
+}
+
+/** ¿Este flujo `stage_changed` reacciona al cambio a `toStageId`? Sin etapa configurada, a cualquiera. */
+export function stageFlowMatches(config: FlowTriggerConfig, toStageId: string): boolean {
+  return !config.toStageId || config.toStageId === toStageId;
+}
+
+export function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/** Día, mes y año de una fecha `AAAA-MM-DD`. */
+export function splitISODate(iso: string): { year: number; month: number; day: number } {
+  const [y, m, d] = iso.split("-").map(Number);
+  return { year: y!, month: m!, day: d! };
+}
+
+/**
+ * Los (día, mes) de cumpleaños que toca saludar en la fecha local `todayISO`. Casi siempre es solo
+ * hoy; quien nació un 29 de febrero se saluda el 28 en los años que no son bisiestos.
+ */
+export function birthdaysDueOn(todayISO: string): { day: number; month: number }[] {
+  const { year, month, day } = splitISODate(todayISO);
+  const due = [{ day, month }];
+  if (month === 2 && day === 28 && !isLeapYear(year)) due.push({ day: 29, month: 2 });
+  return due;
+}
+
+/** El instante UTC de las `hour`:00 locales del día `todayISO` en la zona del negocio. */
+export function birthdaySendAt(todayISO: string, hour: number | undefined, timezone: string): Date | null {
+  const h = Number.isInteger(hour) && hour! >= 0 && hour! <= 23 ? hour! : BIRTHDAY_DEFAULT_HOUR;
+  return zonedWallClockToUtc(todayISO, `${String(h).padStart(2, "0")}:00`, timezone);
+}
+
+/* Llaves de idempotencia de los disparadores (`automation_queue.dedupe_key`). */
+
+/** Un saludo por contacto, flujo y AÑO. */
+export const birthdayDedupeKey = (year: number) => `birthday:${year}`;
+/** Una vez por lead y etapa: ir y volver entre etapas no repite el mensaje al cliente. */
+export const stageDedupeKey = (leadId: string, stageId: string) => `stage:${leadId}:${stageId}`;
+/** Una vez por lead. */
+export const leadCreatedDedupeKey = (leadId: string) => `lead_created:${leadId}`;

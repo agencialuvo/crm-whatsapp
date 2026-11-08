@@ -115,8 +115,12 @@ export function resumeAutomations(): void {
   void import("@/server/automation/flag")
     .then(async ({ automationsEnabled }) => {
       if (!automationsEnabled()) return;
-      const { startAutomationWorker, tickAutomations } = await import("@/server/automation/worker");
+      const { startAutomationWorker, startTriggerScheduler, tickAutomations, tickTriggers } = await import(
+        "@/server/automation/worker"
+      );
       startAutomationWorker();
+      startTriggerScheduler();
+      void tickTriggers();
       void tickAutomations();
       console.log("[boot] automatizaciones activas");
     })
