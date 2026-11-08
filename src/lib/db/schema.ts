@@ -1892,8 +1892,21 @@ export const automationFlow = pgTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     name: text("name").notNull(), // ej: "Flujo de Cumpleaños"
     triggerType: text("trigger_type", {
-      enum: ["birthday", "booking_reminder", "tag_added", "manual"],
+      enum: [
+        "birthday",
+        "booking_reminder",
+        "tag_added",
+        "manual",
+        // El lead pasa a una etapa del embudo (`trigger_config.toStageId` la acota) / nace un lead nuevo.
+        "stage_changed",
+        "lead_created",
+      ],
     }).notNull(),
+    /**
+     * Ajustes del disparador (JSON): `{ "toStageId": "stg_…" }` para `stage_changed` (sin él, cualquier
+     * cambio de etapa) y `{ "hour": 10 }` para `birthday` (hora local del negocio; 10 por defecto).
+     */
+    triggerConfig: jsonb("trigger_config"),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -1954,9 +1967,16 @@ export const automationQueue = pgTable(
     attempts: integer("attempts").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(5),
     error: text("error"),
+    /**
+     * Llave de idempotencia de un disparador: «birthday:2026», «stage:<lead>:<etapa>», «lead_created:<lead>».
+     * Con el índice único, encolar dos veces lo mismo para el mismo contacto y flujo no inserta la segunda.
+     * Los pasos siguientes de un flujo no la llevan (NULL: no choca).
+     */
+    dedupeKey: text("dedupe_key"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
+    uniqueIndex("automation_queue_dedupe_uq").on(t.organizationId, t.flowId, t.contactId, t.dedupeKey),
     index("automation_queue_status_scheduled_idx").on(t.status, t.scheduledFor),
     index("automation_queue_org_contact_idx").on(t.organizationId, t.contactId),
   ]

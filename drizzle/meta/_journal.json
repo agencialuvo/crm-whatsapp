@@ -449,6 +449,13 @@
       "when": 1794160711569,
       "tag": "0063_automation_queue_locking",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1794170485894,
+      "tag": "0064_automation_triggers",
+      "breakpoints": true
     }
   ]
 }
