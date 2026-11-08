@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
+import { HistoryPanel } from "@/components/automatizaciones/history-panel";
+import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
 import { StepDialog } from "@/components/automatizaciones/step-dialog";
 import { apiErrorStatus, apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -53,6 +55,10 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
   const [removeStep, setRemoveStep] = useState<StepDto | null>(null);
   const [removeFlow, setRemoveFlow] = useState(false);
+  const [tab, setTab] = useState<"pasos" | "historial">("pasos");
+  const [historyKey, setHistoryKey] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const monitor = useAutomationStats(flowId);
 
   const ordered = useMemo(() => sortSteps(steps), [steps]);
 
@@ -205,7 +211,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const block = activationBlock(steps.length, flow.active);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="mx-auto max-w-5xl space-y-5">
       {back}
 
       <section className="rounded-lg border border-border-strong bg-card p-4 shadow-sm sm:p-5" aria-label="Datos del flujo">
@@ -253,7 +259,60 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
         </p>
       )}
 
-      <section aria-label="Pasos del flujo" className="space-y-3">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-[15px] font-bold tracking-tight">Estado del motor</h3>
+          <RefreshButton
+            loading={monitor.loading || historyLoading}
+            updatedAt={monitor.updatedAt}
+            onClick={() => {
+              void monitor.reload();
+              setHistoryKey((k) => k + 1);
+            }}
+          />
+        </div>
+        <StatsPanel
+          stats={monitor.stats}
+          error={monitor.error}
+          loading={monitor.loading}
+          onRetry={() => void monitor.reload()}
+          scope="de este flujo"
+        />
+      </div>
+
+      <div role="tablist" aria-label="Secciones del flujo" className="flex gap-1 border-b">
+        {(
+          [
+            ["pasos", "Pasos"],
+            ["historial", "Historial"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            id={`tab-${value}`}
+            aria-selected={tab === value}
+            aria-controls={`panel-${value}`}
+            onClick={() => setTab(value)}
+            className={cn(
+              "-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              tab === value ? "border-brand text-foreground" : "border-transparent text-text-3 hover:text-foreground"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "historial" && (
+        <div role="tabpanel" id="panel-historial" aria-labelledby="tab-historial">
+          <HistoryPanel flowId={flowId} refreshKey={historyKey} onLoadingChange={setHistoryLoading} />
+        </div>
+      )}
+
+      {tab === "pasos" && (
+      <section id="panel-pasos" role="tabpanel" aria-labelledby="tab-pasos" aria-label="Pasos del flujo" className="max-w-3xl space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-[15px] font-bold tracking-tight">
             Pasos <span className="font-normal text-text-3">({ordered.length})</span>
@@ -356,6 +415,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           </ol>
         )}
       </section>
+      )}
 
       {editingFlow && (
         <FlowDialog

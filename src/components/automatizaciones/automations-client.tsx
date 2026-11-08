@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
+import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { activationBlock, triggerLabel, type FlowListItem, type StageOption } from "@/lib/automation-dto";
 
@@ -34,6 +35,7 @@ export function AutomationsClient() {
   const [creating, setCreating] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
   const table = useDataTable(flows ?? NONE, { view: "automatizaciones" });
+  const monitor = useAutomationStats(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -89,6 +91,26 @@ export function AutomationsClient() {
         </p>
         {newButton}
       </div>
+
+      {flows !== null && flows.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-[15px] font-bold tracking-tight">Estado del motor</h3>
+            <RefreshButton
+              loading={monitor.loading}
+              updatedAt={monitor.updatedAt}
+              onClick={() => void monitor.reload()}
+            />
+          </div>
+          <StatsPanel
+            stats={monitor.stats}
+            error={monitor.error}
+            loading={monitor.loading}
+            onRetry={() => void monitor.reload()}
+            scope="de tus flujos"
+          />
+        </div>
+      )}
 
       {actionError && (
         <p
