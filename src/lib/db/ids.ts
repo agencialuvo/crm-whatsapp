@@ -67,6 +67,7 @@ const prefixes = {
   automationFlow: "aut",
   automationStep: "stp",
   automationQueue: "que",
+  automationExecutionLog: "log",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

@@ -11,7 +11,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 /**
  * Tiempo: todas las columnas son `timestamp without time zone` y el marco es
@@ -1948,6 +1948,11 @@ export const automationQueue = pgTable(
       .notNull()
       .default("pending"),
     scheduledFor: timestamp("scheduled_for").notNull(), // Cuándo debe ejecutarse
+    /** Cuándo un worker la tomó (`processing`). Una toma vieja se considera caída y se reclama. */
+    lockedAt: timestamp("locked_at"),
+    /** Intentos ya iniciados: se suma al tomar la fila, así un fallo que mata al worker también cuenta. */
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
     error: text("error"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
@@ -1957,6 +1962,79 @@ export const automationQueue = pgTable(
   ]
 );
 
+export const automationExecutionLog = pgTable(
+  "automation_execution_log",
+  {
+    id: text("id").primaryKey(), // prefix: 'log'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => automationFlow.id, { onDelete: "cascade" }),
+    // Opcional: si el paso se elimina, el historial de ejecuciones se conserva con step_id en NULL.
+    stepId: text("step_id").references(() => automationStep.id, { onDelete: "set null" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    /** La tarea de la cola que lo produjo: llave de idempotencia (un solo éxito por tarea). */
+    queueId: text("queue_id").references(() => automationQueue.id, { onDelete: "set null" }),
+    status: text("status", {
+      enum: ["success", "failed", "skipped_rate_limit", "skipped_opt_out"],
+    }).notNull(),
+    metadata: jsonb("metadata"), // Payload enviado, response de Meta API, variables inyectadas
+    executedAt: timestamp("executed_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("automation_log_org_contact_idx").on(t.organizationId, t.contactId),
+    index("automation_log_flow_step_idx").on(t.flowId, t.stepId),
+    index("automation_log_executed_at_idx").on(t.executedAt),
+    // Idempotencia: una tarea no puede registrar dos éxitos (un reintento tras caerse el worker no duplica).
+    uniqueIndex("automation_log_queue_success_uq")
+      .on(t.queueId)
+      .where(sql`${t.status} = 'success'`),
+  ]
+);
+
+/**
+ * Relaciones de las automatizaciones (solo para consultas relacionales de Drizzle: no cambian el
+ * esquema ni generan migración). Cada `many` tiene su `one` del otro lado.
+ */
+export const automationFlowRelations = relations(automationFlow, ({ many }) => ({
+  steps: many(automationStep),
+  queue: many(automationQueue),
+  logs: many(automationExecutionLog),
+}));
+
+export const automationStepRelations = relations(automationStep, ({ one, many }) => ({
+  flow: one(automationFlow, { fields: [automationStep.flowId], references: [automationFlow.id] }),
+  queue: many(automationQueue),
+  logs: many(automationExecutionLog),
+}));
+
+export const automationQueueRelations = relations(automationQueue, ({ one }) => ({
+  flow: one(automationFlow, { fields: [automationQueue.flowId], references: [automationFlow.id] }),
+  step: one(automationStep, { fields: [automationQueue.stepId], references: [automationStep.id] }),
+  contact: one(contact, { fields: [automationQueue.contactId], references: [contact.id] }),
+}));
+
+export const automationExecutionLogRelations = relations(automationExecutionLog, ({ one }) => ({
+  flow: one(automationFlow, {
+    fields: [automationExecutionLog.flowId],
+    references: [automationFlow.id],
+  }),
+  step: one(automationStep, {
+    fields: [automationExecutionLog.stepId],
+    references: [automationStep.id],
+  }),
+  contact: one(contact, { fields: [automationExecutionLog.contactId], references: [contact.id] }),
+}));
+
+/** Las automatizaciones que tocaron a un contacto (cola pendiente e historial de ejecución). */
+export const contactAutomationRelations = relations(contact, ({ many }) => ({
+  automationQueue: many(automationQueue),
+  automationLogs: many(automationExecutionLog),
+}));
 
 /** Conexión del negocio con su dataset de Meta (token cifrado en reposo). */
 export const capiSettings = pgTable(
