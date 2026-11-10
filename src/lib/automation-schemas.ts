@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { delayConfigSchema, sendWhatsappConfigSchema } from "@/lib/automation";
+import { daysOffsetSchema, delayConfigSchema, sendWhatsappConfigSchema } from "@/lib/automation";
 
 /**
  * Automatizaciones — contratos de la API de gestión de flujos y pasos (compartidos cliente/servidor).
@@ -27,7 +27,7 @@ const coord = z.number().int().min(-MAX_COORD).max(MAX_COORD);
  * algo que se guarde en silencio. `manual` y `lead_created` no llevan ajustes.
  */
 export const TRIGGER_CONFIG_SCHEMAS = {
-  birthday: z.object({ hour: z.number().int().min(0).max(23).optional() }).strict(),
+  birthday: z.object({ hour: z.number().int().min(0).max(23).optional(), daysOffset: daysOffsetSchema.optional() }).strict(),
   stage_changed: z.object({ toStageId: z.string().trim().min(1).max(64).nullish() }).strict(),
   lead_created: z.object({}).strict(),
   manual: z.object({}).strict(),

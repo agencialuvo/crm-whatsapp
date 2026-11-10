@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { zonedWallClockToUtc } from "@/lib/time/slots";
+import { addDaysISO, zonedWallClockToUtc } from "@/lib/time/slots";
 
 /**
  * Motor de automatizaciones — reglas puras (sin base de datos ni red).
@@ -114,10 +114,20 @@ export function decideSend(input: {
 /** Hora local (del negocio) a la que sale el saludo de cumpleaños si el flujo no dice otra. */
 export const BIRTHDAY_DEFAULT_HOUR = 10;
 
-/** `automation_flow.trigger_config`: `toStageId` acota `stage_changed`; `hour` fija el saludo de cumpleaños. */
+/** Hasta cuántos días antes del cumpleaños se puede adelantar el saludo (la pantalla ofrece 0, 1 y 2). */
+export const BIRTHDAY_MAX_DAYS_BEFORE = 30;
+
+/** `daysOffset` de un flujo de cumpleaños: 0 = el mismo día, -1 = un día antes, … Entero de -30 a 0. */
+export const daysOffsetSchema = z.number().int().min(-BIRTHDAY_MAX_DAYS_BEFORE).max(0);
+
+/**
+ * `automation_flow.trigger_config`: `toStageId` acota `stage_changed`; `hour` fija la hora del saludo de
+ * cumpleaños y `daysOffset` cuántos días antes sale (ausente = 0, el mismo día).
+ */
 export const flowTriggerConfigSchema = z.object({
   toStageId: z.string().trim().min(1).nullish(),
   hour: z.number().int().min(0).max(23).optional(),
+  daysOffset: daysOffsetSchema.optional(),
 });
 export type FlowTriggerConfig = z.infer<typeof flowTriggerConfigSchema>;
 
@@ -151,6 +161,16 @@ export function birthdaysDueOn(todayISO: string): { day: number; month: number }
   const due = [{ day, month }];
   if (month === 2 && day === 28 && !isLeapYear(year)) due.push({ day: 29, month: 2 });
   return due;
+}
+
+/**
+ * La fecha de cumpleaños que un flujo saluda HOY (`todayISO`, local del negocio): hoy mismo con
+ * `daysOffset` 0 y, con -1, mañana (el saludo sale un día antes). Es aritmética de calendario, así que
+ * cruza fin de mes y de año sin tropiezos; los bisiestos los resuelve `birthdaysDueOn` sobre esa fecha.
+ */
+export function birthdayTargetDate(todayISO: string, daysOffset: number | undefined): string {
+  const offset = Number.isInteger(daysOffset) && daysOffset! <= 0 && daysOffset! >= -BIRTHDAY_MAX_DAYS_BEFORE ? daysOffset! : 0;
+  return addDaysISO(todayISO, -offset);
 }
 
 /** El instante UTC de las `hour`:00 locales del día `todayISO` en la zona del negocio. */

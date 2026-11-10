@@ -1,6 +1,7 @@
 import {
   birthdayDedupeKey,
   birthdaySendAt,
+  birthdayTargetDate,
   birthdaysDueOn,
   leadCreatedDedupeKey,
   parseTriggerConfig,
@@ -27,8 +28,9 @@ import { dbTriggerStore, type TriggerStore } from "@/server/automation/trigger-s
 export type BirthdayRun = { organizations: number; flows: number; contacts: number; enqueued: number };
 
 /**
- * Encola el saludo de cumpleaños de HOY (en la zona horaria de cada negocio) para quien cumple años
- * y tiene un flujo `birthday` activo. Una organización que falla no frena a las demás.
+ * Encola, HOY (en la zona horaria de cada negocio), el saludo de cumpleaños de cada flujo `birthday`
+ * activo: el de quien cumple años hoy o, si el flujo tiene `daysOffset` (-1, -2…), el de quien los cumple
+ * dentro de esos días. Una organización que falla no frena a las demás.
  */
 export async function runBirthdayTrigger(
   now: Date = new Date(),
@@ -44,14 +46,26 @@ export async function runBirthdayTrigger(
       // El día es el del NEGOCIO, no el del servidor: a las 23:00 en Lima ya es mañana en UTC.
       const timezone = await store.timezone(organizationId);
       const today = todayInTz(now, timezone);
-      const { year } = splitISODate(today);
-      const contacts = await store.birthdayContacts(organizationId, birthdaysDueOn(today));
-      run.contacts += contacts.length;
+      // Cada flujo mira un cumpleaños distinto según su `daysOffset` (0 = hoy, -1 = mañana…): los
+      // contactos se piden una vez por fecha objetivo, no una vez por flujo.
+      const byTarget = new Map<string, string[]>();
 
       for (const flow of flows) {
         run.flows += 1;
-        const sendAt = birthdaySendAt(today, parseTriggerConfig(flow.triggerConfig).hour, timezone);
+        const config = parseTriggerConfig(flow.triggerConfig);
+        const target = birthdayTargetDate(today, config.daysOffset);
+        let contacts = byTarget.get(target);
+        if (!contacts) {
+          contacts = await store.birthdayContacts(organizationId, birthdaysDueOn(target));
+          byTarget.set(target, contacts);
+          run.contacts += contacts.length;
+        }
+        // El saludo sale HOY a su hora, aunque el cumpleaños sea dentro de unos días.
+        const sendAt = birthdaySendAt(today, config.hour, timezone);
         if (!sendAt) continue;
+        // Una vez por contacto, flujo y cumpleaños: el año es el del cumpleaños (el 31 de dic. un
+        // saludo «1 día antes» es del cumpleaños del 1 de ene. del año que viene).
+        const { year } = splitISODate(target);
         for (const contactId of contacts) {
           const inserted = await store.enqueueFirstStep({
             organizationId,
