@@ -16,8 +16,11 @@ import {
 } from "@/lib/automation-schemas";
 import {
   CREATABLE_TRIGGERS,
+  BIRTHDAY_OFFSETS,
   TRIGGER_HINTS,
   hourLabel,
+  offsetOf,
+  offsetOptionLabel,
   triggerLabel,
   type FlowDto,
   type StageOption,
@@ -58,6 +61,7 @@ export function FlowDialog({
   const [hour, setHour] = useState(
     typeof flow?.triggerConfig?.hour === "number" ? String(flow.triggerConfig.hour) : String(BIRTHDAY_DEFAULT_HOUR)
   );
+  const [daysOffset, setDaysOffset] = useState(String(offsetOf(flow?.triggerConfig ?? null)));
   const [stageId, setStageId] = useState(
     typeof flow?.triggerConfig?.toStageId === "string" ? flow.triggerConfig.toStageId : ""
   );
@@ -69,6 +73,14 @@ export function FlowDialog({
   const clear = (...keys: string[]) =>
     setErrors((prev) => (keys.some((k) => k in prev) ? Object.fromEntries(Object.entries(prev).filter(([k]) => !keys.includes(k))) : prev));
 
+  // Los tres momentos de la pantalla y, si el flujo trae otro desde la API, ese también (no se pierde al editar).
+  const offsetOptions = useMemo<SearchSelectOption[]>(() => {
+    const values: number[] = [...BIRTHDAY_OFFSETS];
+    const current = Number(daysOffset);
+    if (!values.includes(current)) values.push(current);
+    return values.map((v) => ({ value: String(v), label: offsetOptionLabel(v) }));
+  }, [daysOffset]);
+
   const stageOptions = useMemo<SearchSelectOption[]>(
     () => stages.map((s) => ({ value: s.id, label: s.name })),
     [stages]
@@ -76,7 +88,7 @@ export function FlowDialog({
 
   /** Los ajustes del disparador tal como los espera la API (`null` si no hay ninguno). */
   function buildConfig(): Record<string, unknown> | null {
-    if (triggerType === "birthday") return { hour: Number(hour) };
+    if (triggerType === "birthday") return { hour: Number(hour), daysOffset: Number(daysOffset) };
     if (triggerType === "stage_changed" && stageId) return { toStageId: stageId };
     return null;
   }
@@ -180,10 +192,32 @@ export function FlowDialog({
 
         {triggerType === "birthday" && (
           <Field
+            label="Momento del envío"
+            htmlFor="flow-offset"
+            error={errors.triggerConfig}
+            hint="Para avisos previos (un descuento, un recordatorio), elige cuántos días antes sale el mensaje."
+          >
+            <SearchSelect
+              id="flow-offset"
+              value={daysOffset}
+              onChange={(v) => {
+                setDaysOffset(v);
+                clear("triggerConfig");
+              }}
+              options={offsetOptions}
+              searchPlaceholder="Buscar momento…"
+              ariaLabel="Momento del envío"
+              disabled={busy}
+            />
+          </Field>
+        )}
+
+        {triggerType === "birthday" && (
+          <Field
             label="Hora del saludo"
             htmlFor="flow-hour"
             error={errors.triggerConfig}
-            hint="Hora local de tu negocio, el día del cumpleaños."
+            hint="Hora local de tu negocio, el día en que sale el mensaje."
           >
             <SearchSelect
               id="flow-hour"

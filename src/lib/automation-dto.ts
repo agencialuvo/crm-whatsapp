@@ -69,6 +69,27 @@ export const triggerLabel = (type: string): string => TRIGGER_LABELS[type] ?? ty
 
 export const hourLabel = (hour: number): string => `${String(hour).padStart(2, "0")}:00`;
 
+/** `daysOffset` de un flujo de cumpleaños (0, -1, -2…); lo ausente o inválido cuenta como 0. */
+export function offsetOf(config: Record<string, unknown> | null): number {
+  const v = config?.daysOffset;
+  return typeof v === "number" && Number.isInteger(v) && v < 0 ? v : 0;
+}
+
+/** «1 día antes», «2 días antes»; `null` si es el mismo día. */
+export function offsetShort(offset: number): string | null {
+  const n = Math.abs(offset);
+  return n === 0 ? null : `${n} ${n === 1 ? "día" : "días"} antes`;
+}
+
+/** Opción del desplegable «Momento del envío»: «El mismo día del cumpleaños», «1 día antes del cumpleaños»… */
+export function offsetOptionLabel(offset: number): string {
+  const short = offsetShort(offset);
+  return short ? `${short} del cumpleaños` : "El mismo día del cumpleaños";
+}
+
+/** Lo que ofrece la pantalla; un flujo creado por la API con otro valor lo conserva al editarse. */
+export const BIRTHDAY_OFFSETS = [0, -1, -2] as const;
+
 /** El disparador y sus reglas en una frase. `stages` resuelve el nombre de la etapa configurada. */
 export function describeTrigger(
   type: string,
@@ -78,7 +99,8 @@ export function describeTrigger(
   switch (type) {
     case "birthday": {
       const hour = typeof config?.hour === "number" ? config.hour : BIRTHDAY_DEFAULT_HOUR;
-      return `Cada cumpleaños, a las ${hourLabel(hour)}`;
+      const before = offsetShort(offsetOf(config));
+      return `Cada cumpleaños${before ? ` (${before})` : ""}, a las ${hourLabel(hour)}`;
     }
     case "stage_changed": {
       const id = config?.toStageId;
