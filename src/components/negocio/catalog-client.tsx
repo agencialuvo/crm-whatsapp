@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Eye, ImageIcon, Pencil, Plus, Scissors, Tag, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SearchInput } from "@/components/ui/search-input";
 import { Switch } from "@/components/ui/switch";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
@@ -15,6 +16,7 @@ import { ItemViewDialog } from "@/components/negocio/item-view-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
 import { ServiceDialog } from "@/components/negocio/service-dialog";
 import { staffPreview, type StaffOption } from "@/components/negocio/staff-select";
+import { matchesQuery } from "@/lib/search";
 import { durationLabel, money } from "@/lib/salon/format";
 import type { ComboDto, ServiceDto, StaffDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
@@ -55,8 +57,18 @@ export function CatalogClient({ currency }: { currency: string }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRemoving, setBulkRemoving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const serviceTable = useDataTable(services ?? NONE, { view: "servicios" });
-  const comboTable = useDataTable(combos ?? NONE, { view: "ofertas" });
+  // Búsqueda local e inmediata sobre lo ya cargado (una sola, de la pestaña a la vista).
+  const [query, setQuery] = useState("");
+  const filteredServices = useMemo(
+    () => (services ?? NONE).filter((s) => matchesQuery(query, { text: [s.name] })),
+    [services, query]
+  );
+  const filteredCombos = useMemo(
+    () => (combos ?? NONE).filter((c) => matchesQuery(query, { text: [c.name, c.keywordTrigger] })),
+    [combos, query]
+  );
+  const serviceTable = useDataTable(filteredServices, { view: "servicios", resetKey: query });
+  const comboTable = useDataTable(filteredCombos, { view: "ofertas", resetKey: query });
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -125,8 +137,15 @@ export function CatalogClient({ currency }: { currency: string }) {
 
   function selectTab(next: Tab) {
     setTab(next);
+    setQuery("");
     setSelected(new Set());
     setNotice(null);
+  }
+
+  function changeQuery(value: string) {
+    setQuery(value);
+    // Lo seleccionado y ya oculto por el filtro no debe borrarse sin que se vea.
+    setSelected(new Set());
   }
 
   function toggleOne(id: string) {
@@ -169,7 +188,7 @@ export function CatalogClient({ currency }: { currency: string }) {
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div role="tablist" aria-label="Catálogo" className="flex gap-1 rounded-md bg-secondary p-1">
           <TabButton
             active={tab === "servicios"}
@@ -186,7 +205,14 @@ export function CatalogClient({ currency }: { currency: string }) {
             Ofertas
           </TabButton>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <SearchInput
+          value={query}
+          onChange={changeQuery}
+          placeholder={tab === "servicios" ? "Buscar por nombre de servicio..." : "Buscar por nombre de oferta..."}
+          ariaLabel={tab === "servicios" ? "Buscar servicios" : "Buscar ofertas"}
+          className="min-w-[14rem] flex-1"
+        />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={() => setBulkOpen(true)}>
             <Upload className="h-4 w-4" aria-hidden />
             Carga masiva
@@ -259,7 +285,9 @@ export function CatalogClient({ currency }: { currency: string }) {
       ) : loading ? (
         <ListSkeleton />
       ) : tab === "servicios" ? (
-        services && services.length > 0 ? (
+        services && services.length > 0 && filteredServices.length === 0 ? (
+          <NoResults />
+        ) : services && services.length > 0 ? (
           <>
           <DataTableToolbar {...serviceTable.pagination} noun={{ one: "servicio", other: "servicios" }} />
           <TableShell
@@ -348,6 +376,8 @@ export function CatalogClient({ currency }: { currency: string }) {
             />
           </EmptyCard>
         )
+      ) : combos && combos.length > 0 && filteredCombos.length === 0 ? (
+        <NoResults />
       ) : combos && combos.length > 0 ? (
         <>
         <DataTableToolbar {...comboTable.pagination} noun={{ one: "oferta", other: "ofertas" }} />
@@ -701,6 +731,15 @@ function RowActions({
         <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
       </Button>
     </div>
+  );
+}
+
+/** Hay datos, pero la búsqueda no encontró nada. */
+function NoResults() {
+  return (
+    <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-text-2">
+      No se encontraron resultados.
+    </p>
   );
 }
 

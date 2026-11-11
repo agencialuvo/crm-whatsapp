@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
+import { SearchInput } from "@/components/ui/search-input";
 import { SearchSelect } from "@/components/ui/search-select";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
@@ -16,6 +17,7 @@ import {
   type ExpenseItemDto,
   type ExpensesReportDto,
 } from "@/lib/salon/expenses";
+import { matchesQuery } from "@/lib/search";
 import { money } from "@/lib/salon/format";
 import { addDaysISO } from "@/lib/time/slots";
 import { cn } from "@/lib/utils";
@@ -80,6 +82,7 @@ export function ExpensesClient({
   const [range, setRange] = useState<Range>(() => initialRange ?? expensePresets(today)[0]!.range);
   const presetList = useMemo(() => expensePresets(today), [today]);
   const [kindFilter, setKindFilter] = useState("");
+  const [query, setQuery] = useState("");
   const [report, setReport] = useState<ExpensesReportDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,10 +119,15 @@ export function ExpensesClient({
   }, [range, kindFilter, load]);
 
   const items = useMemo(() => report?.items ?? [], [report]);
-  const table = useDataTable(items, {
+  // Búsqueda local por concepto o nota, sobre los gastos ya cargados del periodo.
+  const filteredItems = useMemo(
+    () => items.filter((g) => matchesQuery(query, { text: [g.name, g.notes] })),
+    [items, query]
+  );
+  const table = useDataTable(filteredItems, {
     view: "gastos",
     defaultPageSize: PAGE,
-    resetKey: `${range.from}|${range.to}|${kindFilter}`,
+    resetKey: `${range.from}|${range.to}|${kindFilter}|${query}`,
   });
 
   const reload = useCallback(() => {
@@ -304,7 +312,14 @@ export function ExpensesClient({
                 : "Todavía no hay gastos en este periodo. Usa «Registrar gasto» para anotar uno."
             }
             right={
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <SearchInput
+                  value={query}
+                  onChange={setQuery}
+                  placeholder="Buscar por concepto o nota..."
+                  ariaLabel="Buscar gastos"
+                  className="w-64 max-w-full"
+                />
                 <SearchSelect
                   value={kindFilter}
                   onChange={setKindFilter}
@@ -330,6 +345,12 @@ export function ExpensesClient({
                     incluyen todos; acota el rango para ver el detalle completo.
                   </p>
                 )}
+                {filteredItems.length === 0 ? (
+                  <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-text-2">
+                    No se encontraron resultados.
+                  </p>
+                ) : (
+                <>
                 <DataTableToolbar {...table.pagination} noun={EXPENSE_NOUN} />
                 <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
                   <table className="w-full min-w-[620px] text-sm">
@@ -401,6 +422,8 @@ export function ExpensesClient({
                   </table>
                 </div>
                 <DataTablePagination {...table.pagination} noun={EXPENSE_NOUN} label="Paginación de gastos" />
+                </>
+                )}
               </>
             )}
           </Section>

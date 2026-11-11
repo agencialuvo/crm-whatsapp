@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarClock, Pencil, Percent, Plus, Trash2, Upload, Users } from "lucide-react";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SearchInput } from "@/components/ui/search-input";
 import { Switch } from "@/components/ui/switch";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
@@ -13,6 +14,7 @@ import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
 import { StaffDialog } from "@/components/negocio/staff-dialog";
 import { StaffScheduleDialog } from "@/components/negocio/staff-schedule-dialog";
+import { matchesQuery } from "@/lib/search";
 import { scheduleSummary } from "@/lib/salon/format";
 import { formatStaffPhone } from "@/lib/salon/staff-fields";
 import type { ServiceDto, StaffDto } from "@/lib/salon/types";
@@ -44,7 +46,13 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   const [dialog, setDialog] = useState<Dialog>(null);
   const [removal, setRemoval] = useState<StaffDto | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
-  const table = useDataTable(staff ?? NONE, { view: "equipo" });
+  // Búsqueda local por nombre o celular (el celular se compara por dígitos).
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(
+    () => (staff ?? NONE).filter((m) => matchesQuery(query, { text: [m.name], phone: m.phone })),
+    [staff, query]
+  );
+  const table = useDataTable(filtered, { view: "equipo", resetKey: query });
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -102,11 +110,19 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
+      <p className="max-w-xl text-sm text-text-3">
+        Quienes atienden a tus clientes. Cada uno es una silla en la agenda, con su horario y su
+        comisión.
+      </p>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-xl text-sm text-text-3">
-          Quienes atienden a tus clientes. Cada uno es una silla en la agenda, con su horario y su
-          comisión.
-        </p>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="Buscar por nombre o celular del profesional..."
+          ariaLabel="Buscar profesionales"
+          maxLength={60}
+          className="max-w-md"
+        />
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={() => setBulkOpen(true)}>
             <Upload className="h-4 w-4" aria-hidden />
@@ -155,6 +171,10 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
             }
           />
         </div>
+      ) : filtered.length === 0 ? (
+        <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-text-2">
+          No se encontraron resultados.
+        </p>
       ) : (
         // `relative`: el `sr-only` de la cabecera es absoluto y, sin esto, escapa del recorte
         // del scroll y ensancha la página en el teléfono.

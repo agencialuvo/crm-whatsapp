@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, History, Pencil, Plus, Search, Trash2, Upload, X } from "lucide-react";
+import { Eye, History, Pencil, Plus, Trash2, Upload, X } from "lucide-react";
+import { SearchInput } from "@/components/ui/search-input";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
-import { Input } from "@/components/ui/input";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
@@ -144,23 +144,12 @@ export function ClientsClient({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative w-full max-w-sm">
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-3"
-            aria-hidden
-          />
-          <Input
-            type="search"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-            }}
-            placeholder="Buscar por nombre o celular"
-            aria-label="Buscar clientes"
-            maxLength={80}
-            className="pl-9"
-          />
-        </div>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="Buscar por nombre o celular"
+          ariaLabel="Buscar clientes"
+        />
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={() => setBulkOpen(true)}>
             <Upload className="h-4 w-4" aria-hidden />

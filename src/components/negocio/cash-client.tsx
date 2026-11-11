@@ -5,6 +5,7 @@ import { Download, Eye, History, Pencil, Plus, Receipt, Trash2, X } from "lucide
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
+import { SearchInput } from "@/components/ui/search-input";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ClientHistoryDialog } from "@/components/negocio/client-history-dialog";
@@ -20,6 +21,7 @@ import { StatCard } from "@/components/results/stat-card";
 import { csvCell, dateTimeLabel, money } from "@/lib/salon/format";
 import { PAYMENT_LABELS } from "@/lib/salon/schemas";
 import { loyaltyNotice } from "@/lib/loyalty";
+import { matchesQuery } from "@/lib/search";
 import type { CashReportDto, RegisteredSaleDto, SaleRowDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
@@ -65,6 +67,7 @@ export function CashClient({
   const [range, setRange] = useState<Range>({ from: initialDay ?? today, to: initialDay ?? today });
   const pendingSale = useRef<string | null>(openSaleId ?? null);
   const [report, setReport] = useState<CashReportDto | null>(null);
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Cambia cada vez que la lista de ventas se recarga: el panel del turno se actualiza con ella.
@@ -138,7 +141,8 @@ export function CashClient({
   function exportCsv() {
     if (!report) return;
     const header = ["Fecha", "Cliente", "Servicio u oferta", "Profesional", "Pago", "Monto", "Comisión", "Neto"];
-    const lines = rows.map((r) =>
+    // Se exporta lo que se ve: con una búsqueda activa, solo esas ventas.
+    const lines = filteredRows.map((r) =>
       [
         dateTimeLabel(r.createdAt, timezone),
         r.customerName,
@@ -166,11 +170,16 @@ export function CashClient({
 
   const t = report?.totals;
   const rows = useMemo(() => report?.rows ?? [], [report]);
-  // Cambia el periodo: la tabla vuelve a la primera página.
-  const table = useDataTable(rows, {
+  // Búsqueda local por cliente o servicio sobre las ventas ya cargadas del periodo.
+  const filteredRows = useMemo(
+    () => rows.filter((r) => matchesQuery(query, { text: [r.customerName, r.itemName] })),
+    [rows, query]
+  );
+  // Cambia el periodo o la búsqueda: la tabla vuelve a la primera página.
+  const table = useDataTable(filteredRows, {
     view: "caja-ventas",
     defaultPageSize: PAGE,
-    resetKey: `${range.from}|${range.to}`,
+    resetKey: `${range.from}|${range.to}|${query}`,
   });
   const gastosHref = report ? `/gastos?from=${report.period.from}&to=${report.period.to}` : "/gastos";
   const oneDay = range.from === range.to;
@@ -194,7 +203,7 @@ export function CashClient({
             <History className="h-4 w-4" aria-hidden />
             Historial de turnos
           </Link>
-          <Button variant="outline" onClick={exportCsv} disabled={!report || rows.length === 0}>
+          <Button variant="outline" onClick={exportCsv} disabled={!report || filteredRows.length === 0}>
             <Download className="h-4 w-4" aria-hidden />
             Exportar CSV
           </Button>
@@ -312,9 +321,18 @@ export function CashClient({
             emptyText="Todavía no hay ventas en este periodo. Usa «Registrar venta» para cobrar una."
             right={
               report && (
-                <span className="text-[13px] font-semibold text-text-2">
-                  {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
-                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <SearchInput
+                    value={query}
+                    onChange={setQuery}
+                    placeholder="Buscar venta por cliente o servicio..."
+                    ariaLabel="Buscar ventas"
+                    className="w-72 max-w-full"
+                  />
+                  <span className="text-[13px] font-semibold text-text-2">
+                    {report.totals.count} venta{report.totals.count === 1 ? "" : "s"} en el periodo
+                  </span>
+                </div>
               )
             }
           >
@@ -326,6 +344,12 @@ export function CashClient({
                     incluyen todas; acota el rango para ver el detalle completo.
                   </p>
                 )}
+                {filteredRows.length === 0 ? (
+                  <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-text-2">
+                    No se encontraron resultados.
+                  </p>
+                ) : (
+                <>
                 <DataTableToolbar {...table.pagination} noun={SALE_NOUN} />
                 {/* `relative`: el `sr-only` de la cabecera es absoluto; sin esto escapa del recorte
                 del scroll y ensancha la página en el teléfono. */}
@@ -442,6 +466,8 @@ export function CashClient({
                   </table>
                 </div>
                 <DataTablePagination {...table.pagination} noun={SALE_NOUN} label="Paginación de ventas" />
+                </>
+                )}
               </>
             )}
           </Section>
