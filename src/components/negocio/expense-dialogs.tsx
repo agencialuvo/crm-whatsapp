@@ -5,15 +5,21 @@ import { Button } from "@/components/ui/button";
 import { ComboboxInput } from "@/components/ui/combobox-input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
+import { SearchSelect } from "@/components/ui/search-select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Field, fieldErrors, MoneyInput, toInt } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { parseMoneyToCents } from "@/lib/money";
 import {
-  DOZEN_UNITS,
+  EXPENSE_MEASURE_UNITS,
+  EXPENSE_PRESENTATION_LABELS,
+  EXPENSE_PRESENTATIONS,
   expenseItemInputSchema,
+  expenseTotalUnits,
+  expenseUnitCostCents,
   type ExpenseItemDto,
+  type ExpenseMeasureUnit,
   type ExpensePresentation,
 } from "@/lib/salon/expenses";
 import { centsToInput, money } from "@/lib/salon/format";
@@ -21,9 +27,23 @@ import { centsToInput, money } from "@/lib/salon/format";
 /**
  * Módulo SALON — el diálogo de Gastos: registrar o corregir un egreso. Valida con el
  * MISMO esquema Zod que la API. Es un egreso financiero y nada más: un insumo / variable
- * es un gasto por su precio total (paquetes y unidades por paquete son solo el detalle
- * de lo comprado: no hay almacén ni stock).
+ * es un gasto por su precio total (cantidad y unidad son solo el detalle de lo comprado:
+ * no hay almacén ni stock). Los textos son neutros: sirven a cualquier rubro.
  */
+
+const PRESENTATION_OPTIONS = EXPENSE_PRESENTATIONS.map((v) => ({
+  value: v,
+  label: EXPENSE_PRESENTATION_LABELS[v].title,
+  hint: EXPENSE_PRESENTATION_LABELS[v].short || "L · ml · kg · g",
+}));
+const MEASURE_OPTIONS = EXPENSE_MEASURE_UNITS.map((u) => ({
+  value: u,
+  label: u === "l" ? "Litros (L)" : u === "ml" ? "Mililitros (ml)" : u === "kg" ? "Kilos (kg)" : "Gramos (g)",
+}));
+/** Sufijo del costo por unidad según la presentación. */
+function unitSuffix(p: ExpensePresentation, m: ExpenseMeasureUnit): string {
+  return p === "measure" ? (m === "l" ? "L" : m) : p === "service" ? "srv" : "und";
+}
 
 export function ExpenseDialog({
   item,
@@ -43,6 +63,7 @@ export function ExpenseDialog({
   const [presentation, setPresentation] = useState<ExpensePresentation>(
     item?.presentation ?? (item?.unitsPerPackage ? "package" : "units")
   );
+  const [measureUnit, setMeasureUnit] = useState<ExpenseMeasureUnit>(item?.measureUnit ?? "kg");
   // Unidades por paquete de la última compra de cada nombre, para autocompletar.
   const [packSizes, setPackSizes] = useState<Record<string, number>>({});
   const [quantity, setQuantity] = useState(item?.quantity ? String(item.quantity) : "");
@@ -83,33 +104,26 @@ export function ExpenseDialog({
   const perNum = perPackage.trim() === "" ? null : toInt(perPackage);
   const validQty = qtyNum !== null && !Number.isNaN(qtyNum) && qtyNum > 0 ? qtyNum : null;
   const validPer = perNum !== null && !Number.isNaN(perNum) && perNum > 0 ? perNum : null;
-  const totalUnits =
-    validQty === null
-      ? null
-      : presentation === "dozen"
-        ? validQty * DOZEN_UNITS
-        : presentation === "package"
-          ? validPer === null
-            ? null
-            : validQty * validPer
-          : validQty;
   const priceCents = parseMoneyToCents(price);
-  // Resumen en vivo: total de unidades y costo por unidad (solo referencia, no se guarda).
-  const summary =
-    isFixed || totalUnits === null || validQty === null
+  // Costo por unidad: solo una referencia en vivo, no se guarda ni frena el registro.
+  const perUnit = presentation === "package" ? validPer : null;
+  const totalUnits =
+    validQty === null || (presentation === "package" && perUnit === null)
       ? null
-      : {
-          units:
-            presentation === "dozen"
-              ? `${validQty} ${validQty === 1 ? "docena" : "docenas"} = ${totalUnits} unidades en total`
-              : presentation === "package" && validPer !== null
-                ? `${validQty} ${validQty === 1 ? "paquete" : "paquetes"} × ${validPer} unidades = ${totalUnits} ${totalUnits === 1 ? "unidad" : "unidades"} en total`
-                : `${totalUnits} ${totalUnits === 1 ? "unidad" : "unidades"} en total`,
-          unitCost:
-            priceCents !== null && !Number.isNaN(priceCents) && priceCents > 0
-              ? money(Math.round(priceCents / totalUnits), currency)
-              : null,
-        };
+      : expenseTotalUnits({ quantity: validQty, unitsPerPackage: perUnit });
+  const unitCost =
+    isFixed || validQty === null || (presentation === "package" && perUnit === null) || priceCents === null || Number.isNaN(priceCents)
+      ? null
+      : expenseUnitCostCents({ totalPriceCents: priceCents, quantity: validQty, unitsPerPackage: perUnit });
+
+  /** Ocultar una sugerencia: no borra ningún gasto, solo limpia la lista. */
+  function hideName(o: { value: string }) {
+    setNames((list) => list.filter((n) => n !== o.value));
+    apiFetch("/api/negocio/gastos/nombres", {
+      method: "DELETE",
+      json: { kind: isFixed ? "fixed" : "variable", name: o.value },
+    }).catch(() => undefined);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -119,6 +133,7 @@ export function ExpenseDialog({
       name,
       quantity: isFixed || quantity.trim() === "" ? null : toInt(quantity),
       presentation: isFixed ? null : presentation,
+      measureUnit: isFixed || presentation !== "measure" ? null : measureUnit,
       unitsPerPackage:
         isFixed || presentation !== "package" || perPackage.trim() === "" ? null : toInt(perPackage),
       totalPriceCents: parseMoneyToCents(price) ?? Number.NaN,
@@ -146,15 +161,15 @@ export function ExpenseDialog({
   return (
     <Modal
       title={item ? "Editar gasto" : "Registrar gasto"}
-      description="Se descuenta de la ganancia del mes de su fecha."
+      description="Resta de la ganancia neta del mes de su fecha, desde hoy."
       onClose={onClose}
       busy={busy}
     >
       <form onSubmit={submit} noValidate className="space-y-4">
         <div role="radiogroup" aria-label="Tipo de gasto" className="grid grid-cols-2 gap-2">
           {[
-            { fixed: true, title: "Gasto fijo", hint: "Alquiler, luz, agua…" },
-            { fixed: false, title: "Insumo / variable", hint: "Cuchillas, productos…" },
+            { fixed: true, title: "Gasto fijo", hint: "Se paga cada periodo" },
+            { fixed: false, title: "Gasto variable / insumo", hint: "Cambia según la compra" },
           ].map((o) => (
             <button
               key={o.title}
@@ -181,7 +196,13 @@ export function ExpenseDialog({
             onChange={setName}
             options={names.map((n) => ({ value: n }))}
             newHint="Nombre nuevo: se guardará tal cual."
-            placeholder={isFixed ? "Ej. Alquiler del local" : "Ej. Hoja de afeitar"}
+            onRemoveOption={hideName}
+            removeLabel="Quitar de las sugerencias"
+            placeholder={
+              isFixed
+                ? "Ej. Alquiler del local, Software SaaS, Nómina, Internet"
+                : "Ej. Insumos operativos, Materia prima, Productos de reventa"
+            }
             disabled={busy}
             invalid={!!errors.name}
           />
@@ -190,41 +211,22 @@ export function ExpenseDialog({
         {!isFixed && (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <p className="mb-1.5 text-sm font-medium">Tipo de presentación</p>
-              <div role="radiogroup" aria-label="Tipo de presentación" className="grid grid-cols-3 gap-2">
-                {[
-                  { value: "units" as const, title: "Unidades" },
-                  { value: "package" as const, title: "Paquete / Caja" },
-                  { value: "dozen" as const, title: "Docena" },
-                ].map((o) => (
-                  <button
-                    key={o.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={presentation === o.value}
-                    disabled={busy}
-                    onClick={() => setPresentation(o.value)}
-                    className={`rounded-md border px-3 py-2 text-left text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      presentation === o.value ? "border-brand bg-brand-tint" : "hover:bg-row-hover"
-                    }`}
-                  >
-                    {o.title}
-                  </button>
-                ))}
-              </div>
+              <Field
+                label="Unidad de medida"
+                htmlFor="exp-presentation"
+                hint="Cómo se compró. Opcional, solo de referencia."
+              >
+                <SearchSelect
+                  id="exp-presentation"
+                  value={presentation}
+                  onChange={(v) => setPresentation(v as ExpensePresentation)}
+                  options={PRESENTATION_OPTIONS}
+                  searchPlaceholder="Buscar unidad…"
+                  disabled={busy}
+                />
+              </Field>
             </div>
-            <Field
-              label={
-                presentation === "package"
-                  ? "Cantidad de paquetes o cajas"
-                  : presentation === "dozen"
-                    ? "Cantidad de docenas"
-                    : "Cantidad"
-              }
-              htmlFor="exp-qty"
-              error={errors.quantity}
-              hint="Opcional, solo de referencia."
-            >
+            <Field label="Cantidad" htmlFor="exp-qty" error={errors.quantity}>
               <Input
                 id="exp-qty"
                 inputMode="numeric"
@@ -236,12 +238,7 @@ export function ExpenseDialog({
               />
             </Field>
             {presentation === "package" && (
-              <Field
-                label="Unidades por paquete o caja"
-                htmlFor="exp-per"
-                error={errors.unitsPerPackage}
-                hint="Ej. 12 unidades por caja."
-              >
+              <Field label="Unidades por paquete" htmlFor="exp-per" error={errors.unitsPerPackage}>
                 <Input
                   id="exp-per"
                   inputMode="numeric"
@@ -253,12 +250,25 @@ export function ExpenseDialog({
                 />
               </Field>
             )}
+            {presentation === "measure" && (
+              <Field label="Medida" htmlFor="exp-measure" error={errors.measureUnit}>
+                <SearchSelect
+                  id="exp-measure"
+                  value={measureUnit}
+                  onChange={(v) => setMeasureUnit(v as ExpenseMeasureUnit)}
+                  options={MEASURE_OPTIONS}
+                  searchPlaceholder="Buscar medida…"
+                  disabled={busy}
+                  invalid={!!errors.measureUnit}
+                />
+              </Field>
+            )}
           </div>
         )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
-            label={isFixed ? "Monto total" : "Precio total pagado"}
+            label={isFixed ? "Monto" : "Precio total pagado"}
             required
             htmlFor="exp-price"
             error={errors.totalPriceCents}
@@ -274,7 +284,7 @@ export function ExpenseDialog({
             />
           </Field>
           <Field
-            label={isFixed ? "Fecha de pago" : "Fecha de compra"}
+            label={isFixed ? "Fecha de vencimiento" : "Fecha de compra"}
             required
             htmlFor="exp-date"
             error={errors.expenseDate}
@@ -290,17 +300,11 @@ export function ExpenseDialog({
           </Field>
         </div>
 
-        {summary && (
-          <div
-            aria-live="polite"
-            className="rounded-md border bg-subtle px-3 py-2 text-sm"
-            data-testid="expense-summary"
-          >
-            <p className="font-medium">{summary.units}</p>
-            {summary.unitCost && (
-              <p className="text-xs text-text-3">Costo por unidad estimado: {summary.unitCost} c/u</p>
-            )}
-          </div>
+        {unitCost !== null && (
+          <p aria-live="polite" className="text-xs text-text-3" data-testid="expense-summary">
+            Costo estimado: {money(unitCost, currency)} por {unitSuffix(presentation, measureUnit)}
+            {totalUnits !== null && presentation === "package" ? ` · ${totalUnits} und en total` : ""}
+          </p>
         )}
 
         <Field label="Notas" htmlFor="exp-notes" error={errors.notes} hint="Opcional.">

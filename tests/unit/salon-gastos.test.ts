@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildExpenseSummary, expenseItemInputSchema, expenseTotalUnits } from "@/lib/salon/expenses";
+import {
+  buildExpenseSummary,
+  expenseItemInputSchema,
+  expenseQuantityLabel,
+  expenseTotalUnits,
+  expenseUnitCostCents,
+} from "@/lib/salon/expenses";
 import { appNavGroups } from "@/lib/nav";
 
 const ok = {
@@ -71,10 +77,38 @@ describe("gastos — paquetes y unidades por paquete", () => {
     expect(expenseItemInputSchema.parse({ ...sin, unitsPerPackage: 10 }).unitsPerPackage).toBeNull();
   });
 
-  it("docena: fija 12 unidades por docena e ignora lo que llegue", () => {
-    const r = expenseItemInputSchema.parse({ ...ok, presentation: "dozen", quantity: 2, unitsPerPackage: 7 });
-    expect(r).toMatchObject({ presentation: "dozen", quantity: 2, unitsPerPackage: 12 });
-    expect(expenseTotalUnits(r)).toBe(24);
+  it("la docena ya no es una presentación", () => {
+    expect(expenseItemInputSchema.safeParse({ ...ok, presentation: "dozen", quantity: 2 }).success).toBe(false);
+  });
+
+  it("volumen / peso: exige su unidad y no lleva paquete", () => {
+    expect(expenseItemInputSchema.safeParse({ ...ok, presentation: "measure", quantity: 2 }).success).toBe(false);
+    const r = expenseItemInputSchema.parse({
+      ...ok,
+      presentation: "measure",
+      measureUnit: "kg",
+      quantity: 2,
+      unitsPerPackage: 9,
+    });
+    expect(r).toMatchObject({ presentation: "measure", measureUnit: "kg", unitsPerPackage: null, quantity: 2 });
+    expect(expenseItemInputSchema.safeParse({ ...ok, presentation: "measure", measureUnit: "oz", quantity: 1 }).success).toBe(false);
+  });
+
+  it("servicio / licencia: sin paquete ni unidad de medida", () => {
+    const r = expenseItemInputSchema.parse({
+      ...ok,
+      presentation: "service",
+      quantity: 3,
+      unitsPerPackage: 4,
+      measureUnit: "l",
+    });
+    expect(r).toMatchObject({ presentation: "service", unitsPerPackage: null, measureUnit: null });
+  });
+
+  it("la unidad de medida solo se guarda en volumen / peso", () => {
+    expect(
+      expenseItemInputSchema.parse({ ...ok, presentation: "units", quantity: 1, measureUnit: "g" }).measureUnit
+    ).toBeNull();
   });
 
   it("unidades: no lleva paquete aunque llegue", () => {
@@ -92,9 +126,10 @@ describe("gastos — paquetes y unidades por paquete", () => {
 
   it("sin cantidad no hay presentación", () => {
     const { quantity: _q, ...sin } = ok;
-    expect(expenseItemInputSchema.parse({ ...sin, presentation: "dozen" })).toMatchObject({
+    expect(expenseItemInputSchema.parse({ ...sin, presentation: "measure", measureUnit: "l" })).toMatchObject({
       presentation: null,
       unitsPerPackage: null,
+      measureUnit: null,
     });
   });
 
@@ -114,6 +149,30 @@ describe("gastos — paquetes y unidades por paquete", () => {
       unitsPerPackage: 5,
     });
     expect(r).toMatchObject({ quantity: null, unitsPerPackage: null });
+  });
+});
+
+describe("gastos — costo por unidad y etiquetas", () => {
+  it("costo por unidad en centavos enteros, redondeado; el total no cambia", () => {
+    expect(expenseUnitCostCents({ totalPriceCents: 1000, quantity: 3, unitsPerPackage: null })).toBe(333);
+    expect(expenseUnitCostCents({ totalPriceCents: 2500, quantity: 2, unitsPerPackage: 50 })).toBe(25);
+  });
+
+  it("sin cantidad o sin precio no hay costo por unidad", () => {
+    expect(expenseUnitCostCents({ totalPriceCents: 1000, quantity: null, unitsPerPackage: null })).toBeNull();
+    expect(expenseUnitCostCents({ totalPriceCents: 0, quantity: 4, unitsPerPackage: null })).toBeNull();
+  });
+
+  it("etiqueta de cantidad por presentación", () => {
+    const base = { quantity: 3, unitsPerPackage: null, measureUnit: null, presentation: null };
+    expect(expenseQuantityLabel({ ...base, quantity: null })).toBeNull();
+    expect(expenseQuantityLabel({ ...base, presentation: "units" })).toEqual({ main: "3 und", sub: null });
+    expect(expenseQuantityLabel({ ...base, presentation: "package", unitsPerPackage: 12 })).toEqual({
+      main: "3 paq × 12",
+      sub: "= 36 und",
+    });
+    expect(expenseQuantityLabel({ ...base, presentation: "measure", measureUnit: "kg" })).toEqual({ main: "3 kg", sub: null });
+    expect(expenseQuantityLabel({ ...base, presentation: "service" })).toEqual({ main: "3 srv", sub: null });
   });
 });
 

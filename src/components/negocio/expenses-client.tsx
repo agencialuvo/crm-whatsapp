@@ -9,15 +9,15 @@ import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ExpenseDialog } from "@/components/negocio/expense-dialogs";
 import { ConfirmDialog } from "@/components/negocio/modal";
-import { presets } from "@/components/negocio/report-sections";
 import { RangePicker, type Range } from "@/components/results/range-picker";
 import { Section } from "@/components/results/section";
 import {
-  expenseTotalUnits,
+  expenseQuantityLabel,
   type ExpenseItemDto,
   type ExpensesReportDto,
 } from "@/lib/salon/expenses";
 import { money } from "@/lib/salon/format";
+import { addDaysISO } from "@/lib/time/slots";
 import { cn } from "@/lib/utils";
 
 /** Gastos por página por defecto; cada persona puede elegir otro número. */
@@ -34,12 +34,38 @@ function dayLabel(day: string): string {
   return `${d}/${m}/${y}`;
 }
 
+/** Último día del mes de un día AAAA-MM-DD (sin pasar por la zona del navegador). */
+function endOfMonth(day: string): string {
+  const y = Number(day.slice(0, 4));
+  const m = Number(day.slice(5, 7)); // 1-12
+  const nextFirst = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  return addDaysISO(nextFirst, -1);
+}
+
+/**
+ * Atajos de Gastos. Los gastos se devengan: uno fechado más adelante en el mes ya cuenta en
+ * «Este mes» (el periodo llega al último día), para ver el punto de equilibrio real desde el
+ * día uno sin esperar a la fecha de pago. Las ventas no cambian: aún no existen las futuras.
+ */
+function expensePresets(today: string): { label: string; range: Range }[] {
+  const first = `${today.slice(0, 8)}01`;
+  const prevEnd = addDaysISO(first, -1);
+  const nextFirst = addDaysISO(endOfMonth(today), 1);
+  return [
+    { label: "Este mes", range: { from: first, to: endOfMonth(today) } },
+    { label: "Mes pasado", range: { from: `${prevEnd.slice(0, 8)}01`, to: prevEnd } },
+    { label: "Próximo mes", range: { from: nextFirst, to: endOfMonth(nextFirst) } },
+    { label: "7 días", range: { from: addDaysISO(today, -6), to: today } },
+  ];
+}
+
 /**
  * Módulo SALON — egresos y gastos operativos (solo dueño/administrador).
  *
  * Responde a «¿cuánto me queda de verdad?»: lo que entró, lo que se llevó el
  * equipo en comisiones, lo que se gastó en operar y, al final, la ganancia neta
- * real. Los gastos son fijos (alquiler, luz) o variables (insumos), . Los días se cuentan en la zona del negocio, no en la del navegador.
+ * real. Los gastos son fijos o variables (insumos). Los días se cuentan en la zona
+ * del negocio, no en la del navegador.
  */
 export function ExpensesClient({
   currency,
@@ -51,7 +77,8 @@ export function ExpensesClient({
   /** Llega desde Caja: el periodo que se estaba revisando. */
   initialRange?: Range;
 }) {
-  const [range, setRange] = useState<Range>(() => initialRange ?? { from: `${today.slice(0, 8)}01`, to: today });
+  const [range, setRange] = useState<Range>(() => initialRange ?? expensePresets(today)[0]!.range);
+  const presetList = useMemo(() => expensePresets(today), [today]);
   const [kindFilter, setKindFilter] = useState("");
   const [report, setReport] = useState<ExpensesReportDto | null>(null);
   const [loading, setLoading] = useState(true);
@@ -116,7 +143,7 @@ export function ExpensesClient({
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <RangePicker value={range} onChange={setRange} today={today} presets={presets(today)} />
+        <RangePicker value={range} onChange={setRange} today={today} presets={presetList} />
         <div className="flex gap-2">
           <Button onClick={() => setEditing("new")}>
             <Plus className="h-4 w-4" aria-hidden />
@@ -226,7 +253,7 @@ export function ExpensesClient({
           <div>
             <Section
               title="Fijos y variables"
-              hint="Cuánto del gasto del periodo es fijo y cuánto son insumos."
+              hint="Cuánto del gasto del periodo es fijo y cuánto es variable."
               loading={loading}
               hasData={report !== null}
               empty={report?.summary.expensesCents === 0}
@@ -237,7 +264,7 @@ export function ExpensesClient({
                   (
                     [
                       ["Gastos fijos", report.summary.byKind.fixed],
-                      ["Insumos / variables", report.summary.byKind.variable],
+                      ["Variables / insumos", report.summary.byKind.variable],
                     ] as const
                   ).map(([label, k]) => {
                     const pct = percentOf(k.totalCents, report.summary.expensesCents);
@@ -284,7 +311,7 @@ export function ExpensesClient({
                   ariaLabel="Filtrar por tipo"
                   options={[
                     { value: "fixed", label: "Gastos fijos" },
-                    { value: "variable", label: "Insumos / variables" },
+                    { value: "variable", label: "Variables / insumos" },
                   ]}
                   emptyLabel="Todos los tipos"
                   emptyShowsPlaceholder
@@ -310,7 +337,7 @@ export function ExpensesClient({
                       <tr className="border-y bg-subtle text-left text-xs font-semibold text-text-2">
                         <th scope="col" className="px-4 py-2 sm:pl-5">Fecha</th>
                         <th scope="col" className="px-2 py-2">Gasto</th>
-                                                <th scope="col" className="px-2 py-2 text-right">Cantidad</th>
+                        <th scope="col" className="px-2 py-2 text-right">Cantidad</th>
                         <th scope="col" className="px-2 py-2 text-right">Precio</th>
                         <th scope="col" className="px-2 py-2 sm:pr-5">
                           <span className="sr-only">Acciones</span>
@@ -333,20 +360,17 @@ export function ExpensesClient({
                             {g.notes && <span className="block truncate text-xs text-text-3">{g.notes}</span>}
                           </td>
                           <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                            {g.isFixed || g.quantity === null ? (
-                              "—"
-                            ) : g.unitsPerPackage ? (
-                              <>
-                                {g.presentation === "dozen"
-                                  ? `${g.quantity} ${g.quantity === 1 ? "docena" : "docenas"}`
-                                  : `${g.quantity} × ${g.unitsPerPackage}`}
-                                <span className="block text-xs text-text-3">
-                                  = {expenseTotalUnits(g)} unidades
-                                </span>
-                              </>
-                            ) : (
-                              g.quantity
-                            )}
+                            {(() => {
+                              const q = g.isFixed ? null : expenseQuantityLabel(g);
+                              return q ? (
+                                <>
+                                  {q.main}
+                                  {q.sub && <span className="block text-xs text-text-3">{q.sub}</span>}
+                                </>
+                              ) : (
+                                "—"
+                              );
+                            })()}
                           </td>
                           <td className="whitespace-nowrap px-2 py-2 text-right font-semibold tabular-nums">
                             {money(g.totalPriceCents, currency)}

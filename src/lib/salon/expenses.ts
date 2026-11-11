@@ -13,12 +13,23 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const EXPENSE_MAX_TOTAL_CENTS = 2_000_000_000;
 export const EXPENSE_MAX_QUANTITY = 100_000;
 
-export const EXPENSE_PRESENTATIONS = ["units", "package", "dozen"] as const;
+/** Cómo vino la compra: unidades, paquete / caja, volumen o peso, o servicio / licencia. */
+export const EXPENSE_PRESENTATIONS = ["units", "package", "measure", "service"] as const;
 export type ExpensePresentation = (typeof EXPENSE_PRESENTATIONS)[number];
-/** Una docena son siempre 12 unidades. */
-export const DOZEN_UNITS = 12;
 
-const tidy =(v: string) => v.replace(/\s+/g, " ").trim();
+/** Unidades de volumen o peso (solo en la presentación «measure»). */
+export const EXPENSE_MEASURE_UNITS = ["l", "ml", "kg", "g"] as const;
+export type ExpenseMeasureUnit = (typeof EXPENSE_MEASURE_UNITS)[number];
+
+/** Etiquetas cortas de cada presentación (la unidad de medida usa su propio símbolo). */
+export const EXPENSE_PRESENTATION_LABELS: Record<ExpensePresentation, { title: string; short: string }> = {
+  units: { title: "Unidades", short: "und" },
+  package: { title: "Paquetes / Cajas", short: "paq" },
+  measure: { title: "Volumen / Peso", short: "" },
+  service: { title: "Servicios / Licencias", short: "srv" },
+};
+
+const tidy = (v: string) => v.replace(/\s+/g, " ").trim();
 
 export const expenseItemInputSchema = z
   .object({
@@ -47,9 +58,11 @@ export const expenseItemInputSchema = z
       .max(EXPENSE_MAX_QUANTITY, "La cantidad es demasiado grande")
       .nullish()
       .transform((v) => v ?? null),
-    /** Cómo vino la compra: unidades, paquete / caja o docena (12 unidades). */
+    /** Cómo vino la compra (ver `EXPENSE_PRESENTATIONS`). */
     presentation: z.enum(EXPENSE_PRESENTATIONS).nullish().transform((v) => v ?? null),
-    /** Unidades que trae cada paquete o caja (en docena se fija en 12). */
+    /** Unidad de volumen o peso; solo aplica en «measure». */
+    measureUnit: z.enum(EXPENSE_MEASURE_UNITS).nullish().transform((v) => v ?? null),
+    /** Unidades que trae cada paquete o caja (solo en «package»). */
     unitsPerPackage: z
       .number({ invalid_type_error: "Escribe las unidades por paquete" })
       .int("Debe ser un número entero")
@@ -74,28 +87,38 @@ export const expenseItemInputSchema = z
       .nullish()
       .transform((v) => (v ? v : null)),
   })
-  // En «Paquete / Caja» con cantidad, las unidades por paquete son obligatorias.
+  // Con cantidad, «Paquete / Caja» exige las unidades por paquete y «Volumen / Peso» su unidad.
   .superRefine((v, ctx) => {
+    if (v.isFixed || v.quantity === null) return;
     const presentation = v.presentation ?? (v.unitsPerPackage ? "package" : "units");
-    if (!v.isFixed && v.quantity !== null && presentation === "package" && v.unitsPerPackage === null) {
+    if (presentation === "package" && v.unitsPerPackage === null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["unitsPerPackage"],
         message: "Escribe cuántas unidades trae cada paquete",
       });
     }
+    if (presentation === "measure" && v.measureUnit === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["measureUnit"],
+        message: "Elige la unidad de medida",
+      });
+    }
   })
   // Un gasto fijo es un solo monto: no lleva detalle de compra. Sin cantidad tampoco hay
-  // presentación ni unidades por paquete. La docena son siempre 12 unidades; en «Unidades»
-  // no hay paquete.
+  // presentación, paquete ni unidad. Cada presentación conserva solo lo suyo.
   .transform((v) => {
     if (v.isFixed || v.quantity === null) {
-      return { ...v, quantity: null, presentation: null, unitsPerPackage: null };
+      return { ...v, quantity: null, presentation: null, unitsPerPackage: null, measureUnit: null };
     }
     const presentation: ExpensePresentation = v.presentation ?? (v.unitsPerPackage ? "package" : "units");
-    const unitsPerPackage =
-      presentation === "dozen" ? DOZEN_UNITS : presentation === "package" ? v.unitsPerPackage : null;
-    return { ...v, presentation, unitsPerPackage };
+    return {
+      ...v,
+      presentation,
+      unitsPerPackage: presentation === "package" ? v.unitsPerPackage : null,
+      measureUnit: presentation === "measure" ? v.measureUnit : null,
+    };
   });
 export type ExpenseItemInput = z.input<typeof expenseItemInputSchema>;
 export type ExpenseItemParsed = z.output<typeof expenseItemInputSchema>;
@@ -109,6 +132,45 @@ export function expenseTotalUnits(e: {
   return e.quantity * (e.unitsPerPackage ?? 1);
 }
 
+/**
+ * Costo por unidad de medida a partir de lo pagado (centavos, redondeado). Es solo
+ * informativo: nunca se guarda ni cambia el total. null si no hay cantidad o precio.
+ */
+export function expenseUnitCostCents(e: {
+  totalPriceCents: number;
+  quantity: number | null;
+  unitsPerPackage: number | null;
+}): number | null {
+  const units = expenseTotalUnits(e);
+  if (units === null || units <= 0 || e.totalPriceCents <= 0) return null;
+  return Math.round(e.totalPriceCents / units);
+}
+
+/** Texto de la cantidad comprada para la tabla («3 × 100 = 300 und», «2 kg»…); null si no hay detalle. */
+export function expenseQuantityLabel(e: {
+  quantity: number | null;
+  presentation: ExpensePresentation | null;
+  unitsPerPackage: number | null;
+  measureUnit: ExpenseMeasureUnit | null;
+}): { main: string; sub: string | null } | null {
+  if (e.quantity === null) return null;
+  switch (e.presentation) {
+    case "package":
+      return e.unitsPerPackage
+        ? {
+            main: `${e.quantity} paq × ${e.unitsPerPackage}`,
+            sub: `= ${e.quantity * e.unitsPerPackage} und`,
+          }
+        : { main: `${e.quantity} paq`, sub: null };
+    case "measure":
+      return { main: `${e.quantity} ${e.measureUnit ?? ""}`.trim(), sub: null };
+    case "service":
+      return { main: `${e.quantity} srv`, sub: null };
+    default:
+      return { main: `${e.quantity} und`, sub: null };
+  }
+}
+
 /* ------------------------------ respuestas ------------------------------ */
 
 export type ExpenseItemDto = {
@@ -118,8 +180,10 @@ export type ExpenseItemDto = {
   /** Paquetes/bultos (o unidades sueltas) comprados; solo insumos, opcional. */
   quantity: number | null;
   presentation: ExpensePresentation | null;
-  /** Unidades por paquete (12 en docena); null = unidades. */
+  /** Unidades por paquete; solo en «package». */
   unitsPerPackage: number | null;
+  /** Unidad de volumen o peso; solo en «measure». */
+  measureUnit: ExpenseMeasureUnit | null;
   totalPriceCents: number;
   notes: string | null;
   /** Día del gasto en la zona del negocio (AAAA-MM-DD). */
@@ -161,6 +225,7 @@ export function buildExpenseSummary(input: {
   expensesCents: number;
   byKind: ExpenseSummaryDto["byKind"];
 }): ExpenseSummaryDto {
+  // Todo en centavos enteros: no hay punto flotante en ninguna resta.
   const netBeforeExpensesCents = input.revenueCents - input.commissionsCents;
   return {
     revenueCents: input.revenueCents,

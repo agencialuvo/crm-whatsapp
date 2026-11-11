@@ -486,8 +486,9 @@ export const expenseItem = pgTable(
     // Detalle de la compra, solo de referencia (opcional; un gasto fijo no lo lleva): cuántos
     // paquetes/bultos (o unidades sueltas) y cuántas unidades trae cada paquete.
     quantity: integer("quantity"),
-    presentation: text("presentation"), // 'units' | 'package' | 'dozen'
-    unitsPerPackage: integer("units_per_package"), // null = unidades; 12 en docena
+    presentation: text("presentation"), // 'units' | 'package' | 'measure' | 'service'
+    unitsPerPackage: integer("units_per_package"), // solo en 'package'; null en el resto
+    measureUnit: text("measure_unit"), // solo en 'measure': 'l' | 'ml' | 'kg' | 'g'
     totalPriceCents: integer("total_price_cents").notNull(), // Lo realmente pagado (no se multiplica por la cantidad)
     
     notes: text("notes"), // Notas adicionales o detalle
@@ -500,6 +501,24 @@ export const expenseItem = pgTable(
     check("expense_item_units_pos", sql`${t.unitsPerPackage} > 0`),
     check("expense_item_total_price_nonneg", sql`${t.totalPriceCents} >= 0`),
   ]
+);
+
+/**
+ * Nombres que el negocio ocultó de las sugerencias del formulario de Gastos. No borra ningún
+ * gasto: solo limpia la lista. Se guarda la llave en minúsculas por tipo (fijo / variable).
+ * Volver a registrar un gasto con ese nombre lo hace reaparecer.
+ */
+export const expenseNameHidden = pgTable(
+  "expense_name_hidden",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    isFixed: boolean("is_fixed").notNull(),
+    nameKey: text("name_key").notNull(), // lower(trim(name))
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.isFixed, t.nameKey] })]
 );
 
 

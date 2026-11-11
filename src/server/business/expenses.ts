@@ -1,11 +1,13 @@
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, notExists, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import {
   buildExpenseSummary,
   expenseItemInputSchema,
+  EXPENSE_MEASURE_UNITS,
   type ExpenseItemDto,
+  type ExpenseMeasureUnit,
   type ExpensePresentation,
   type ExpenseItemInput,
   type ExpensesReportDto,
@@ -26,6 +28,12 @@ import { getSalesReport } from "@/server/business/sales-service";
  */
 
 const item = schema.expenseItem;
+const hidden = schema.expenseNameHidden;
+
+/** Llave de comparación de un nombre: sin espacios sobrantes ni mayúsculas. */
+function nameKey(name: string): string {
+  return name.replace(/\s+/g, " ").trim().toLowerCase();
+}
 
 /** Cuántos gastos se pintan en la tabla; los totales cuentan todos. */
 const REPORT_ROW_LIMIT = 500;
@@ -40,15 +48,20 @@ async function expenseInstant(organizationId: string, day: string): Promise<Date
 }
 
 function toPresentation(v: string | null): ExpensePresentation | null {
-  return v === "units" || v === "package" || v === "dozen" ? v : null;
+  return v === "units" || v === "package" || v === "measure" || v === "service" ? v : null;
+}
+
+function toMeasureUnit(v: string | null): ExpenseMeasureUnit | null {
+  return (EXPENSE_MEASURE_UNITS as readonly string[]).includes(v ?? "") ? (v as ExpenseMeasureUnit) : null;
 }
 
 /** El detalle de la compra (paquetes, unidades por paquete, unidad); un gasto fijo no lo lleva. */
 function purchaseDetail(input: ExpenseItemInput) {
-  // Normaliza con el mismo esquema de la API: la docena fija 12 unidades, «Unidades» no lleva
-  // paquete y un gasto fijo no lleva detalle. Es idempotente sobre un cuerpo ya validado.
-  const { quantity, presentation, unitsPerPackage } = expenseItemInputSchema.parse(input);
-  return { quantity, presentation, unitsPerPackage };
+  // Normaliza con el mismo esquema de la API: cada presentación conserva solo lo suyo
+  // (paquete → unidades por paquete, volumen/peso → su unidad) y un gasto fijo no lleva
+  // detalle. Es idempotente sobre un cuerpo ya validado.
+  const { quantity, presentation, unitsPerPackage, measureUnit } = expenseItemInputSchema.parse(input);
+  return { quantity, presentation, unitsPerPackage, measureUnit };
 }
 
 /**
@@ -61,9 +74,10 @@ export async function createExpense(
 ): Promise<{ id: string }> {
   const isFixed = input.isFixed ?? false;
   const id = newId("expenseItem");
-  await getDb()
-    .insert(item)
-    .values({
+  const expenseDate = await expenseInstant(organizationId, input.expenseDate);
+  const db = getDb();
+  await db.transaction(async (tx) => {
+    await tx.insert(item).values({
       id,
       organizationId,
       isFixed,
@@ -71,8 +85,10 @@ export async function createExpense(
       ...purchaseDetail(input),
       totalPriceCents: input.totalPriceCents,
       notes: input.notes ?? null,
-      expenseDate: await expenseInstant(organizationId, input.expenseDate),
+      expenseDate,
     });
+    await unhideName(tx, organizationId, isFixed, input.name);
+  });
   return { id };
 }
 
@@ -82,19 +98,40 @@ export async function updateExpense(
   input: ExpenseItemInput
 ): Promise<void> {
   const isFixed = input.isFixed ?? false;
-  const rows = await getDb()
-    .update(item)
-    .set({
-      isFixed,
-      name: input.name,
-      ...purchaseDetail(input),
-      totalPriceCents: input.totalPriceCents,
-      notes: input.notes ?? null,
-      expenseDate: await expenseInstant(organizationId, input.expenseDate),
-    })
-    .where(scoped(item.organizationId, organizationId, eq(item.id, id)))
-    .returning({ id: item.id });
-  if (rows.length === 0) throw new SalonError("not_found", 404, "El gasto no existe");
+  const expenseDate = await expenseInstant(organizationId, input.expenseDate);
+  await getDb().transaction(async (tx) => {
+    const rows = await tx
+      .update(item)
+      .set({
+        isFixed,
+        name: input.name,
+        ...purchaseDetail(input),
+        totalPriceCents: input.totalPriceCents,
+        notes: input.notes ?? null,
+        expenseDate,
+      })
+      .where(scoped(item.organizationId, organizationId, eq(item.id, id)))
+      .returning({ id: item.id });
+    if (rows.length === 0) throw new SalonError("not_found", 404, "El gasto no existe");
+    await unhideName(tx, organizationId, isFixed, input.name);
+  });
+}
+
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/** Usar un nombre otra vez lo devuelve a las sugerencias (si se había ocultado). */
+async function unhideName(tx: Tx, organizationId: string, isFixed: boolean, name: string): Promise<void> {
+  await tx
+    .delete(hidden)
+    .where(
+      scoped(
+        hidden.organizationId,
+        organizationId,
+        eq(hidden.isFixed, isFixed),
+        eq(hidden.nameKey, nameKey(name))
+      )
+    );
 }
 
 export async function deleteExpense(organizationId: string, id: string): Promise<void> {
@@ -143,6 +180,7 @@ export async function getExpensesReport(
         quantity: item.quantity,
         presentation: item.presentation,
         unitsPerPackage: item.unitsPerPackage,
+        measureUnit: item.measureUnit,
         totalPriceCents: item.totalPriceCents,
         notes: item.notes,
         expenseDate: item.expenseDate,
@@ -196,6 +234,7 @@ export async function getExpensesReport(
         quantity: r.quantity,
         presentation: toPresentation(r.presentation),
         unitsPerPackage: r.unitsPerPackage,
+        measureUnit: toMeasureUnit(r.measureUnit),
         totalPriceCents: r.totalPriceCents,
         notes: r.notes,
         expenseDate: dayIsoInTz(r.expenseDate, tz),
@@ -223,9 +262,45 @@ export async function listExpenseNames(
       >`(array_agg(${item.unitsPerPackage} order by ${item.createdAt} desc) filter (where ${item.presentation} = 'package' and ${item.unitsPerPackage} is not null))[1]`,
     })
     .from(item)
-    .where(scoped(item.organizationId, organizationId, eq(item.isFixed, kind === "fixed")))
+    .where(
+      scoped(
+        item.organizationId,
+        organizationId,
+        eq(item.isFixed, kind === "fixed"),
+        // Sin los nombres que el negocio ocultó de las sugerencias.
+        notExists(
+          getDb()
+            .select({ one: sql`1` })
+            .from(hidden)
+            .where(
+              and(
+                eq(hidden.organizationId, item.organizationId),
+                eq(hidden.isFixed, item.isFixed),
+                sql`${hidden.nameKey} = lower(${item.name})`
+              )
+            )
+        )
+      )
+    )
     .groupBy(sql`lower(${item.name})`)
     .orderBy(desc(sql`max(${item.createdAt})`))
     .limit(200);
   return rows;
+}
+
+/**
+ * Oculta un nombre de las sugerencias del tipo dado. No toca ningún gasto: la tabla, los
+ * totales y los reportes quedan igual. Idempotente.
+ */
+export async function hideExpenseName(
+  organizationId: string,
+  kind: "fixed" | "variable",
+  name: string
+): Promise<void> {
+  const key = nameKey(name);
+  if (key.length === 0) throw new SalonError("invalid_name", 422, "Escribe el nombre a ocultar");
+  await getDb()
+    .insert(hidden)
+    .values({ organizationId, isFixed: kind === "fixed", nameKey: key })
+    .onConflictDoNothing();
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +39,8 @@ export function ComboboxInput({
   invalid,
   maxLength,
   newHint = "Nombre nuevo: se usará tal cual.",
+  onRemoveOption,
+  removeLabel = "Quitar de las sugerencias",
   className,
 }: {
   id?: string;
@@ -51,6 +53,13 @@ export function ComboboxInput({
   maxLength?: number;
   /** Lo que dice la lista cuando lo escrito no coincide con ninguna opción. */
   newHint?: string;
+  /**
+   * Si se pasa, cada sugerencia muestra una X discreta para quitarla de la lista (no elige la
+   * opción ni cierra la lista). Quien lo usa decide qué significa «quitar».
+   */
+  onRemoveOption?: (option: ComboboxOption) => void;
+  /** Texto accesible de esa X. */
+  removeLabel?: string;
   className?: string;
 }) {
   const listId = useId();
@@ -214,7 +223,26 @@ export function ComboboxInput({
                     />
                     <span className="truncate">{o.value}</span>
                   </span>
-                  {o.hint && <span className="shrink-0 text-xs text-text-3">{o.hint}</span>}
+                  <span className="flex shrink-0 items-center gap-1">
+                    {o.hint && <span className="text-xs text-text-3">{o.hint}</span>}
+                    {onRemoveOption && (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        aria-label={`${removeLabel}: ${o.value}`}
+                        title={removeLabel}
+                        // mousedown: el campo conserva el foco y la opción no se elige.
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onRemoveOption(o);
+                        }}
+                        className="rounded-sm p-0.5 text-text-3 hover:bg-border hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <X className="h-3.5 w-3.5" aria-hidden />
+                      </button>
+                    )}
+                  </span>
                 </li>
               ))}
               {!exact && value.trim() !== "" && (
