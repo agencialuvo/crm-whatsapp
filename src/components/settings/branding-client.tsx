@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Inbox } from "lucide-react";
 import {
@@ -17,6 +17,7 @@ import {
   DEFAULT_CURRENCY,
   type Currency,
 } from "@/lib/money";
+import { timezoneSelectOptions } from "@/lib/timezones";
 import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand-mark";
 import { navItemClass } from "@/components/app-nav";
@@ -40,7 +41,10 @@ function accentVars(s: AccentSet): React.CSSProperties {
 
 export function BrandingClient({
   favicon = null,
+  initialTimezone,
 }: {
+  /** Zona horaria vigente del negocio (IANA), resuelta en el servidor. */
+  initialTimezone: string;
   /**
    * Logo subido, solo para la vista previa: se sube y se quita en su propia
    * tarjeta. Llega del servidor y no del fetch de abajo a propósito: esa
@@ -54,6 +58,8 @@ export function BrandingClient({
   const [name, setName] = useState("");
   const [accent, setAccent] = useState<string>(DEFAULT_BRANDING.accent);
   const [currency, setCurrency] = useState<Currency>(DEFAULT_CURRENCY);
+  const [timezone, setTimezone] = useState(initialTimezone);
+  const tzOptions = useMemo(() => timezoneSelectOptions(initialTimezone), [initialTimezone]);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +91,7 @@ export function BrandingClient({
     const res = await fetch("/api/settings/branding", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), accent, currency }),
+      body: JSON.stringify({ name: name.trim(), accent, currency, timezone }),
     }).catch(() => null);
     setSaving(false);
     if (!res?.ok) {
@@ -146,6 +152,24 @@ export function BrandingClient({
             <p className="text-xs text-text-3">
               Es la única que el Pipeline suma. Los montos capturados en otra
               moneda se muestran, pero quedan fuera del total de su columna.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="brand-timezone">Zona horaria</Label>
+            <SearchSelect
+              id="brand-timezone"
+              value={timezone}
+              onChange={setTimezone}
+              options={tzOptions}
+              searchPlaceholder="Buscar país o ciudad…"
+              className="max-w-xs"
+              minListWidth={300}
+              triggerClassName="bg-card px-2"
+            />
+            <p className="text-xs text-text-3">
+              Define qué día es «hoy» y cómo se agrupan los días en Resultados, Caja, Gastos y la agenda.
+              Lo ya registrado no se modifica; solo cambia en qué día se cuenta.
             </p>
           </div>
 

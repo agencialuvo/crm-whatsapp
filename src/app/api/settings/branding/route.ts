@@ -3,6 +3,7 @@ import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getSessionOrNull } from "@/lib/auth/session";
 import { DEFAULT_BRANDING, isValidHex, resolveAccentSet } from "@/lib/branding";
 import { CURRENCIES } from "@/lib/money";
+import { isValidTimeZone } from "@/lib/time/slots";
 import { getBranding, saveBranding } from "@/server/branding";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,15 @@ const putSchema = z.object({
   accent: z.string().refine(isValidHex, "Color hex inválido (#rrggbb)"),
   /** La moneda del negocio: la única que el tablero suma. */
   currency: z.enum(CURRENCIES),
+  /**
+   * La zona horaria del negocio (IANA). Opcional: un cliente viejo que no la mande no la borra.
+   * Es la que decide qué día es «hoy» en reportes, gastos y citas.
+   */
+  timezone: z
+    .string()
+    .trim()
+    .refine(isValidTimeZone, "Zona horaria desconocida")
+    .optional(),
 });
 
 export const PUT = withAuth(async (session, req: Request) => {
@@ -35,6 +45,8 @@ export const PUT = withAuth(async (session, req: Request) => {
   await saveBranding(session.organizationId, {
     ...body.data,
     favicon: actual.favicon,
+    // Sin zona en el cuerpo se conserva la que ya había.
+    timezone: body.data.timezone ?? actual.timezone ?? null,
   });
   return Response.json({ ok: true });
 });

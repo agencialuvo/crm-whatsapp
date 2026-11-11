@@ -2,6 +2,8 @@ import { BrandingClient } from "@/components/settings/branding-client";
 import { FaviconCard } from "@/components/settings/favicon-card";
 import { getBranding } from "@/server/branding";
 import { getSessionOrNull } from "@/lib/auth/session";
+import { businessTimezone } from "@/server/analytics/period";
+import { DEFAULT_TIMEZONE } from "@/server/agenda/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -11,12 +13,14 @@ export default async function BrandingSettingsPage() {
   // subido mientras un fetch del cliente va y vuelve.
   const session = await getSessionOrNull();
   const branding = await getBranding(session?.organizationId);
+  // La zona vigente (la elegida aquí, o la que ya tenía la agenda) para preseleccionarla.
+  const timezone = session ? await businessTimezone(session.organizationId) : DEFAULT_TIMEZONE;
 
   return (
     <div className="max-w-2xl space-y-6">
       {/* El logo viaja como prop: al subirlo o quitarlo, FaviconCard refresca
           la página y la vista previa de la marca lo sigue sin recargar. */}
-      <BrandingClient favicon={branding.favicon} />
+      <BrandingClient key={timezone} favicon={branding.favicon} initialTimezone={timezone} />
       <FaviconCard branding={branding} />
     </div>
   );

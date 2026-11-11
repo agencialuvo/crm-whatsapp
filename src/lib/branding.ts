@@ -1,4 +1,5 @@
 import { DEFAULT_CURRENCY, isCurrency, type Currency } from "@/lib/money";
+import { isValidTimeZone } from "@/lib/time/slots";
 
 /**
  * White-label: nombre del CRM, acento y moneda por organización.
@@ -39,6 +40,12 @@ export type Branding = {
   currency: Currency;
   /** `null` = se dibuja con la inicial sobre el acento (ver `lib/favicon`). */
   favicon: BrandingFavicon | null;
+  /**
+   * Zona horaria del negocio (IANA). Opcional: sin ella manda la que ya tuviera la agenda
+   * (`calendar_settings`), y sin ninguna, la de por defecto. Define qué día es «hoy» y cómo se
+   * agrupan los días de reportes, gastos y citas.
+   */
+  timezone?: string | null;
 };
 
 export const DEFAULT_BRANDING: Branding = {
@@ -211,5 +218,7 @@ export function normalizeBranding(input: Partial<Branding> | null): Branding {
     f && typeof f.mime === "string" && Number.isFinite(f.version)
       ? { mime: f.mime, version: Math.max(1, Math.floor(f.version)) }
       : null;
-  return { name, accent, currency, favicon };
+  const tz = input?.timezone;
+  const timezone = typeof tz === "string" && tz.trim() && isValidTimeZone(tz.trim()) ? tz.trim() : null;
+  return { name, accent, currency, favicon, timezone };
 }

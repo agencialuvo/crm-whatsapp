@@ -10,6 +10,8 @@ import { salonEnabled } from "@/server/business/flag";
 import { automationsEnabled } from "@/server/automation/flag";
 import { avisoIaDe } from "@/server/ai/aviso";
 import { AvisoIaBanner } from "@/components/avisos/aviso-ia";
+import { TimezoneDetector } from "@/components/onboarding/timezone-detector";
+import { isTimezoneConfigured } from "@/server/timezone";
 import { SectorSetupModal } from "@/components/onboarding/sector-setup-modal";
 import { canConfigure } from "@/lib/auth/roles";
 import { getSectorSetup, listBusinessSectors } from "@/server/business/sector-setup";
@@ -35,8 +37,14 @@ export default async function AppLayout({
   const sectorsToOffer =
     sectorSetup?.status === "pending" ? await listBusinessSectors().catch(() => []) : [];
 
+  // Sin zona horaria elegida, quien administra informa la de su país (la del navegador). Un fallo no tumba nada.
+  const detectTimezone = canConfigure(session.role)
+    ? !(await isTimezoneConfigured(session.organizationId).catch(() => true))
+    : false;
+
   return (
     <>
+      {detectTimezone && <TimezoneDetector />}
       {/* Acento white-label inyectado en SSR, solo dentro del sistema. */}
       <style dangerouslySetInnerHTML={{ __html: accentCssVariables(branding.accent) }} />
       <AppShell

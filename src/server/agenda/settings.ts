@@ -1,6 +1,7 @@
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import { getBrandingTimezone, saveBrandingTimezone } from "@/server/branding";
 import {
   DEFAULT_CONNECTOR,
   isConnectorId,
@@ -74,9 +75,13 @@ export async function getSettings(
     .where(scoped(schema.calendarSettings.organizationId, organizationId))
     .limit(1);
 
+  // La zona elegida en Ajustes → Negocio → Marca manda sobre la guardada aquí.
+  const chosen = await getBrandingTimezone(organizationId);
+  const tz = chosen && isValidTimeZone(chosen) ? chosen : null;
+
   const row = rows[0];
   // Sin fila: la instancia recién encendida ya es usable.
-  if (!row) return DEFAULT_CALENDAR_SETTINGS;
+  if (!row) return tz ? { ...DEFAULT_CALENDAR_SETTINGS, timezone: tz } : DEFAULT_CALENDAR_SETTINGS;
 
   return {
     weeklyHours: normalizeWeeklyHours(row.weeklyHours as WeeklyHours),
@@ -84,7 +89,7 @@ export async function getSettings(
     bufferMinutes: row.bufferMinutes,
     minNoticeHours: row.minNoticeHours,
     maxDaysAhead: row.maxDaysAhead,
-    timezone: row.timezone,
+    timezone: tz ?? row.timezone,
     // Un conector que ya no existe en el código (p. ej. venías de un fork) no
     // puede dejar la agenda inservible: se degrada al soberano.
     connector: isConnectorId(row.connector) ? row.connector : DEFAULT_CONNECTOR,
@@ -122,6 +127,10 @@ export async function upsertSettings(
   // Una zona desconocida rompería el motor entero: se rechaza al guardar.
   if (!isValidTimeZone(timezone)) {
     throw new CalendarSettingsError(`Zona horaria desconocida: ${timezone}`);
+  }
+  // La zona es una sola para todo el negocio: si se cambia desde aquí, también queda en la marca.
+  if (input.timezone !== undefined && input.timezone !== current.timezone) {
+    await saveBrandingTimezone(organizationId, timezone);
   }
 
   const connector = input.connector ?? current.connector;

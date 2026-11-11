@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -287,13 +288,15 @@ export function AgendaClient() {
             />
           </div>
           <div className="col-span-2 space-y-1.5">
-            <Label htmlFor="tz" required>Zona horaria</Label>
-            <Input
-              id="tz"
-              value={settings.timezone}
-              onChange={(e) => patch({ timezone: e.target.value })}
-              placeholder="America/Mexico_City"
-            />
+            <Label htmlFor="tz">Zona horaria</Label>
+            <Input id="tz" value={settings.timezone} readOnly disabled />
+            <p className="text-xs text-text-3">
+              Es la del negocio: se cambia en{" "}
+              <Link href="/ajustes/marca" className="underline underline-offset-2">
+                Ajustes → Negocio → Marca
+              </Link>
+              .
+            </p>
           </div>
         </CardContent>
       </Card>

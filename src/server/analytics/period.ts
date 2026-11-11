@@ -8,14 +8,16 @@ import {
 } from "@/lib/time/slots";
 import type { PeriodDto } from "@/lib/analytics";
 import { DEFAULT_TIMEZONE } from "@/server/agenda/settings";
+import { getBrandingTimezone } from "@/server/branding";
 
 /**
  * 019 — El periodo consultado, resuelto en la zona del NEGOCIO.
  *
  * Con cortes en UTC, todo lo que pasa después de las 18:00 en México cae en el
  * día siguiente: el dueño compararía su lunes contra un lunes que no existe.
- * La zona sale de la agenda (`calendar_settings`), la misma que ya decide qué
- * es "hoy" para los huecos disponibles; sin agenda, la de por defecto.
+ * La zona la elige el dueño en Ajustes → Negocio → Marca; sin eso, la de la
+ * agenda (`calendar_settings`), que ya decide qué es "hoy" para los huecos
+ * disponibles; sin ninguna, la de por defecto.
  *
  * Se apoya en `lib/time/slots`, que la 015 ya usa para lo mismo y está
  * probado: una segunda forma de entender las zonas horarias dentro del mismo
@@ -49,6 +51,9 @@ export class PeriodError extends Error {
 }
 
 export async function businessTimezone(organizationId: string): Promise<string> {
+  // Lo elegido en Ajustes → Negocio → Marca manda; sin eso, la de la agenda; sin ninguna, la de por defecto.
+  const chosen = await getBrandingTimezone(organizationId);
+  if (chosen && isValidTimeZone(chosen)) return chosen;
   const rows = await getDb()
     .select({ timezone: schema.calendarSettings.timezone })
     .from(schema.calendarSettings)

@@ -105,3 +105,14 @@ export async function saveBranding(
     .set({ metadata: JSON.stringify(meta) })
     .where(eq(schema.organization.id, organizationId));
 }
+
+/** La zona horaria elegida en Marca (null = no se ha elegido: manda la de la agenda o la de por defecto). */
+export async function getBrandingTimezone(organizationId: string): Promise<string | null> {
+  return (await getBranding(organizationId)).timezone ?? null;
+}
+
+/** Guarda la zona horaria del negocio en su marca, sin tocar lo demás (nombre, color, moneda, icono). */
+export async function saveBrandingTimezone(organizationId: string, timezone: string): Promise<void> {
+  const actual = await getBranding(organizationId);
+  await saveBranding(organizationId, { ...actual, timezone });
+}
