@@ -484,6 +484,13 @@
       "when": 1794695727041,
       "tag": "0068_romantic_stardust",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1794696923929,
+      "tag": "0069_lethal_satana",
+      "breakpoints": true
     }
   ]
 }

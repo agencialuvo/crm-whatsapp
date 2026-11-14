@@ -2,6 +2,8 @@ import { and, asc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import type { EdgeHandle } from "@/lib/automation";
+import { resolveNextStep } from "@/server/automation/graph";
 
 /**
  * Automatizaciones — la cola en base de datos: reclamar, completar, reintentar, fallar y avanzar.
@@ -73,8 +75,34 @@ export async function failExhausted(now: Date = new Date()): Promise<number> {
         sql`${q.attempts} >= ${q.maxAttempts}`
       )
     )
-    .returning({ id: q.id });
+    .returning({ id: q.id, organizationId: q.organizationId, runId: q.runId });
+  // La ejecución de una tarea que se cayó sin remedio también termina fallida.
+  for (const r of rows) await closeRun(getDb(), r.organizationId, r.runId, "failed");
   return rows.length;
+}
+
+/** El estado de una ejecución (`null` si no existe): una tarea en vuelo lo mira antes de ejecutar su paso. */
+export async function runStatus(organizationId: string, runId: string): Promise<string | null> {
+  const r = schema.automationRun;
+  const [row] = await getDb()
+    .select({ status: r.status })
+    .from(r)
+    .where(scoped(r.organizationId, organizationId, eq(r.id, runId)))
+    .limit(1);
+  return row?.status ?? null;
+}
+
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0] | Db;
+
+/** Termina la ejecución (`failed`/`cancelled`) si seguía viva. Sin `runId` (tarea anterior a los `run`) no hace nada. */
+async function closeRun(tx: Tx, organizationId: string, runId: string | null, status: "failed" | "cancelled") {
+  if (!runId) return;
+  const r = schema.automationRun;
+  await tx
+    .update(r)
+    .set({ status, waitingFor: null, endedAt: new Date() })
+    .where(scoped(r.organizationId, organizationId, eq(r.id, runId), inArray(r.status, ["running", "waiting"])));
 }
 
 export async function loadStep(organizationId: string, stepId: string): Promise<StepRow | null> {
@@ -200,49 +228,76 @@ export async function writeLog(entry: LogEntry): Promise<void> {
 }
 
 /**
- * Una tarea terminó bien: se marca `completed` y, si el flujo tiene un paso siguiente, se encola
- * para `nextAt` — las dos cosas en UNA transacción, para que un fallo no deje el flujo cortado
- * (completada sin siguiente) ni duplicado (siguiente sin completar).
+ * Una tarea terminó bien: se marca `completed` y se encola el paso al que lleva la arista `(paso, handle)` —
+ * las dos cosas en UNA transacción, para que un fallo no deje el flujo cortado (completada sin siguiente) ni
+ * duplicado (siguiente sin completar). Sin arista para ese asa, el flujo termina y su ejecución se completa.
  *
- * El «siguiente» es el que sigue en el orden del lienzo (`position_y`, `position_x`, id): la tabla
- * no tiene aristas, así que el orden visual es el orden de ejecución.
+ * Concurrencia: primero se toma `FOR UPDATE` la fila del `run` (el mismo orden de candados con que lo cancelan:
+ * `run` y luego la cola), así quien llega segundo ve el estado del primero. Un `run` cancelado a la vez NO encola
+ * el siguiente paso, aunque su tarea en vuelo termine después.
  */
 export async function completeAndAdvance(
   row: QueueRow,
   nextAt: Date,
-  opts: { skip?: number; stop?: boolean } = {}
+  opts: { handle?: EdgeHandle } = {}
 ): Promise<string | null> {
+  const handle = opts.handle ?? "default";
   return getDb().transaction(async (tx) => {
-    const s = schema.automationStep;
     const q = schema.automationQueue;
-    const steps = await tx
-      .select({ id: s.id })
-      .from(s)
-      .where(scoped(s.organizationId, row.organizationId, eq(s.flowId, row.flowId)))
-      .orderBy(asc(s.positionY), asc(s.positionX), asc(s.id));
-    const at = steps.findIndex((x) => x.id === row.stepId);
-    // `skip` omite los N pasos siguientes (la espera de una cita que ya pasó omite su mensaje); `stop`
-    // termina el flujo.
-    const next = at >= 0 && !opts.stop ? steps[at + 1 + Math.max(0, opts.skip ?? 0)] : undefined;
+    const r = schema.automationRun;
 
-    await tx
+    let alive = true;
+    if (row.runId) {
+      const [run] = await tx
+        .select({ status: r.status })
+        .from(r)
+        .where(scoped(r.organizationId, row.organizationId, eq(r.id, row.runId)))
+        .for("update");
+      alive = !!run && (run.status === "running" || run.status === "waiting");
+    }
+
+    // Solo una tarea viva se completa: si otro avance (o una cancelación) ya la cerró, este no encola nada.
+    const closed = await tx
       .update(q)
       .set({ status: "completed", lockedAt: null, error: null })
-      .where(scoped(q.organizationId, row.organizationId, eq(q.id, row.id)));
+      .where(scoped(q.organizationId, row.organizationId, eq(q.id, row.id), inArray(q.status, ["pending", "processing"])))
+      .returning({ id: q.id });
+    if (closed.length === 0) return null;
 
-    if (!next) return null;
+    // Un run cancelado o terminado a la vez: no se sigue.
+    if (!alive) return null;
+
+    const nextStepId = await resolveNextStep(tx, row.organizationId, row.flowId, row.stepId, handle);
+    if (!nextStepId) {
+      if (row.runId) {
+        await tx
+          .update(r)
+          .set({ status: "completed", waitingFor: null, endedAt: new Date() })
+          .where(scoped(r.organizationId, row.organizationId, eq(r.id, row.runId)));
+      }
+      return null;
+    }
+
     const id = newId("automationQueue");
     await tx.insert(q).values({
       id,
       organizationId: row.organizationId,
       flowId: row.flowId,
       contactId: row.contactId,
-      stepId: next.id,
+      stepId: nextStepId,
       scheduledFor: nextAt,
       maxAttempts: row.maxAttempts,
-      // La cita viaja con el flujo: el paso siguiente sigue anclado a ella.
+      // La cita y la ejecución viajan con el flujo: el paso siguiente sigue anclado a ellas.
       bookingId: row.bookingId,
+      runId: row.runId,
     });
+    if (row.runId) {
+      const future = nextAt.getTime() > Date.now();
+      await tx
+        .update(r)
+        .set({ currentStepId: nextStepId, status: future ? "waiting" : "running", waitingFor: future ? "time" : null })
+        .where(scoped(r.organizationId, row.organizationId, eq(r.id, row.runId)));
+    }
     return id;
   });
 }
@@ -258,11 +313,21 @@ async function setStatus(
     .where(scoped(q.organizationId, row.organizationId, eq(q.id, row.id)));
 }
 
-export const markFailed = (row: QueueRow, error: string) =>
-  setStatus(row, { status: "failed", lockedAt: null, error });
+/** Cierra la tarea y su ejecución en una transacción: `run` primero, luego la cola (el orden de candados de siempre). */
+async function endRow(row: QueueRow, status: "failed" | "cancelled", error: string): Promise<void> {
+  await getDb().transaction(async (tx) => {
+    await closeRun(tx, row.organizationId, row.runId, status);
+    const q = schema.automationQueue;
+    await tx
+      .update(q)
+      .set({ status, lockedAt: null, error })
+      .where(scoped(q.organizationId, row.organizationId, eq(q.id, row.id)));
+  });
+}
 
-export const markCancelled = (row: QueueRow, reason: string) =>
-  setStatus(row, { status: "cancelled", lockedAt: null, error: reason });
+export const markFailed = (row: QueueRow, error: string) => endRow(row, "failed", error);
+
+export const markCancelled = (row: QueueRow, reason: string) => endRow(row, "cancelled", reason);
 
 /** Vuelve a `pending` para `at`, con el motivo del último fallo. */
 export const reschedule = (row: QueueRow, at: Date, error: string) =>

@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -16,6 +16,7 @@ import {
   type StepType,
 } from "@/lib/automation-schemas";
 import { AutomationError } from "@/server/automation/http";
+import { syncEdges } from "@/server/automation/graph";
 import { existingTagIds } from "@/server/tags/store";
 
 /**
@@ -242,18 +243,23 @@ export async function createStep(organizationId: string, flowId: string, input: 
   await assertTemplateOwned(organizationId, input.config as Record<string, unknown>);
   if (input.stepType === "condition") assertConditionFitsFlow(flow.triggerType, input.config as Record<string, unknown>);
   await assertRefsOwned(organizationId, input.config as Record<string, unknown>);
-  const [row] = await getDb()
-    .insert(schema.automationStep)
-    .values({
-      id: newId("automationStep"),
-      organizationId,
-      flowId,
-      stepType: input.stepType,
-      config: input.config,
-      positionX: input.positionX,
-      positionY: input.positionY,
-    })
-    .returning();
+  // El paso y las aristas del flujo cambian juntos: el grafo nunca queda desfasado de la lista.
+  const row = await getDb().transaction(async (tx) => {
+    const [created] = await tx
+      .insert(schema.automationStep)
+      .values({
+        id: newId("automationStep"),
+        organizationId,
+        flowId,
+        stepType: input.stepType,
+        config: input.config,
+        positionX: input.positionX,
+        positionY: input.positionY,
+      })
+      .returning();
+    await syncEdges(organizationId, flowId, tx);
+    return created;
+  });
   return serializeStep(row!);
 }
 
@@ -287,11 +293,16 @@ export async function updateStep(
   if (patch.positionX !== undefined) set.positionX = patch.positionX;
   if (patch.positionY !== undefined) set.positionY = patch.positionY;
 
-  const [row] = await getDb()
-    .update(s)
-    .set(set)
-    .where(scoped(s.organizationId, organizationId, eq(s.flowId, flowId), eq(s.id, stepId)))
-    .returning();
+  const row = await getDb().transaction(async (tx) => {
+    const [updated] = await tx
+      .update(s)
+      .set(set)
+      .where(scoped(s.organizationId, organizationId, eq(s.flowId, flowId), eq(s.id, stepId)))
+      .returning();
+    // Cambiar la configuración (ramas de una condición, «si ya pasó») o la posición cambia las aristas.
+    if (updated) await syncEdges(organizationId, flowId, tx);
+    return updated;
+  });
   if (!row) throw new AutomationError("not_found", 404, "El paso no existe");
   return serializeStep(row);
 }
@@ -303,10 +314,24 @@ export async function updateStep(
 export async function deleteStep(organizationId: string, flowId: string, stepId: string): Promise<void> {
   const flow = await loadFlow(organizationId, flowId);
   const s = schema.automationStep;
-  const gone = await getDb()
-    .delete(s)
-    .where(scoped(s.organizationId, organizationId, eq(s.flowId, flowId), eq(s.id, stepId)))
-    .returning({ id: s.id });
+  const gone = await getDb().transaction(async (tx) => {
+    // Las ejecuciones que estaban en este paso se cancelan: sin su tarea (se va con el paso) quedarían
+    // «en curso» para siempre.
+    const r = schema.automationRun;
+    await tx
+      .update(r)
+      .set({ status: "cancelled", waitingFor: null, endedAt: new Date() })
+      .where(
+        scoped(r.organizationId, organizationId, eq(r.flowId, flowId), eq(r.currentStepId, stepId), inArray(r.status, ["running", "waiting"]))
+      );
+    const deleted = await tx
+      .delete(s)
+      .where(scoped(s.organizationId, organizationId, eq(s.flowId, flowId), eq(s.id, stepId)))
+      .returning({ id: s.id });
+    // Las aristas del paso se van por la cascada; las de los demás se recompilan sin él.
+    if (deleted.length > 0) await syncEdges(organizationId, flowId, tx);
+    return deleted;
+  });
   if (gone.length === 0) throw new AutomationError("not_found", 404, "El paso no existe");
 
   if (flow.active && (await countSteps(organizationId, flowId)) === 0) {

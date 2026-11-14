@@ -4,8 +4,8 @@ import {
   applySendWindow,
   backoffMs,
   bookingGuard,
-  branchAdvance,
   conditionConfigSchema,
+  conditionHandle,
   decideSend,
   decideWaitUntil,
   delayConfigSchema,
@@ -13,11 +13,12 @@ import {
   evaluateCondition,
   removeTagConfigSchema,
   renderVars,
-  resolveBranch,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
   stepLabel,
   waitUntilConfigSchema,
+  type EdgeHandle,
+  type NodeResult,
   type SendDecision,
 } from "@/lib/automation";
 import { dayLabelInTz, timeInTz } from "@/lib/time/slots";
@@ -45,6 +46,8 @@ export type Row = {
   maxAttempts: number;
   /** La cita de la que nació la tarea (disparadores de cita); null en el resto. */
   bookingId: string | null;
+  /** La ejecución (`automation_run`) a la que pertenece; null/ausente en tareas anteriores a los `run`. */
+  runId?: string | null;
 };
 
 /** Lo que el motor necesita de la cita de una tarea: si sigue vigente, a qué hora es y si ya se confirmó. */
@@ -58,8 +61,8 @@ export type StageActionResult =
   | { status: "moved" | "unchanged"; toStageId: string; fromStageId: string | null }
   | { status: "stage_not_found" | "contact_has_no_lead" };
 
-/** Cómo avanza el flujo al terminar una tarea: `skip` omite los N pasos siguientes, `stop` no encola ninguno. */
-export type AdvanceOptions = { skip?: number; stop?: boolean };
+/** Cómo avanza el flujo al terminar una tarea: por qué asa sale (`default` si no se dice). Sin arista, el flujo termina. */
+export type AdvanceOptions = { handle?: EdgeHandle };
 
 export type Step = { id: string; flowId: string; stepType: string; config: unknown };
 
@@ -107,6 +110,11 @@ export type Deps = {
   flowTriggerType(organizationId: string, flowId: string): Promise<string | null>;
   /** Zona horaria del negocio (Ajustes → Marca): la de las ventanas horarias y las variables de la cita. */
   timezone(organizationId: string): Promise<string>;
+  /**
+   * El estado de la ejecución de la tarea (`null` si ya no existe). Opcional: una tarea en vuelo cuya ejecución se
+   * canceló (cita movida, flujo apagado) se cancela sola antes de ejecutar su paso.
+   */
+  runStatus?(organizationId: string, runId: string): Promise<string | null>;
   /** Etiquetas y etapa de hoy del contacto: lo que lee una condición. */
   contactFacts(organizationId: string, contactId: string): Promise<{ tagIds: string[]; stageId: string | null }>;
   /** `add_tag` / `remove_tag`: idempotente. */
@@ -162,6 +170,15 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       return "cancelled";
     }
 
+    // La ejecución se canceló mientras la tarea estaba en vuelo (D8): no se ejecuta el paso.
+    if (row.runId && deps.runStatus) {
+      const status = await deps.runStatus(row.organizationId, row.runId);
+      if (status !== "running" && status !== "waiting") {
+        await deps.markCancelled(row, "run_cancelled");
+        return "cancelled";
+      }
+    }
+
     // Una tarea de cita solo sigue si la cita sigue vigente: una cancelada, realizada o movida no recibe el
     // recordatorio. Es la red de seguridad de la cancelación inmediata (también cubre el cobro en Caja).
     let booking: BookingInfo | null = null;
@@ -201,7 +218,10 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
 
     // Idempotencia: si un intento anterior ya envió y registró el éxito pero se cayó antes de cerrar
     // la tarea, no se vuelve a enviar: solo se cierra y se avanza.
-    if (await deps.hasSuccessLog(row.organizationId, row.id)) {
+    // Los nodos que ramifican (condición, espera con «tarde») no se cortocircuitan: el asa por la que salieron no
+    // se guardó como dato, y repetir su evaluación es inocuo (el historial ya tiene su éxito).
+    const branching = step.stepType === "condition" || step.stepType === "wait_until";
+    if (!branching && (await deps.hasSuccessLog(row.organizationId, row.id))) {
       await deps.completeAndAdvance(row, now);
       return "completed";
     }
@@ -265,13 +285,11 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
           bookingAt: booking.scheduledAt.toISOString(),
           late: true,
           lateAction: decision.action,
+          handle: "late",
         },
       });
-      await deps.completeAndAdvance(
-        row,
-        now,
-        decision.action === "skip_next" ? { skip: 1 } : decision.action === "stop" ? { stop: true } : undefined
-      );
+      // Tarde: sale por el asa `late` (la arista compilada de su `lateAction`; sin arista, el flujo termina).
+      await deps.completeAndAdvance(row, now, { handle: "late" });
       return "completed";
     }
 
@@ -332,8 +350,8 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
       // Datos de ahora, no de cuando se disparó el flujo: la confirmación o una etiqueta pudo llegar mientras esperaba.
       const facts = await deps.contactFacts(row.organizationId, row.contactId);
-      const node = evaluateCondition(cfg.data.rule, { ...facts, booking });
-      const action = resolveBranch(cfg.data, node);
+      const outcome = evaluateCondition(cfg.data.rule, { ...facts, booking });
+      const result: NodeResult = { handle: conditionHandle(outcome) };
       await deps.writeLog({
         organizationId: row.organizationId,
         flowId: row.flowId,
@@ -341,9 +359,9 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         contactId: row.contactId,
         queueId: row.id,
         status: "success",
-        metadata: { ...snapshot, rule: cfg.data.rule, result: node.result, branch: node.result ? "true" : "false", action },
+        metadata: { ...snapshot, rule: cfg.data.rule, result: outcome.result, branch: result.handle, handle: result.handle },
       });
-      await deps.completeAndAdvance(row, now, branchAdvance(action));
+      await deps.completeAndAdvance(row, result.nextAt ?? now, { handle: result.handle });
       return "completed";
     }
 

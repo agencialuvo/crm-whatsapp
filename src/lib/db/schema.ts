@@ -2042,6 +2042,74 @@ export const automationStep = pgTable(
   (t) => [index("automation_step_flow_idx").on(t.flowId)]
 );
 
+/**
+ * Aristas del grafo de un flujo: de qué paso sale, a cuál llega y por qué «asa». Son la fuente de verdad del
+ * orden de ejecución. Hasta el lienzo visual, el Modo Simple las deriva de la lista de pasos
+ * (`compileLinearEdges`). Una arista por asa: único `(source_step_id, source_handle)`.
+ */
+export const automationEdge = pgTable(
+  "automation_edge",
+  {
+    id: text("id").primaryKey(), // prefix: 'edg'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => automationFlow.id, { onDelete: "cascade" }),
+    sourceStepId: text("source_step_id")
+      .notNull()
+      .references(() => automationStep.id, { onDelete: "cascade" }),
+    targetStepId: text("target_step_id")
+      .notNull()
+      .references(() => automationStep.id, { onDelete: "cascade" }),
+    sourceHandle: text("source_handle", { enum: ["default", "true", "false", "late", "timeout"] })
+      .notNull()
+      .default("default"),
+  },
+  (t) => [
+    uniqueIndex("automation_edge_source_handle_uq").on(t.sourceStepId, t.sourceHandle),
+    index("automation_edge_flow_idx").on(t.flowId),
+  ]
+);
+
+/**
+ * Una ejecución de un flujo para un contacto. Único por `(org, flujo, contacto, llave)`: dos disparos del mismo
+ * evento crean un solo `run`. Cada tarea de la cola apunta a su `run`.
+ */
+export const automationRun = pgTable(
+  "automation_run",
+  {
+    id: text("id").primaryKey(), // prefix: 'arn'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => automationFlow.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["running", "waiting", "completed", "failed", "cancelled"] })
+      .notNull()
+      .default("running"),
+    /** El paso en el que está (o estuvo por última vez). NULL si el paso se borró. */
+    currentStepId: text("current_step_id").references(() => automationStep.id, { onDelete: "set null" }),
+    /** Datos estables del arranque (`{ "bookingId": "bk_…" }` en los flujos de cita). */
+    context: jsonb("context").notNull().default(sql`'{}'::jsonb`),
+    /** Qué espera mientras `waiting`: un instante (`time`) o la respuesta del cliente (`reply`, Fase 4). */
+    waitingFor: text("waiting_for", { enum: ["reply", "time"] }),
+    dedupeKey: text("dedupe_key").notNull(),
+    startedAt: timestamp("started_at").notNull().defaultNow(),
+    endedAt: timestamp("ended_at"),
+  },
+  (t) => [
+    uniqueIndex("automation_run_dedupe_uq").on(t.organizationId, t.flowId, t.contactId, t.dedupeKey),
+    index("automation_run_flow_status_idx").on(t.flowId, t.status),
+    index("automation_run_org_contact_idx").on(t.organizationId, t.contactId),
+  ]
+);
+
 export const automationQueue = pgTable(
   "automation_queue",
   {
@@ -2082,10 +2150,13 @@ export const automationQueue = pgTable(
      * vigente. Se copia al paso siguiente; al borrarse la cita se va la cola pendiente.
      */
     bookingId: text("booking_id").references(() => booking.id, { onDelete: "cascade" }),
+    /** La ejecución a la que pertenece la tarea. NULL: tareas anteriores a los `run` (terminan igual, sin crear uno). */
+    runId: text("run_id").references(() => automationRun.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
     index("automation_queue_booking_idx").on(t.bookingId),
+    index("automation_queue_run_idx").on(t.runId),
     uniqueIndex("automation_queue_dedupe_uq").on(t.organizationId, t.flowId, t.contactId, t.dedupeKey),
     index("automation_queue_status_scheduled_idx").on(t.status, t.scheduledFor),
     index("automation_queue_org_contact_idx").on(t.organizationId, t.contactId),

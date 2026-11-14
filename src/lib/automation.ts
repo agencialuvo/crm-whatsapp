@@ -215,9 +215,9 @@ export const conditionRuleSchema = z.discriminatedUnion("type", [
 export type ConditionRule = z.infer<typeof conditionRuleSchema>;
 
 /**
- * Qué hace el flujo LINEAL según la rama: `continue` sigue con el paso siguiente, `skip_next` lo omite y
- * sigue con el que viene después, `stop` termina el flujo. En la Fase 3 (grafo) la rama elegirá una arista y
- * estas acciones dejarán de usarse; `NodeResult` es lo que se conectará.
+ * Qué hace el Modo Simple según la rama: `continue` sigue con el paso siguiente, `skip_next` lo omite y
+ * sigue con el que viene después, `stop` termina el flujo. El motor no las lee: se compilan a aristas
+ * `true`/`false` (`compileLinearEdges`) y el intérprete sigue la arista.
  */
 export const BRANCH_ACTIONS = ["continue", "skip_next", "stop"] as const;
 export type BranchAction = (typeof BRANCH_ACTIONS)[number];
@@ -240,11 +240,69 @@ export type ConditionFacts = {
   booking: { confirmedAt?: Date | null } | null;
 };
 
-/** El resultado de un nodo de decisión: verdadero o falso. Es lo que las aristas de la Fase 3 consumirán. */
-export type NodeResult = { result: boolean };
+/** El resultado de evaluar una regla: verdadero o falso. */
+export type ConditionOutcome = { result: boolean };
+
+/* ─── Grafo: aristas, asas y resultado de un nodo ─── */
+
+/**
+ * Por qué «asa» sale una arista: `default` (el camino normal), `true`/`false` (las dos ramas de `condition`),
+ * `late` (una espera anclada a la cita que llega tarde) y `timeout` (reservada: espera de respuesta, Fase 4).
+ */
+export const EDGE_HANDLES = ["default", "true", "false", "late", "timeout"] as const;
+export type EdgeHandle = (typeof EDGE_HANDLES)[number];
+
+/**
+ * Lo que devuelve un nodo al terminar: por qué asa sigue el flujo y, si el siguiente paso no debe correr ya,
+ * cuándo (`nextAt`; por defecto, ahora). El intérprete busca la arista `(paso, handle)`: sin arista el flujo termina.
+ */
+export type NodeResult = { handle: EdgeHandle; nextAt?: Date };
+
+export const RUN_STATUSES = ["running", "waiting", "completed", "failed", "cancelled"] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+export const WAITING_FOR = ["reply", "time"] as const;
+export type WaitingFor = (typeof WAITING_FOR)[number];
+
+/** El asa que corresponde al resultado de una condición. */
+export const conditionHandle = (outcome: ConditionOutcome): "true" | "false" => (outcome.result ? "true" : "false");
+
+export type GraphStepInput = { id: string; stepType: string; config: unknown };
+export type CompiledEdge = { sourceStepId: string; targetStepId: string; sourceHandle: EdgeHandle };
+
+/**
+ * Compila la lista lineal de pasos (en orden de ejecución) a aristas — el Modo Simple en términos del grafo:
+ * - Todo paso lleva `default` al siguiente.
+ * - `condition`: `true`/`false` según su `ifTrue`/`ifFalse` (`continue` → el siguiente, `skip_next` → el de
+ *   después del siguiente, `stop` → sin arista: el flujo termina). Sin `default`: el resultado manda.
+ * - `wait_until`: `default` al siguiente y `late` según su `lateAction` (mismas equivalencias).
+ * Una configuración inválida usa los valores por defecto del esquema (`ifTrue` continúa, `ifFalse` termina,
+ * `lateAction` omite el siguiente): el motor falla el paso a la vista, no la compilación.
+ */
+export function compileLinearEdges(steps: readonly GraphStepInput[]): CompiledEdge[] {
+  const edges: CompiledEdge[] = [];
+  const edge = (from: GraphStepInput, to: GraphStepInput | undefined, sourceHandle: EdgeHandle) => {
+    if (to) edges.push({ sourceStepId: from.id, targetStepId: to.id, sourceHandle });
+  };
+  steps.forEach((step, i) => {
+    const next = steps[i + 1];
+    const after = steps[i + 2];
+    const target = (action: unknown) => (action === "skip_next" ? after : action === "stop" ? undefined : next);
+    const c = (step.config ?? {}) as { ifTrue?: unknown; ifFalse?: unknown; lateAction?: unknown };
+    if (step.stepType === "condition") {
+      edge(step, target(c.ifTrue ?? "continue"), "true");
+      edge(step, target(c.ifFalse ?? "stop"), "false");
+    } else if (step.stepType === "wait_until") {
+      edge(step, next, "default");
+      edge(step, target(c.lateAction ?? "skip_next"), "late");
+    } else {
+      edge(step, next, "default");
+    }
+  });
+  return edges;
+}
 
 /** Evalúa una regla con los datos de ahora. Pura: sin base de datos. */
-export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): NodeResult {
+export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): ConditionOutcome {
   switch (rule.type) {
     case "tag_has":
       return { result: facts.tagIds.includes(rule.tagId) };
@@ -256,16 +314,6 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): N
       // Sin cita en contexto no hay nada confirmado.
       return { result: !!facts.booking?.confirmedAt };
   }
-}
-
-/** La acción de la rama que tocó. */
-export function resolveBranch(config: Pick<ConditionConfig, "ifTrue" | "ifFalse">, node: NodeResult): BranchAction {
-  return node.result ? config.ifTrue : config.ifFalse;
-}
-
-/** La acción de una rama como opciones de avance de la cola (`continue` = avance normal). */
-export function branchAdvance(action: BranchAction): { skip?: number; stop?: boolean } | undefined {
-  return action === "skip_next" ? { skip: 1 } : action === "stop" ? { stop: true } : undefined;
 }
 
 /** El nombre con que un paso aparece en el historial: el que le puso el dueño o su tipo. */

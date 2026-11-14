@@ -13,6 +13,7 @@ import {
   stageFlowMatches,
 } from "@/lib/automation";
 import { todayInTz } from "@/lib/time/slots";
+import { emitAutomationEvent } from "@/server/automation/events";
 import { automationsEnabled } from "@/server/automation/flag";
 import { dbTriggerStore, type TriggerStore } from "@/server/automation/trigger-store";
 
@@ -104,10 +105,17 @@ export async function onLeadStageChanged(
 ): Promise<number> {
   if (!enabled()) return 0;
   try {
-    const flows = (await store.activeFlows(input.organizationId, "stage_changed")).filter((f) =>
-      stageFlowMatches(parseTriggerConfig(f.triggerConfig), input.toStageId)
+    return await emitAutomationEvent(
+      {
+        organizationId: input.organizationId,
+        trigger: "stage_changed",
+        contactId: input.contactId,
+        dedupeKey: stageDedupeKey(input.leadId, input.toStageId),
+        matches: (f) => stageFlowMatches(parseTriggerConfig(f.triggerConfig), input.toStageId),
+      },
+      store,
+      now
     );
-    return await enqueueForFlows(input, flows, stageDedupeKey(input.leadId, input.toStageId), store, now);
   } catch (err) {
     console.error("[automatizaciones] el disparador de cambio de etapa falló:", err);
     return 0;
@@ -123,8 +131,16 @@ export async function onLeadCreated(
 ): Promise<number> {
   if (!enabled()) return 0;
   try {
-    const flows = await store.activeFlows(input.organizationId, "lead_created");
-    return await enqueueForFlows(input, flows, leadCreatedDedupeKey(input.leadId), store, now);
+    return await emitAutomationEvent(
+      {
+        organizationId: input.organizationId,
+        trigger: "lead_created",
+        contactId: input.contactId,
+        dedupeKey: leadCreatedDedupeKey(input.leadId),
+      },
+      store,
+      now
+    );
   } catch (err) {
     console.error("[automatizaciones] el disparador de lead nuevo falló:", err);
     return 0;
@@ -143,7 +159,7 @@ export type BookingEvent = {
   isTest?: boolean;
 };
 
-/** Encola el primer paso de cada flujo de ese disparador, anclado a la cita. Sin chat real no hay a dónde mandar. */
+/** Emite el evento de cita: arranca cada flujo de ese disparador, anclado a la cita. */
 async function enqueueBookingFlows(
   input: BookingEvent,
   triggerType: "booking_created" | "booking_confirmed" | "booking_no_show",
@@ -152,23 +168,17 @@ async function enqueueBookingFlows(
   now: () => Date
 ): Promise<number> {
   if (input.isTest || !input.contactId) return 0;
-  const flows = await store.activeFlows(input.organizationId, triggerType);
-  if (flows.length === 0) return 0;
-  if (!(await store.hasRealConversation(input.organizationId, input.contactId))) return 0;
-
-  let enqueued = 0;
-  for (const flow of flows) {
-    const inserted = await store.enqueueFirstStep({
+  return emitAutomationEvent(
+    {
       organizationId: input.organizationId,
-      flowId: flow.id,
+      trigger: triggerType,
       contactId: input.contactId,
-      scheduledFor: now(),
       dedupeKey,
       bookingId: input.bookingId,
-    });
-    if (inserted) enqueued += 1;
-  }
-  return enqueued;
+    },
+    store,
+    now
+  );
 }
 
 /**
@@ -267,30 +277,4 @@ export async function onBookingClosed(
     console.error("[automatizaciones] no se pudo cancelar lo pendiente de la cita:", err);
     return 0;
   }
-}
-
-async function enqueueForFlows(
-  input: LeadEvent,
-  flows: { id: string }[],
-  dedupeKey: string,
-  store: TriggerStore,
-  now: () => Date
-): Promise<number> {
-  if (flows.length === 0) return 0;
-  // Sin chat de WhatsApp real no hay a dónde mandar (y un contacto del Laboratorio jamás recibe nada):
-  // se evita llenar la cola de tareas que fallarían al instante.
-  if (!(await store.hasRealConversation(input.organizationId, input.contactId))) return 0;
-
-  let enqueued = 0;
-  for (const flow of flows) {
-    const inserted = await store.enqueueFirstStep({
-      organizationId: input.organizationId,
-      flowId: flow.id,
-      contactId: input.contactId,
-      scheduledFor: now(),
-      dedupeKey,
-    });
-    if (inserted) enqueued += 1;
-  }
-  return enqueued;
 }

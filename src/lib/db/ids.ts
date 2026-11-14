@@ -71,6 +71,8 @@ const prefixes = {
   automationFlow: "aut",
   automationStep: "stp",
   automationQueue: "que",
+  automationEdge: "edg",
+  automationRun: "arn",
   automationExecutionLog: "log",
 } as const;
 

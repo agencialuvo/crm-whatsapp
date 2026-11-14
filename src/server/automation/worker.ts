@@ -27,6 +27,7 @@ export function defaultDeps(): Deps {
     isFlowActive: queue.isFlowActive,
     loadBooking: queue.loadBooking,
     flowTriggerType: queue.flowTriggerType,
+    runStatus: queue.runStatus,
     timezone: businessTimezone,
     loadTarget: queue.loadTarget,
     templateStatus: queue.templateStatus,
