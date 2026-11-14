@@ -11,19 +11,26 @@ import { Field } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { stepCreateSchema, STEP_TYPES } from "@/lib/automation-schemas";
 import {
+  BRANCH_ACTION_LABELS,
+  CONDITION_RULE_LABELS,
   DELAY_UNIT_LABELS,
   WAIT_LATE_LABELS,
   nextPositionY,
   offsetMinutesOf,
   offsetParts,
   stepLabel,
+  type StageOption,
   type StepDto,
+  type TagOption,
   type TemplateOption,
 } from "@/lib/automation-dto";
-import { WAIT_LATE_ACTIONS } from "@/lib/automation";
+import { BRANCH_ACTIONS, CONDITION_RULE_TYPES, WAIT_LATE_ACTIONS } from "@/lib/automation";
+import { tagColorClass } from "@/lib/tags";
 import { countVariables } from "@/lib/templates";
 
 const STEP_TYPE_OPTIONS: SearchSelectOption[] = STEP_TYPES.map((t) => ({ value: t, label: stepLabel(t) }));
+
+const BRANCH_OPTIONS: SearchSelectOption[] = BRANCH_ACTIONS.map((a) => ({ value: a, label: BRANCH_ACTION_LABELS[a] }));
 
 const UNIT_OPTIONS: SearchSelectOption[] = (
   Object.keys(DELAY_UNIT_LABELS) as (keyof typeof DELAY_UNIT_LABELS)[]
@@ -60,6 +67,10 @@ export function StepDialog({
   step,
   steps,
   templates,
+  tags,
+  stages,
+  triggerType,
+  onTagCreated,
   onClose,
   onSaved,
 }: {
@@ -69,6 +80,13 @@ export function StepDialog({
   /** Los pasos actuales: de ahí sale dónde cae el nuevo. */
   steps: StepDto[];
   templates: TemplateOption[];
+  /** Etiquetas y etapas del negocio: lo que ofrecen `add_tag`, `set_stage` y `condition`. */
+  tags: TagOption[];
+  stages: StageOption[];
+  /** El disparador del flujo: decide qué pasos y reglas tienen sentido (los de cita, solo en flujos de cita). */
+  triggerType: string;
+  /** Una etiqueta creada «al vuelo» desde el diálogo, para que el detalle del flujo la conozca. */
+  onTagCreated: (tag: TagOption) => void;
   onClose: () => void;
   onSaved: (step: StepDto) => void;
 }) {
@@ -91,6 +109,18 @@ export function StepDialog({
   const [winMinute, setWinMinute] = useState(typeof win?.minute === "number" ? String(win.minute) : "0");
   const [winFrom, setWinFrom] = useState(typeof win?.fromHour === "number" ? String(win.fromHour) : "9");
   const [winTo, setWinTo] = useState(typeof win?.toHour === "number" ? String(win.toHour) : "21");
+  // Acciones de CRM y condición. Todo por id: ni el motor ni el formulario comparan nombres.
+  const rule = (c.rule ?? null) as Record<string, unknown> | null;
+  const isBookingFlow = triggerType.startsWith("booking_");
+  const [tagId, setTagId] = useState(typeof c.tagId === "string" ? c.tagId : "");
+  const [stageId, setStageId] = useState(typeof c.stageId === "string" ? c.stageId : "");
+  const [ruleType, setRuleType] = useState<string>(typeof rule?.type === "string" ? rule.type : "tag_has");
+  const [ruleTagId, setRuleTagId] = useState(typeof rule?.tagId === "string" ? rule.tagId : "");
+  const [ruleStageId, setRuleStageId] = useState(typeof rule?.stageId === "string" ? rule.stageId : "");
+  const [ifTrue, setIfTrue] = useState<string>(typeof c.ifTrue === "string" ? c.ifTrue : "continue");
+  const [ifFalse, setIfFalse] = useState<string>(typeof c.ifFalse === "string" ? c.ifFalse : "stop");
+  const [newTagName, setNewTagName] = useState("");
+  const [creatingTag, setCreatingTag] = useState(false);
   const [content, setContent] = useState(typeof c.content === "string" ? c.content : "");
   const [templateId, setTemplateId] = useState(typeof c.templateId === "string" ? c.templateId : "");
   const [variables, setVariables] = useState<string[]>(
@@ -138,8 +168,61 @@ export function StepDialog({
     return undefined;
   }
 
+  // Los pasos de cita (esperar hasta la cita) solo se ofrecen en flujos de cita; el que ya existe se conserva.
+  const stepTypeOptions = useMemo<SearchSelectOption[]>(
+    () => STEP_TYPE_OPTIONS.filter((o) => isBookingFlow || o.value !== "wait_until"),
+    [isBookingFlow]
+  );
+  const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
+  const stageOptions = useMemo<SearchSelectOption[]>(() => stages.map((s) => ({ value: s.id, label: s.name })), [stages]);
+  const ruleOptions = useMemo<SearchSelectOption[]>(
+    () =>
+      CONDITION_RULE_TYPES.filter((r) => isBookingFlow || r !== "booking_confirmed" || ruleType === r).map((r) => ({
+        value: r,
+        label: CONDITION_RULE_LABELS[r],
+      })),
+    [isBookingFlow, ruleType]
+  );
+
+  /** Crea una etiqueta nueva sin salir del diálogo y la deja elegida en el campo `onPick`. */
+  async function createTagInline(onPick: (id: string) => void, errorKey: string) {
+    const label = newTagName.trim();
+    if (!label) return;
+    setCreatingTag(true);
+    try {
+      const { tag } = await apiFetch<{ tag: TagOption }>("/api/tags", { method: "POST", json: { name: label } });
+      onTagCreated(tag);
+      onPick(tag.id);
+      clear(errorKey);
+      setNewTagName("");
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, [errorKey]: describeError(err) }));
+    } finally {
+      setCreatingTag(false);
+    }
+  }
+
   function buildConfig(): Record<string, unknown> {
     const window = buildWindow();
+    if (stepType === "add_tag" || stepType === "remove_tag") {
+      return { ...(name.trim() && { name: name.trim() }), tagId };
+    }
+    if (stepType === "set_stage") {
+      return { ...(name.trim() && { name: name.trim() }), stageId };
+    }
+    if (stepType === "condition") {
+      return {
+        ...(name.trim() && { name: name.trim() }),
+        rule:
+          ruleType === "booking_confirmed"
+            ? { type: ruleType }
+            : ruleType === "stage_is"
+              ? { type: ruleType, stageId: ruleStageId }
+              : { type: ruleType, tagId: ruleTagId },
+        ifTrue,
+        ifFalse,
+      };
+    }
     if (stepType === "delay") {
       return { ...(name.trim() && { name: name.trim() }), amount: toNumber(amount), unit, ...(window && { window }) };
     }
@@ -166,6 +249,11 @@ export function StepDialog({
     const config = buildConfig();
     const found: Record<string, string> = {};
     if (stepType === "wait_until" && offsetAmount.trim() === "") found.offsetMinutes = "Escribe la cantidad";
+    // El esquema pide un id no vacío, pero «Elige una etiqueta» se entiende mejor que «String must contain 1 character».
+    if ((stepType === "add_tag" || stepType === "remove_tag") && !tagId) found.tagId = "Elige una etiqueta";
+    if (stepType === "set_stage" && !stageId) found.stageId = "Elige una etapa";
+    if (stepType === "condition" && (ruleType === "tag_has" || ruleType === "tag_missing") && !ruleTagId) found.tagId = "Elige una etiqueta";
+    if (stepType === "condition" && ruleType === "stage_is" && !ruleStageId) found.stageId = "Elige una etapa";
 
     const parsed = stepCreateSchema.safeParse({
       stepType,
@@ -222,7 +310,7 @@ export function StepDialog({
               id="step-type"
               value={stepType}
               onChange={setStepType}
-              options={STEP_TYPE_OPTIONS}
+              options={stepTypeOptions}
               searchPlaceholder="Buscar tipo de paso…"
               ariaLabel="Tipo de paso"
               disabled={busy}
@@ -244,7 +332,139 @@ export function StepDialog({
           />
         </Field>
 
-        {stepType === "wait_until" ? (
+        {stepType === "add_tag" || stepType === "remove_tag" ? (
+          <TagField
+            label={stepType === "add_tag" ? "Etiqueta que se agrega" : "Etiqueta que se quita"}
+            value={tagId}
+            onChange={(v) => {
+              setTagId(v);
+              clear("tagId");
+            }}
+            options={tagOptions}
+            tags={tags}
+            error={errors.tagId}
+            busy={busy || creatingTag}
+            newName={newTagName}
+            onNewName={setNewTagName}
+            onCreate={() => void createTagInline(setTagId, "tagId")}
+            hint={
+              stepType === "add_tag"
+                ? "Si el contacto ya la tiene, no pasa nada."
+                : "Si el contacto no la tiene, no pasa nada."
+            }
+            allowCreate={stepType === "add_tag"}
+          />
+        ) : stepType === "set_stage" ? (
+          <>
+            <Field label="Mover a la etapa" required htmlFor="step-stage" error={errors.stageId}>
+              <SearchSelect
+                id="step-stage"
+                value={stageId}
+                onChange={(v) => {
+                  setStageId(v);
+                  clear("stageId");
+                }}
+                options={stageOptions}
+                placeholder="Elige una etapa"
+                searchPlaceholder="Buscar etapa…"
+                ariaLabel="Etapa de destino"
+                invalid={!!errors.stageId}
+                disabled={busy}
+              />
+            </Field>
+            <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+              Mueve al lead del contacto a esa etapa y lo deja en el historial del embudo. Para evitar bucles, este
+              movimiento <strong>no</strong> activa otros flujos de «Cambio de etapa». Si el contacto no tiene lead, el
+              paso falla y se ve en el historial.
+            </p>
+          </>
+        ) : stepType === "condition" ? (
+          <>
+            <Field label="Si se cumple que…" required htmlFor="step-rule">
+              <SearchSelect
+                id="step-rule"
+                value={ruleType}
+                onChange={(v) => {
+                  setRuleType(v);
+                  clear("tagId", "stageId");
+                }}
+                options={ruleOptions}
+                searchPlaceholder="Buscar regla…"
+                ariaLabel="Regla de la condición"
+                disabled={busy}
+              />
+            </Field>
+            {(ruleType === "tag_has" || ruleType === "tag_missing") && (
+              <TagField
+                label="Etiqueta"
+                value={ruleTagId}
+                onChange={(v) => {
+                  setRuleTagId(v);
+                  clear("tagId");
+                }}
+                options={tagOptions}
+                tags={tags}
+                error={errors.tagId}
+                busy={busy || creatingTag}
+                newName={newTagName}
+                onNewName={setNewTagName}
+                onCreate={() => void createTagInline(setRuleTagId, "tagId")}
+                allowCreate={false}
+              />
+            )}
+            {ruleType === "stage_is" && (
+              <Field label="Etapa" required htmlFor="step-rule-stage" error={errors.stageId}>
+                <SearchSelect
+                  id="step-rule-stage"
+                  value={ruleStageId}
+                  onChange={(v) => {
+                    setRuleStageId(v);
+                    clear("stageId");
+                  }}
+                  options={stageOptions}
+                  placeholder="Elige una etapa"
+                  searchPlaceholder="Buscar etapa…"
+                  ariaLabel="Etapa de la condición"
+                  invalid={!!errors.stageId}
+                  disabled={busy}
+                />
+              </Field>
+            )}
+            {ruleType === "booking_confirmed" && (
+              <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+                Se mira al llegar a este paso: si el cliente confirmó mientras el flujo esperaba, cuenta como confirmada.
+              </p>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Si es verdadero" htmlFor="step-if-true">
+                <SearchSelect
+                  id="step-if-true"
+                  value={ifTrue}
+                  onChange={setIfTrue}
+                  options={BRANCH_OPTIONS}
+                  searchPlaceholder="Buscar…"
+                  ariaLabel="Acción si es verdadero"
+                  disabled={busy}
+                />
+              </Field>
+              <Field label="Si es falso" htmlFor="step-if-false">
+                <SearchSelect
+                  id="step-if-false"
+                  value={ifFalse}
+                  onChange={setIfFalse}
+                  options={BRANCH_OPTIONS}
+                  searchPlaceholder="Buscar…"
+                  ariaLabel="Acción si es falso"
+                  disabled={busy}
+                />
+              </Field>
+            </div>
+            <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+              Hoy los pasos se ejecutan en fila: la condición decide si el flujo sigue, se salta el siguiente paso o
+              termina. Más adelante cada resultado podrá llevar a un camino distinto.
+            </p>
+          </>
+        ) : stepType === "wait_until" ? (
           <>
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Cantidad" required htmlFor="step-offset" error={errors.offsetMinutes}>
@@ -525,5 +745,82 @@ export function StepDialog({
         </ModalFooter>
       </form>
     </Modal>
+  );
+}
+
+/** Elegir una etiqueta del negocio y, si se permite, crear una nueva sin salir del diálogo. */
+function TagField({
+  label,
+  value,
+  onChange,
+  options,
+  tags,
+  error,
+  busy,
+  newName,
+  onNewName,
+  onCreate,
+  hint,
+  allowCreate,
+}: {
+  label: string;
+  value: string;
+  onChange: (id: string) => void;
+  options: SearchSelectOption[];
+  tags: TagOption[];
+  error?: string;
+  busy: boolean;
+  newName: string;
+  onNewName: (v: string) => void;
+  onCreate: () => void;
+  hint?: string;
+  allowCreate: boolean;
+}) {
+  const chosen = tags.find((t) => t.id === value) ?? null;
+  return (
+    <div className="space-y-3">
+      <Field label={label} required htmlFor="step-tag" error={error} hint={hint}>
+        <SearchSelect
+          id="step-tag"
+          value={value}
+          onChange={onChange}
+          options={options}
+          placeholder={options.length ? "Elige una etiqueta" : "Aún no hay etiquetas"}
+          searchPlaceholder="Buscar etiqueta…"
+          ariaLabel="Etiqueta"
+          invalid={!!error}
+          disabled={busy}
+        />
+        {chosen && (
+          <span className={`mt-1 inline-flex w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${tagColorClass(chosen.color)}`}>
+            {chosen.name}
+          </span>
+        )}
+      </Field>
+      {allowCreate && (
+        <div className="flex items-end gap-2">
+          <Field label="¿No está? Crea una nueva" htmlFor="step-tag-new" className="flex-1">
+            <Input
+              id="step-tag-new"
+              value={newName}
+              maxLength={40}
+              placeholder="Cita pendiente"
+              autoComplete="off"
+              disabled={busy}
+              onChange={(e) => onNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onCreate();
+                }
+              }}
+            />
+          </Field>
+          <Button type="button" variant="outline" disabled={busy || !newName.trim()} onClick={onCreate}>
+            Crear
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

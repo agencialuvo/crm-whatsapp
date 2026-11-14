@@ -1,4 +1,11 @@
-import { BIRTHDAY_DEFAULT_HOUR, type SendWindow, type WaitLateAction } from "@/lib/automation";
+import {
+  BIRTHDAY_DEFAULT_HOUR,
+  type BranchAction,
+  type ConditionRule,
+  type ConditionRuleType,
+  type SendWindow,
+  type WaitLateAction,
+} from "@/lib/automation";
 import { FLOW_TRIGGER_TYPES, type FlowTriggerType } from "@/lib/automation-schemas";
 
 /**
@@ -39,6 +46,7 @@ export type StepDto = {
 };
 
 export type StageOption = { id: string; name: string };
+export type TagOption = { id: string; name: string; color: string };
 export type TemplateOption = { id: string; name: string; language: string; body: string; status: string };
 
 /* ─── Disparadores ─── */
@@ -135,8 +143,10 @@ export function describeTrigger(
 export const STEP_LABELS: Record<string, string> = {
   delay: "Esperar",
   send_whatsapp: "Enviar mensaje de WhatsApp",
-  condition: "Condición",
+  condition: "Condición (si / si no)",
   add_tag: "Agregar etiqueta",
+  remove_tag: "Quitar etiqueta",
+  set_stage: "Mover de etapa",
   wait_until: "Esperar hasta la cita",
 };
 
@@ -208,12 +218,73 @@ export function clip(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-/** Título y detalle de un paso, para su tarjeta. `templates` resuelve el nombre de la plantilla. */
+/* ─── Condición ─── */
+
+export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
+  tag_has: "El contacto tiene la etiqueta",
+  tag_missing: "El contacto NO tiene la etiqueta",
+  booking_confirmed: "La cita está confirmada",
+  stage_is: "El lead está en la etapa",
+};
+
+export const BRANCH_ACTION_LABELS: Record<BranchAction, string> = {
+  continue: "Continuar con el siguiente paso",
+  skip_next: "Omitir el siguiente paso y continuar",
+  stop: "Terminar el flujo",
+};
+
+/** Lo que resuelve nombres de etiquetas y etapas en las tarjetas (por id: el motor nunca compara nombres). */
+export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOption[] };
+
+/** La regla en una frase: «El contacto tiene la etiqueta «VIP»». */
+export function describeRule(rule: ConditionRule | Record<string, unknown> | null | undefined, refs: StepRefs = {}): string {
+  const r = (rule ?? {}) as { type?: string; tagId?: string; stageId?: string };
+  const tag = (id?: string) => {
+    const n = refs.tags?.find((t) => t.id === id)?.name;
+    return n ? `«${n}»` : "una etiqueta que ya no existe";
+  };
+  const stage = (id?: string) => {
+    const n = refs.stages?.find((st) => st.id === id)?.name;
+    return n ? `«${n}»` : "una etapa que ya no existe";
+  };
+  switch (r.type) {
+    case "tag_has":
+      return `El contacto tiene la etiqueta ${tag(r.tagId)}`;
+    case "tag_missing":
+      return `El contacto no tiene la etiqueta ${tag(r.tagId)}`;
+    case "booking_confirmed":
+      return "La cita está confirmada";
+    case "stage_is":
+      return `El lead está en la etapa ${stage(r.stageId)}`;
+    default:
+      return "Condición sin configurar";
+  }
+}
+
+/** Título y detalle de un paso, para su tarjeta. `templates` resuelve la plantilla; `refs`, etiquetas y etapas. */
 export function describeStep(
   step: Pick<StepDto, "stepType" | "config">,
-  templates: readonly TemplateOption[] = []
+  templates: readonly TemplateOption[] = [],
+  refs: StepRefs = {}
 ): { title: string; detail: string | null } {
   const c = step.config;
+  if (step.stepType === "add_tag" || step.stepType === "remove_tag") {
+    const n = refs.tags?.find((t) => t.id === c.tagId)?.name;
+    const verb = step.stepType === "add_tag" ? "Agregar" : "Quitar";
+    return { title: `${verb} etiqueta ${n ? `«${n}»` : "(ya no existe)"}`, detail: null };
+  }
+  if (step.stepType === "set_stage") {
+    const n = refs.stages?.find((st) => st.id === c.stageId)?.name;
+    return { title: `Mover a la etapa ${n ? `«${n}»` : "(ya no existe)"}`, detail: "No dispara otros flujos de cambio de etapa." };
+  }
+  if (step.stepType === "condition") {
+    const t = (c.ifTrue as BranchAction) ?? "continue";
+    const f = (c.ifFalse as BranchAction) ?? "stop";
+    return {
+      title: `Si: ${describeRule(c.rule as Record<string, unknown>, refs)}`,
+      detail: `Sí → ${BRANCH_ACTION_LABELS[t].toLowerCase()} · No → ${BRANCH_ACTION_LABELS[f].toLowerCase()}`,
+    };
+  }
   if (step.stepType === "delay") {
     const amount = typeof c.amount === "number" ? c.amount : 0;
     const window = describeWindow(c.window as Record<string, unknown> | undefined);

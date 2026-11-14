@@ -103,7 +103,7 @@ describe("pasos", () => {
     ).toBe("«Hola» · Plantilla: recordatorio_cita");
   });
   it("un tipo sin ejecutor se marca, no se oculta", () => {
-    expect(describeStep({ stepType: "condition", config: {} }).detail).toContain("todavía no se puede ejecutar");
+    expect(describeStep({ stepType: "tipo_inventado", config: {} }).detail).toContain("todavía no se puede ejecutar");
   });
   it("clip aplana espacios y corta con puntos suspensivos", () => {
     expect(clip("  hola \n  mundo ", 50)).toBe("hola mundo");

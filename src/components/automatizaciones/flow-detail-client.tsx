@@ -3,7 +3,21 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, Clock, MessageCircle, Pencil, Plus, Trash2, Workflow } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  CalendarClock,
+  Clock,
+  GitBranch,
+  Flag,
+  MessageCircle,
+  Pencil,
+  Plus,
+  Tag,
+  Trash2,
+  Workflow,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -24,13 +38,22 @@ import {
   type FlowDto,
   type StageOption,
   type StepDto,
+  type TagOption,
   type TemplateOption,
 } from "@/lib/automation-dto";
 import { cn } from "@/lib/utils";
 
 type StepDialogState = { step: StepDto | null } | null;
 
-const STEP_ICON: Record<string, typeof Clock> = { delay: Clock, send_whatsapp: MessageCircle };
+const STEP_ICON: Record<string, typeof Clock> = {
+  delay: Clock,
+  send_whatsapp: MessageCircle,
+  wait_until: CalendarClock,
+  add_tag: Tag,
+  remove_tag: Tag,
+  set_stage: Flag,
+  condition: GitBranch,
+};
 
 /**
  * Automatizaciones — un flujo: su nombre, cuándo se activa y sus reglas, y la secuencia de pasos que
@@ -45,6 +68,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const [steps, setSteps] = useState<StepDto[]>([]);
   const [templates, setTemplates] = useState<TemplateOption[]>([]);
   const [stages, setStages] = useState<StageOption[]>([]);
+  const [tags, setTags] = useState<TagOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -66,16 +90,18 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
     setLoadError(null);
     setNotFound(false);
     try {
-      const [detail, tpl, st] = await Promise.all([
+      const [detail, tpl, st, tg] = await Promise.all([
         apiFetch<{ flow: FlowDto; steps: StepDto[] }>(`/api/automations/${flowId}`),
         // Las plantillas y las etapas solo dan nombres: si fallan, el detalle se muestra igual.
         apiFetch<{ templates: TemplateOption[] }>("/api/templates").catch(() => ({ templates: [] as TemplateOption[] })),
         apiFetch<{ stages: StageOption[] }>("/api/pipeline/stages").catch(() => ({ stages: [] as StageOption[] })),
+        apiFetch<{ tags: TagOption[] }>("/api/tags").catch(() => ({ tags: [] as TagOption[] })),
       ]);
       setFlow(detail.flow);
       setSteps(detail.steps);
       setTemplates(tpl.templates);
       setStages(st.stages);
+      setTags(tg.tags);
     } catch (err) {
       if (apiErrorStatus(err) === 404) setNotFound(true);
       else setLoadError(describeError(err));
@@ -340,7 +366,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
         ) : (
           <ol className="space-y-0">
             {ordered.map((step, i) => {
-              const { title, detail } = describeStep(step, templates);
+              const { title, detail } = describeStep(step, templates, { tags, stages });
               const Icon = STEP_ICON[step.stepType] ?? Workflow;
               const unsupported = !(step.stepType in STEP_ICON);
               return (
@@ -435,6 +461,10 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           step={stepDialog.step}
           steps={steps}
           templates={templates}
+          tags={tags}
+          stages={stages}
+          triggerType={flow.triggerType}
+          onTagCreated={(t) => setTags((prev) => (prev.some((x) => x.id === t.id) ? prev : [...prev, t]))}
           onClose={() => setStepDialog(null)}
           onSaved={(saved) => {
             upsertStep(saved);
@@ -448,7 +478,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           title="Eliminar paso"
           message={
             <>
-              ¿Eliminar <strong>{describeStep(removeStep, templates).title}</strong>? Los mensajes de este paso que
+              ¿Eliminar <strong>{describeStep(removeStep, templates, { tags, stages }).title}</strong>? Los mensajes de este paso que
               estén pendientes dejarán de salir.
               {steps.length === 1 && flow.active && " Como es el único paso, el flujo se apagará."} Esta acción no se
               puede deshacer.

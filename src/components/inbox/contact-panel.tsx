@@ -32,6 +32,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { FichaPanel } from "@/components/ficha-panel";
 import { LoyaltyCardPanel } from "@/components/negocio/loyalty-card";
+import { TagPicker } from "@/components/tags/tag-picker";
+import type { TagDto } from "@/lib/tags";
 import { DeleteConversationDialog } from "./delete-conversation-dialog";
 
 const HANDOFF_LABELS: Record<string, string> = {
@@ -68,6 +70,8 @@ export function ContactPanel({
   const [stages, setStages] = useState<StageDto[]>([]);
   const [currentStageId, setCurrentStageId] = useState<string | null>(null);
   const [leadId, setLeadId] = useState<string | null>(null);
+  // Etiquetas del contacto (las asigna una persona aquí o un flujo de automatización).
+  const [contactTags, setContactTags] = useState<TagDto[]>([]);
   // Ventas del contacto en Caja: borrar al contacto lo desvincula de ellas y se avisa.
   const [salesCount, setSalesCount] = useState(0);
   // 018: de qué anuncio llegó; null si escribió por su cuenta.
@@ -109,6 +113,7 @@ export function ContactPanel({
       setFicha(detail.contact?.ficha ?? {});
       setCurrentStageId(detail.stage?.id ?? null);
       setLeadId(detail.lead?.id ?? null);
+      setContactTags(detail.tags ?? []);
       setSalesCount(detail.salesCount ?? 0);
       setAnuncio(detail.anuncio ?? null);
     }
@@ -130,6 +135,8 @@ export function ContactPanel({
       setFicha(detail.contact?.ficha ?? {});
       setCurrentStageId(detail.stage?.id ?? null);
       setLeadId(detail.lead?.id ?? null);
+      // Un flujo de automatización pudo agregar o quitar etiquetas mientras tanto.
+      setContactTags(detail.tags ?? []);
       // La imagen del creativo se copia después de que entra el mensaje: este
       // refetch en vivo es lo que la hace aparecer sin recargar.
       setAnuncio(detail.anuncio ?? null);
@@ -140,6 +147,7 @@ export function ContactPanel({
     setNotesLoaded(false);
     // Al cambiar de contacto no puede asomarse el anuncio del anterior.
     setAnuncio(null);
+    setContactTags([]);
     void refetch();
   }, [refetch]);
 
@@ -336,6 +344,12 @@ export function ContactPanel({
               <AnuncioOrigen anuncio={anuncio} />
             </div>
           )}
+        </section>
+
+        {/* Etiquetas */}
+        <section className="border-b p-4">
+          <p className="kicker mb-3">Etiquetas</p>
+          <TagPicker contactId={contactId} tags={contactTags} onChange={setContactTags} />
         </section>
 
         {/* Stepper de etapa */}
