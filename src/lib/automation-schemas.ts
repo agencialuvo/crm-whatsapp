@@ -1,11 +1,20 @@
 import { z } from "zod";
-import { daysOffsetSchema, delayConfigSchema, sendWhatsappConfigSchema, waitUntilConfigSchema } from "@/lib/automation";
+import {
+  addTagConfigSchema,
+  conditionConfigSchema,
+  daysOffsetSchema,
+  delayConfigSchema,
+  removeTagConfigSchema,
+  sendWhatsappConfigSchema,
+  setStageConfigSchema,
+  waitUntilConfigSchema,
+} from "@/lib/automation";
 
 /**
  * Automatizaciones — contratos de la API de gestión de flujos y pasos (compartidos cliente/servidor).
  *
  * Solo se pueden CREAR los tipos de flujo y de paso que hoy tienen quién los ejecute: un flujo
- * `booking_reminder`/`tag_added` o un paso `condition`/`add_tag` se guardaría y no haría nada, y eso
+ * `booking_reminder`/`tag_added` se guardaría y no haría nada, y eso
  * es peor que rechazarlo con un mensaje claro. La base conserva el catálogo completo (enum del
  * esquema); esta lista es lo que la API acepta.
  */
@@ -21,7 +30,7 @@ export const FLOW_TRIGGER_TYPES = [
 ] as const;
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number];
 
-export const STEP_TYPES = ["send_whatsapp", "delay", "wait_until"] as const;
+export const STEP_TYPES = ["send_whatsapp", "delay", "wait_until", "add_tag", "remove_tag", "set_stage", "condition"] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
 /** Tope de nodos por flujo: un flujo de cientos de pasos es un error de uso, no un caso real. */
@@ -97,11 +106,15 @@ export const stepCreateSchema = z
       z.object({ stepType: z.literal("send_whatsapp"), config: sendWhatsappConfigSchema }),
       z.object({ stepType: z.literal("delay"), config: delayConfigSchema }),
       z.object({ stepType: z.literal("wait_until"), config: waitUntilConfigSchema }),
+      z.object({ stepType: z.literal("add_tag"), config: addTagConfigSchema }),
+      z.object({ stepType: z.literal("remove_tag"), config: removeTagConfigSchema }),
+      z.object({ stepType: z.literal("set_stage"), config: setStageConfigSchema }),
+      z.object({ stepType: z.literal("condition"), config: conditionConfigSchema }),
     ],
     {
       errorMap: (issue, ctx) =>
         issue.code === "invalid_union_discriminator"
-          ? { message: `stepType debe ser uno de: ${STEP_TYPES.join(", ")} (condition y add_tag aún no tienen ejecutor)` }
+          ? { message: `stepType debe ser uno de: ${STEP_TYPES.join(", ")}` }
           : { message: ctx.defaultError },
     }
   )
@@ -124,13 +137,22 @@ export const stepPatchSchema = z
   .refine((v) => Object.keys(v).length > 0, { message: "Envía al menos un campo para actualizar" });
 export type StepPatchInput = z.infer<typeof stepPatchSchema>;
 
+const STEP_CONFIG_SCHEMAS = {
+  send_whatsapp: sendWhatsappConfigSchema,
+  delay: delayConfigSchema,
+  wait_until: waitUntilConfigSchema,
+  add_tag: addTagConfigSchema,
+  remove_tag: removeTagConfigSchema,
+  set_stage: setStageConfigSchema,
+  condition: conditionConfigSchema,
+} as const satisfies Record<StepType, z.ZodTypeAny>;
+
 /** Valida `config` de un paso contra su tipo. */
 export function parseStepConfig(
   stepType: StepType,
   raw: unknown
 ): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
-  const schema =
-    stepType === "delay" ? delayConfigSchema : stepType === "wait_until" ? waitUntilConfigSchema : sendWhatsappConfigSchema;
+  const schema = STEP_CONFIG_SCHEMAS[stepType];
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const i = parsed.error.issues[0];

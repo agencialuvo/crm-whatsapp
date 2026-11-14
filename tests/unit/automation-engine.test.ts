@@ -153,6 +153,13 @@ function setup(over: {
     loadBooking: vi.fn(async () => (over.booking === undefined ? null : over.booking)),
     flowTriggerType: vi.fn(async () => over.trigger ?? "birthday"),
     timezone: vi.fn(async () => over.timezone ?? "UTC"),
+    contactFacts: vi.fn(async () => ({ tagIds: [] as string[], stageId: null as string | null })),
+    applyTag: vi.fn(async () => "added" as const),
+    moveContactToStage: vi.fn(async (_o: string, _c: string, stageId: string) => ({
+      status: "moved" as const,
+      toStageId: stageId,
+      fromStageId: null as string | null,
+    })),
     loadTarget: vi.fn(async () => target),
     templateStatus: vi.fn(async () => over.templateStatus ?? null),
     sendText: vi.fn(over.sendTextImpl ?? (async () => ({ messageId: "msg_1" }))),
@@ -264,8 +271,8 @@ describe("processRow — guardas", () => {
     expect(await t.run()).toBe("failed");
     expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "invalid_step_config");
   });
-  it("condition y add_tag no se dan por hechos en silencio", async () => {
-    for (const stepType of ["condition", "add_tag"]) {
+  it("un tipo de paso sin ejecutor no se da por hecho en silencio", async () => {
+    for (const stepType of ["tipo_inventado", "webhook"]) {
       const t = setup({ step: { stepType } });
       expect(await t.run()).toBe("failed");
       expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "step_type_not_supported");

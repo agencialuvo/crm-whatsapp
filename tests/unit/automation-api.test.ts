@@ -95,13 +95,13 @@ describe("stepCreateSchema", () => {
     expect(stepCreateSchema.safeParse({ stepType: "delay", config: { content: "Hola" } }).success).toBe(false);
     expect(stepCreateSchema.safeParse({ stepType: "send_whatsapp", config: { amount: 1, unit: "days" } }).success).toBe(false);
   });
-  it("condition y add_tag aún no se aceptan, y se dice por qué", () => {
-    for (const stepType of ["condition", "add_tag", "inventado"]) {
+  it("un tipo de paso inventado no se acepta, y se dice por qué", () => {
+    for (const stepType of ["inventado", "tag_added"]) {
       const r = stepCreateSchema.safeParse({ stepType, config: {} });
       expect(r.success).toBe(false);
       if (!r.success) expect(r.error.issues[0]!.message).toContain("stepType debe ser uno de");
     }
-    expect(STEP_TYPES).toEqual(["send_whatsapp", "delay", "wait_until"]);
+    expect(STEP_TYPES).toEqual(["send_whatsapp", "delay", "wait_until", "add_tag", "remove_tag", "set_stage", "condition"]);
   });
   it("las posiciones valen 0 por defecto y se acotan a enteros razonables", () => {
     const ok = stepCreateSchema.parse({ stepType: "delay", config: { amount: 1, unit: "days" } });

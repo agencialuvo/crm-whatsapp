@@ -16,6 +16,7 @@ import {
   type StepType,
 } from "@/lib/automation-schemas";
 import { AutomationError } from "@/server/automation/http";
+import { existingTagIds } from "@/server/tags/store";
 
 /**
  * Automatizaciones — gestión de flujos y pasos (lo que usan las rutas de `/api/automations`).
@@ -93,6 +94,29 @@ async function assertStageOwned(organizationId: string, config: Record<string, u
     .where(scoped(st.organizationId, organizationId, eq(st.id, stageId)))
     .limit(1);
   if (!row) throw new AutomationError("stage_not_found", 422, "La etapa elegida no existe");
+}
+
+/** Las etiquetas y etapas que referencia un paso deben ser de esta organización (nunca una referencia ajena). */
+async function assertRefsOwned(organizationId: string, config: Record<string, unknown>) {
+  const rule = (config.rule ?? null) as { type?: string; tagId?: string; stageId?: string } | null;
+  const tagId = typeof config.tagId === "string" ? config.tagId : typeof rule?.tagId === "string" ? rule.tagId : null;
+  const stageId = typeof config.stageId === "string" ? config.stageId : typeof rule?.stageId === "string" ? rule.stageId : null;
+  if (tagId && !(await existingTagIds(organizationId, [tagId])).has(tagId)) {
+    throw new AutomationError("tag_not_found", 422, "La etiqueta elegida no existe");
+  }
+  if (stageId) await assertStageOwned(organizationId, { toStageId: stageId });
+}
+
+/** `booking_confirmed` lee la cita del flujo: solo tiene sentido si el disparador es de cita. */
+function assertConditionFitsFlow(triggerType: string, config: Record<string, unknown>) {
+  const rule = (config.rule ?? null) as { type?: string } | null;
+  if (rule?.type === "booking_confirmed" && !triggerType.startsWith("booking_")) {
+    throw new AutomationError(
+      "condition_requires_booking",
+      422,
+      "«La cita está confirmada» solo se puede usar en flujos que empiezan con una cita"
+    );
+  }
 }
 
 /** Una plantilla de un paso debe existir en esta organización (que esté aprobada se exige al enviar). */
@@ -211,11 +235,13 @@ export async function deleteFlow(organizationId: string, id: string): Promise<vo
 /* ─── Pasos ─── */
 
 export async function createStep(organizationId: string, flowId: string, input: StepCreateInput) {
-  await loadFlow(organizationId, flowId);
+  const flow = await loadFlow(organizationId, flowId);
   if ((await countSteps(organizationId, flowId)) >= MAX_STEPS_PER_FLOW) {
     throw new AutomationError("too_many_steps", 409, `Un flujo admite hasta ${MAX_STEPS_PER_FLOW} pasos`);
   }
   await assertTemplateOwned(organizationId, input.config as Record<string, unknown>);
+  if (input.stepType === "condition") assertConditionFitsFlow(flow.triggerType, input.config as Record<string, unknown>);
+  await assertRefsOwned(organizationId, input.config as Record<string, unknown>);
   const [row] = await getDb()
     .insert(schema.automationStep)
     .values({
@@ -237,7 +263,7 @@ export async function updateStep(
   stepId: string,
   patch: StepPatchInput
 ) {
-  await loadFlow(organizationId, flowId);
+  const flow = await loadFlow(organizationId, flowId);
   const s = schema.automationStep;
   const [step] = await getDb()
     .select()
@@ -254,6 +280,8 @@ export async function updateStep(
     const parsed = parseStepConfig(step.stepType as StepType, patch.config);
     if (!parsed.ok) throw new AutomationError("invalid_step_config", 422, parsed.message);
     await assertTemplateOwned(organizationId, parsed.value);
+    if (step.stepType === "condition") assertConditionFitsFlow(flow.triggerType, parsed.value);
+    await assertRefsOwned(organizationId, parsed.value);
     set.config = parsed.value;
   }
   if (patch.positionX !== undefined) set.positionX = patch.positionX;

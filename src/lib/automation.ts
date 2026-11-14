@@ -182,6 +182,92 @@ export function bookingGuard(triggerType: string, booking: { status: string } | 
   return booking.status === "agendada" ? null : "booking_not_active";
 }
 
+/* ─── Acciones de CRM: etiquetas y etapa ─── */
+
+const entityId = z.string().trim().min(1).max(64);
+
+/** `add_tag` / `remove_tag`: la etiqueta se referencia por id (el nombre puede cambiar). */
+export const addTagConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  tagId: entityId,
+});
+export type AddTagConfig = z.infer<typeof addTagConfigSchema>;
+export const removeTagConfigSchema = addTagConfigSchema;
+
+/** `set_stage`: la etapa se referencia ESTRICTAMENTE por id (el motor jamás compara nombres). */
+export const setStageConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  stageId: entityId,
+});
+export type SetStageConfig = z.infer<typeof setStageConfigSchema>;
+
+/* ─── Condición (If/Else) ─── */
+
+export const CONDITION_RULE_TYPES = ["tag_has", "tag_missing", "booking_confirmed", "stage_is"] as const;
+export type ConditionRuleType = (typeof CONDITION_RULE_TYPES)[number];
+
+export const conditionRuleSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("tag_has"), tagId: entityId }),
+  z.object({ type: z.literal("tag_missing"), tagId: entityId }),
+  z.object({ type: z.literal("booking_confirmed") }),
+  z.object({ type: z.literal("stage_is"), stageId: entityId }),
+]);
+export type ConditionRule = z.infer<typeof conditionRuleSchema>;
+
+/**
+ * Qué hace el flujo LINEAL según la rama: `continue` sigue con el paso siguiente, `skip_next` lo omite y
+ * sigue con el que viene después, `stop` termina el flujo. En la Fase 3 (grafo) la rama elegirá una arista y
+ * estas acciones dejarán de usarse; `NodeResult` es lo que se conectará.
+ */
+export const BRANCH_ACTIONS = ["continue", "skip_next", "stop"] as const;
+export type BranchAction = (typeof BRANCH_ACTIONS)[number];
+
+export const conditionConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  rule: conditionRuleSchema,
+  /** Si se cumple: por defecto sigue. */
+  ifTrue: z.enum(BRANCH_ACTIONS).default("continue"),
+  /** Si no se cumple: por defecto termina el flujo. */
+  ifFalse: z.enum(BRANCH_ACTIONS).default("stop"),
+});
+export type ConditionConfig = z.infer<typeof conditionConfigSchema>;
+
+/** Lo que el motor sabe del contacto (y de su cita) en el momento de evaluar. */
+export type ConditionFacts = {
+  tagIds: readonly string[];
+  stageId: string | null;
+  /** La cita en contexto, o null si el flujo no es de citas. */
+  booking: { confirmedAt?: Date | null } | null;
+};
+
+/** El resultado de un nodo de decisión: verdadero o falso. Es lo que las aristas de la Fase 3 consumirán. */
+export type NodeResult = { result: boolean };
+
+/** Evalúa una regla con los datos de ahora. Pura: sin base de datos. */
+export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): NodeResult {
+  switch (rule.type) {
+    case "tag_has":
+      return { result: facts.tagIds.includes(rule.tagId) };
+    case "tag_missing":
+      return { result: !facts.tagIds.includes(rule.tagId) };
+    case "stage_is":
+      return { result: facts.stageId === rule.stageId };
+    case "booking_confirmed":
+      // Sin cita en contexto no hay nada confirmado.
+      return { result: !!facts.booking?.confirmedAt };
+  }
+}
+
+/** La acción de la rama que tocó. */
+export function resolveBranch(config: Pick<ConditionConfig, "ifTrue" | "ifFalse">, node: NodeResult): BranchAction {
+  return node.result ? config.ifTrue : config.ifFalse;
+}
+
+/** La acción de una rama como opciones de avance de la cola (`continue` = avance normal). */
+export function branchAdvance(action: BranchAction): { skip?: number; stop?: boolean } | undefined {
+  return action === "skip_next" ? { skip: 1 } : action === "stop" ? { stop: true } : undefined;
+}
+
 /** El nombre con que un paso aparece en el historial: el que le puso el dueño o su tipo. */
 export function stepLabel(stepType: string, config: unknown): string {
   const name = (config as { name?: unknown } | null)?.name;

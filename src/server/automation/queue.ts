@@ -87,14 +87,14 @@ export async function loadStep(organizationId: string, stepId: string): Promise<
   return row ?? null;
 }
 
-/** La cita de una tarea: su estado y su hora. `null` si ya no existe. */
+/** La cita de una tarea: su estado, su hora y si ya se confirmó. `null` si ya no existe. */
 export async function loadBooking(
   organizationId: string,
   bookingId: string
-): Promise<{ status: string; scheduledAt: Date } | null> {
+): Promise<{ status: string; scheduledAt: Date; confirmedAt: Date | null } | null> {
   const b = schema.booking;
   const [row] = await getDb()
-    .select({ status: b.status, scheduledAt: b.scheduledAt })
+    .select({ status: b.status, scheduledAt: b.scheduledAt, confirmedAt: b.confirmedAt })
     .from(b)
     .where(scoped(b.organizationId, organizationId, eq(b.id, bookingId)))
     .limit(1);

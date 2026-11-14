@@ -66,6 +66,8 @@ const prefixes = {
   // Enrutamiento por anuncio: qué servicio u oferta persigue el agente según el anuncio de origen
   adFlow: "adf",
   // Automatizaciones — flujos, pasos y cola de ejecución
+  // Etiquetas de contacto
+  tag: "tag",
   automationFlow: "aut",
   automationStep: "stp",
   automationQueue: "que",

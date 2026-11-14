@@ -1,14 +1,21 @@
 import {
   OUT_OF_WINDOW_ERROR,
+  addTagConfigSchema,
   applySendWindow,
   backoffMs,
   bookingGuard,
+  branchAdvance,
+  conditionConfigSchema,
   decideSend,
   decideWaitUntil,
   delayConfigSchema,
   delayToMs,
+  evaluateCondition,
+  removeTagConfigSchema,
   renderVars,
+  resolveBranch,
   sendWhatsappConfigSchema,
+  setStageConfigSchema,
   stepLabel,
   waitUntilConfigSchema,
   type SendDecision,
@@ -40,8 +47,16 @@ export type Row = {
   bookingId: string | null;
 };
 
-/** Lo que el motor necesita de la cita de una tarea: si sigue vigente y a qué hora es. */
-export type BookingInfo = { status: string; scheduledAt: Date };
+/** Lo que el motor necesita de la cita de una tarea: si sigue vigente, a qué hora es y si ya se confirmó. */
+export type BookingInfo = { status: string; scheduledAt: Date; confirmedAt?: Date | null };
+
+/** Resultado de `add_tag`/`remove_tag` (ver `actions.ts`). */
+export type TagActionResult = "added" | "removed" | "unchanged" | "tag_not_found";
+
+/** Resultado de `set_stage` (ver `actions.ts`). */
+export type StageActionResult =
+  | { status: "moved" | "unchanged"; toStageId: string; fromStageId: string | null }
+  | { status: "stage_not_found" | "contact_has_no_lead" };
 
 /** Cómo avanza el flujo al terminar una tarea: `skip` omite los N pasos siguientes, `stop` no encola ninguno. */
 export type AdvanceOptions = { skip?: number; stop?: boolean };
@@ -92,6 +107,12 @@ export type Deps = {
   flowTriggerType(organizationId: string, flowId: string): Promise<string | null>;
   /** Zona horaria del negocio (Ajustes → Marca): la de las ventanas horarias y las variables de la cita. */
   timezone(organizationId: string): Promise<string>;
+  /** Etiquetas y etapa de hoy del contacto: lo que lee una condición. */
+  contactFacts(organizationId: string, contactId: string): Promise<{ tagIds: string[]; stageId: string | null }>;
+  /** `add_tag` / `remove_tag`: idempotente. */
+  applyTag(organizationId: string, contactId: string, tagId: string, mode: "add" | "remove"): Promise<TagActionResult>;
+  /** `set_stage`: por la puerta del embudo, sin disparar flujos de cambio de etapa (anti-bucle). */
+  moveContactToStage(organizationId: string, contactId: string, stageId: string): Promise<StageActionResult>;
   /** Completa la tarea y encola el paso siguiente para `nextAt` (una sola transacción). */
   completeAndAdvance(row: Row, nextAt: Date, opts?: AdvanceOptions): Promise<unknown>;
   markFailed(row: Row, error: string): Promise<void>;
@@ -254,9 +275,80 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       return "completed";
     }
 
+    // Acciones sobre el CRM. No envían nada: no necesitan chat, ventana de 24 h ni plantilla.
+    if (step.stepType === "add_tag" || step.stepType === "remove_tag") {
+      const cfg = (step.stepType === "add_tag" ? addTagConfigSchema : removeTagConfigSchema).safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      const result = await deps.applyTag(
+        row.organizationId,
+        row.contactId,
+        cfg.data.tagId,
+        step.stepType === "add_tag" ? "add" : "remove"
+      );
+      // Una etiqueta borrada: falla a la vista en vez de darse por hecho.
+      if (result === "tag_not_found") return await fail("tag_not_found", { tagId: cfg.data.tagId });
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: { ...snapshot, tagId: cfg.data.tagId, result },
+      });
+      await deps.completeAndAdvance(row, now);
+      return "completed";
+    }
+
+    if (step.stepType === "set_stage") {
+      const cfg = setStageConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      const moved = await deps.moveContactToStage(row.organizationId, row.contactId, cfg.data.stageId);
+      if (moved.status !== "moved" && moved.status !== "unchanged") {
+        return await fail(moved.status, { stageId: cfg.data.stageId });
+      }
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: {
+          ...snapshot,
+          stageId: moved.toStageId,
+          fromStageId: moved.fromStageId,
+          result: moved.status,
+          // Anti-bucle: un movimiento de automatización no dispara flujos `stage_changed`.
+          triggeredByAutomation: true,
+        },
+      });
+      await deps.completeAndAdvance(row, now);
+      return "completed";
+    }
+
+    if (step.stepType === "condition") {
+      const cfg = conditionConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      // Datos de ahora, no de cuando se disparó el flujo: la confirmación o una etiqueta pudo llegar mientras esperaba.
+      const facts = await deps.contactFacts(row.organizationId, row.contactId);
+      const node = evaluateCondition(cfg.data.rule, { ...facts, booking });
+      const action = resolveBranch(cfg.data, node);
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: { ...snapshot, rule: cfg.data.rule, result: node.result, branch: node.result ? "true" : "false", action },
+      });
+      await deps.completeAndAdvance(row, now, branchAdvance(action));
+      return "completed";
+    }
+
     if (step.stepType !== "send_whatsapp") {
-      // `condition` y `add_tag` todavía no tienen ejecutor: se falla a la vista en vez de dar el
-      // paso por hecho en silencio.
+      // Un tipo sin ejecutor se falla a la vista en vez de dar el paso por hecho en silencio.
       return await fail("step_type_not_supported", { stepType: step.stepType });
     }
 

@@ -3,6 +3,7 @@ import { sendTemplate } from "@/server/whatsapp/templates";
 import { businessTimezone } from "@/server/analytics/period";
 import { processRow, type Deps, type Row } from "@/server/automation/engine";
 import * as queue from "@/server/automation/queue";
+import { applyTag, contactFacts, moveContactToStage } from "@/server/automation/actions";
 import { runBirthdayTrigger } from "@/server/automation/triggers";
 
 /**
@@ -32,6 +33,9 @@ export function defaultDeps(): Deps {
     // Nunca de IA (`aiGenerated`): lo escribió el dueño del negocio, no el agente.
     sendText: (input) => sendText(input),
     sendTemplate: (input) => sendTemplate(input),
+    contactFacts,
+    applyTag,
+    moveContactToStage,
     waMessageIdOf: queue.waMessageIdOf,
     hasSuccessLog: queue.hasSuccessLog,
     writeLog: queue.writeLog,

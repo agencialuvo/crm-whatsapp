@@ -50,6 +50,12 @@ export type MoveInput = {
    * la tarjeta y toca el monto en la misma acción.
    */
   extra?: Record<string, unknown>;
+  /**
+   * Lo movió un flujo de automatización (paso `set_stage`). Anti-bucle: el movimiento queda en la
+   * bitácora como `sistema` pero NO dispara flujos `stage_changed` — si pudiera, `A → set_stage → B →
+   * set_stage → A` correría para siempre. El encadenamiento controlado llegará con `automation_run`.
+   */
+  viaAutomation?: boolean;
 };
 
 export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
@@ -138,7 +144,7 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
         toStageKind: target.kind,
         occurredAt,
         actorUserId: input.actorUserId ?? null,
-        source: input.source,
+        source: input.viaAutomation ? "sistema" : input.source,
         approximate: false,
         lossReason: target.kind === "lost" ? input.lossReason ?? null : null,
         lossNote: target.kind === "lost" ? input.lossNote ?? null : null,
@@ -164,7 +170,7 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
 
   // Automatizaciones: entrar a una etapa puede disparar un flujo. Igual que lo anterior, ya fuera de la
   // transacción y sin poder fallar hacia arriba (`onLeadStageChanged` nunca lanza), y apagado no hace nada.
-  if (result.ok && result.changed) {
+  if (result.ok && result.changed && !input.viaAutomation) {
     await onLeadStageChanged({
       organizationId: input.organizationId,
       leadId: result.lead.id,

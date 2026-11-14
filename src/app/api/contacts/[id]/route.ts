@@ -8,6 +8,7 @@ import {
   getContactStage,
   serializeContact,
 } from "@/server/contacts";
+import { tagsOfContact } from "@/server/tags/store";
 import { upsertFicha } from "@/server/bot/ficha";
 import { pauseConversations } from "@/server/contacts-import";
 import { cuentaComoAnuncio } from "@/lib/anuncios";
@@ -24,7 +25,7 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const contact = await getContactById(session.organizationId, id);
   if (!contact) return apiError(404, "not_found", "Contacto no encontrado");
-  const [stageRow, anuncio, [sales]] = await Promise.all([
+  const [stageRow, anuncio, [sales], tags] = await Promise.all([
     getContactStage(session.organizationId, id),
     anuncioDelContacto(session.organizationId, id),
     // Cuántas ventas tiene en Caja: la Bandeja lo usa para advertir antes de borrarlo.
@@ -38,6 +39,7 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
           eq(schema.serviceSale.contactId, id)
         )
       ),
+    tagsOfContact(session.organizationId, id),
   ]);
   // 018 — Sin imagen todavía: se reintenta en segundo plano y llega por SSE.
   if (anuncio && !anuncio.imageAssetId) {
@@ -57,6 +59,7 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
       : null,
     lead: stageRow ? { id: stageRow.lead.id } : null,
     salesCount: sales?.n ?? 0,
+    tags,
   });
 });
 

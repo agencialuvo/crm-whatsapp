@@ -979,6 +979,43 @@ export const pipelineStage = pgTable(
   (t) => [index("stage_org_pos_idx").on(t.organizationId, t.position)]
 );
 
+/**
+ * Etiquetas de contacto: palabras propias del negocio («VIP», «Cita pendiente»). Las asigna una persona
+ * desde la ficha o un flujo de automatización (`add_tag`). Únicas por organización y nombre.
+ */
+export const tag = pgTable(
+  "tag",
+  {
+    id: text("id").primaryKey(), // prefix: 'tag'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** Clave de la paleta (`src/lib/tags.ts`), no un color libre: se ve bien en claro y oscuro. */
+    color: text("color").notNull().default("slate"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("tag_org_name_uq").on(t.organizationId, t.name)]
+);
+
+/** Qué etiquetas tiene cada contacto. `organization_id` va aquí también para que toda consulta pase por `scoped()`. */
+export const contactTag = pgTable(
+  "contact_tag",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tag.id, { onDelete: "cascade" }),
+    assignedAt: timestamp("assigned_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.contactId, t.tagId] }), index("contact_tag_tag_idx").on(t.tagId)]
+);
+
 export const lead = pgTable(
   "lead",
   {
@@ -1990,7 +2027,8 @@ export const automationStep = pgTable(
       .references(() => automationFlow.id, { onDelete: "cascade" }),
     stepType: text("step_type", {
       // `wait_until`: espera hasta una hora anclada a la cita (p. ej. «un día antes»).
-      enum: ["delay", "send_whatsapp", "condition", "add_tag", "wait_until"],
+      // `add_tag`/`remove_tag`/`set_stage`: acciones sobre el CRM; `condition`: decide si el flujo sigue.
+      enum: ["delay", "send_whatsapp", "condition", "add_tag", "remove_tag", "set_stage", "wait_until"],
     }).notNull(),
     /** 
      * Configuración interna del nodo (JSON):
