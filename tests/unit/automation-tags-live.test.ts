@@ -247,7 +247,7 @@ describe.skipIf(!live)("etiquetas y acciones de CRM contra Postgres", () => {
       const logs = await logsOf(flowId);
       expect(logs.filter((l) => l.status === "success")).toHaveLength(4);
       const last = logs.find((l) => (l.metadata as { branch?: string }).branch === "false");
-      expect(last?.metadata).toMatchObject({ result: false, action: "stop" });
+      expect(last?.metadata).toMatchObject({ result: false, handle: "false" });
     });
 
     it("set_stage deja el evento en la bitácora como «sistema» con el origen y el destino", async () => {

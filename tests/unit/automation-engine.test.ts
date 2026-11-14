@@ -405,20 +405,14 @@ describe("processRow — citas", () => {
     expect(t.deps.sendText).not.toHaveBeenCalled();
   });
 
-  it("wait_until ya es tarde: «omitir» salta el mensaje ligado y sigue con el resto; «continuar» sigue; «terminar» corta", async () => {
+  it("wait_until ya es tarde: sale por el asa «late»; a qué lleva (omitir, continuar, terminar) lo deciden las aristas", async () => {
     const booking = { status: "agendada", scheduledAt: bookingIn(10) }; // «1 día antes» ya pasó
-    const skip = setup({ step: waitStep(), booking, trigger: "booking_created", ...cita });
-    expect(await skip.run()).toBe("completed");
-    expect(skip.deps.completeAndAdvance).toHaveBeenCalledWith(skip.row, NOW, { skip: 1 });
-    expect(skip.logs[0]!.metadata).toMatchObject({ late: true, lateAction: "skip_next" });
-
-    const cont = setup({ step: waitStep({ lateAction: "continue" }), booking, trigger: "booking_created", ...cita });
-    await cont.run();
-    expect(cont.deps.completeAndAdvance).toHaveBeenCalledWith(cont.row, NOW, undefined);
-
-    const stop = setup({ step: waitStep({ lateAction: "stop" }), booking, trigger: "booking_created", ...cita });
-    await stop.run();
-    expect(stop.deps.completeAndAdvance).toHaveBeenCalledWith(stop.row, NOW, { stop: true });
+    for (const lateAction of ["skip_next", "continue", "stop"] as const) {
+      const t = setup({ step: waitStep({ lateAction }), booking, trigger: "booking_created", ...cita });
+      expect(await t.run()).toBe("completed");
+      expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle: "late" });
+      expect(t.logs[0]!.metadata).toMatchObject({ late: true, lateAction, handle: "late" });
+    }
   });
 
   it("wait_until respeta la ventana horaria en la zona del negocio", async () => {

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   addTagConfigSchema,
-  branchAdvance,
+  compileLinearEdges,
   conditionConfigSchema,
+  conditionHandle,
   evaluateCondition,
-  resolveBranch,
   setStageConfigSchema,
   type ConditionFacts,
 } from "@/lib/automation";
@@ -51,24 +51,29 @@ describe("evaluateCondition", () => {
   });
 });
 
-describe("ramas del modo lineal (NodeResult → acción)", () => {
+describe("ramas del modo simple (resultado → asa → arista)", () => {
   it("por defecto: si se cumple sigue; si no, termina", () => {
     const cfg = conditionConfigSchema.parse({ rule: { type: "booking_confirmed" } });
     expect(cfg).toMatchObject({ ifTrue: "continue", ifFalse: "stop" });
-    expect(resolveBranch(cfg, { result: true })).toBe("continue");
-    expect(resolveBranch(cfg, { result: false })).toBe("stop");
+    expect(conditionHandle({ result: true })).toBe("true");
+    expect(conditionHandle({ result: false })).toBe("false");
+    // Compilado: «true» lleva al siguiente; «false» no tiene arista (termina).
+    const edges = compileLinearEdges([
+      { id: "c", stepType: "condition", config: cfg },
+      { id: "n", stepType: "add_tag", config: {} },
+    ]);
+    expect(edges).toEqual([{ sourceStepId: "c", targetStepId: "n", sourceHandle: "true" }]);
   });
 
-  it("cada acción se traduce a opciones de avance de la cola", () => {
-    expect(branchAdvance("continue")).toBeUndefined();
-    expect(branchAdvance("skip_next")).toEqual({ skip: 1 });
-    expect(branchAdvance("stop")).toEqual({ stop: true });
-  });
-
-  it("las ramas son independientes (skip en verdadero, stop en falso)", () => {
+  it("las ramas son independientes (skip en verdadero, continuar en falso)", () => {
     const cfg = conditionConfigSchema.parse({ rule: { type: "tag_has", tagId: "t" }, ifTrue: "skip_next", ifFalse: "continue" });
-    expect(resolveBranch(cfg, { result: true })).toBe("skip_next");
-    expect(resolveBranch(cfg, { result: false })).toBe("continue");
+    const edges = compileLinearEdges([
+      { id: "c", stepType: "condition", config: cfg },
+      { id: "a", stepType: "add_tag", config: {} },
+      { id: "b", stepType: "add_tag", config: {} },
+    ]);
+    expect(edges).toContainEqual({ sourceStepId: "c", targetStepId: "b", sourceHandle: "true" });
+    expect(edges).toContainEqual({ sourceStepId: "c", targetStepId: "a", sourceHandle: "false" });
   });
 });
 
@@ -263,21 +268,21 @@ describe("motor — condition", () => {
   it("verdadero con las acciones por defecto: continúa", async () => {
     const t = setup(cond({ rule: { type: "tag_has", tagId: "tag_1" } }), { facts: { tagIds: ["tag_1"], stageId: null } });
     expect(await t.run()).toBe("completed");
-    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, undefined);
-    expect(t.logs[0]!.metadata).toMatchObject({ result: true, branch: "true", action: "continue" });
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle: "true" });
+    expect(t.logs[0]!.metadata).toMatchObject({ result: true, branch: "true", handle: "true" });
   });
 
-  it("falso con las acciones por defecto: termina el flujo", async () => {
+  it("falso: sale por el asa «false» (con las acciones por defecto no hay arista y el flujo termina)", async () => {
     const t = setup(cond({ rule: { type: "tag_has", tagId: "tag_1" } }));
     expect(await t.run()).toBe("completed");
-    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { stop: true });
-    expect(t.logs[0]!.metadata).toMatchObject({ result: false, branch: "false", action: "stop" });
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle: "false" });
+    expect(t.logs[0]!.metadata).toMatchObject({ result: false, branch: "false", handle: "false" });
   });
 
-  it("skip_next omite el paso siguiente", async () => {
+  it("el motor ya no lee ifTrue/ifFalse: solo elige el asa", async () => {
     const t = setup(cond({ rule: { type: "tag_missing", tagId: "tag_1" }, ifTrue: "skip_next" }));
     expect(await t.run()).toBe("completed");
-    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { skip: 1 });
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle: "true" });
   });
 
   it("stage_is lee la etapa de ahora", async () => {
