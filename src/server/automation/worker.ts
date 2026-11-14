@@ -28,6 +28,10 @@ export function defaultDeps(): Deps {
     loadBooking: queue.loadBooking,
     flowTriggerType: queue.flowTriggerType,
     runStatus: queue.runStatus,
+    runContext: queue.runContext,
+    enterReplyWait: (row, timeoutAt) => queue.enterReplyWait(row as queue.QueueRow, timeoutAt),
+    resolveReplyWait: async (row, handle) =>
+      (await queue.resolveReplyWait({ organizationId: row.organizationId, runId: row.runId!, handle })).resolved,
     timezone: businessTimezone,
     loadTarget: queue.loadTarget,
     templateStatus: queue.templateStatus,

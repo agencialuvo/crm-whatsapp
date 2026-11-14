@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { shouldReplaceAttribution } from "@/lib/ad-flow";
 import { hasActiveAdFlow } from "@/server/attribution/ad-flow";
+import { emitAdReferral } from "@/server/automation/ad-referral";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -77,6 +78,17 @@ export async function registrarAnuncioDeOrigen(input: {
   let reemplazada = false;
   if (!creadas[0] && a.sourceId && atribucionEnabled()) {
     reemplazada = await reemplazarSiGanaElFlujo(input.organizationId, input.conversationId, a);
+  }
+
+  // Automatizaciones: una atribución NUEVA (o reemplazada) arranca los flujos `ad_referral`. Una reentrega del
+  // webhook, o un anuncio que no gana, no. Nunca lanza.
+  if ((creadas[0] || reemplazada) && a.sourceId) {
+    await emitAdReferral({
+      organizationId: input.organizationId,
+      contactId: input.contactId,
+      sourceId: a.sourceId,
+      headline: a.headline,
+    });
   }
 
   // Solo la fila nueva (o reemplazada) baja imagen: una reentrega no dispara otra descarga.

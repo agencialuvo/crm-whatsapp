@@ -11,11 +11,13 @@ import {
   delayConfigSchema,
   delayToMs,
   evaluateCondition,
+  isReplyTimeoutKey,
   removeTagConfigSchema,
   renderVars,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
   stepLabel,
+  waitReplyConfigSchema,
   waitUntilConfigSchema,
   type EdgeHandle,
   type NodeResult,
@@ -48,6 +50,8 @@ export type Row = {
   bookingId: string | null;
   /** La ejecución (`automation_run`) a la que pertenece; null/ausente en tareas anteriores a los `run`. */
   runId?: string | null;
+  /** La llave de la tarea: la de «venció el tiempo» de un `wait_reply` empieza con `reply_timeout:`. */
+  dedupeKey?: string | null;
 };
 
 /** Lo que el motor necesita de la cita de una tarea: si sigue vigente, a qué hora es y si ya se confirmó. */
@@ -115,6 +119,12 @@ export type Deps = {
    * canceló (cita movida, flujo apagado) se cancela sola antes de ejecutar su paso.
    */
   runStatus?(organizationId: string, runId: string): Promise<string | null>;
+  /** `wait_reply` empieza: la ejecución espera la respuesta y la tarea del paso se cambia por una de timeout. */
+  enterReplyWait?(row: Row, timeoutAt: Date): Promise<"waiting" | "cancelled">;
+  /** Resuelve la espera por un asa (`timeout` cuando venció el tiempo). `false`: ya la había resuelto la otra vía. */
+  resolveReplyWait?(row: Row, handle: EdgeHandle): Promise<boolean>;
+  /** El contexto de la ejecución (anuncio, servicio…): de ahí sale `{{servicio}}`. */
+  runContext?(organizationId: string, runId: string): Promise<Record<string, unknown>>;
   /** Etiquetas y etapa de hoy del contacto: lo que lee una condición. */
   contactFacts(organizationId: string, contactId: string): Promise<{ tagIds: string[]; stageId: string | null }>;
   /** `add_tag` / `remove_tag`: idempotente. */
@@ -220,7 +230,7 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
     // la tarea, no se vuelve a enviar: solo se cierra y se avanza.
     // Los nodos que ramifican (condición, espera con «tarde») no se cortocircuitan: el asa por la que salieron no
     // se guardó como dato, y repetir su evaluación es inocuo (el historial ya tiene su éxito).
-    const branching = step.stepType === "condition" || step.stepType === "wait_until";
+    const branching = step.stepType === "condition" || step.stepType === "wait_until" || step.stepType === "wait_reply";
     if (!branching && (await deps.hasSuccessLog(row.organizationId, row.id))) {
       await deps.completeAndAdvance(row, now);
       return "completed";
@@ -290,6 +300,46 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       });
       // Tarde: sale por el asa `late` (la arista compilada de su `lateAction`; sin arista, el flujo termina).
       await deps.completeAndAdvance(row, now, { handle: "late" });
+      return "completed";
+    }
+
+    if (step.stepType === "wait_reply") {
+      const cfg = waitReplyConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      // Una espera vive en la ejecución: sin `run` (tarea anterior a los `run`) no hay dónde esperar.
+      if (!row.runId || !deps.enterReplyWait || !deps.resolveReplyWait) return await fail("wait_reply_requires_run");
+
+      // La tarea de «venció el tiempo»: resuelve la espera por `timeout`, salvo que la respuesta se le adelantara.
+      if (isReplyTimeoutKey(row.dedupeKey)) {
+        const resolved = await deps.resolveReplyWait(row, "timeout");
+        if (resolved) {
+          await deps.writeLog({
+            organizationId: row.organizationId,
+            flowId: row.flowId,
+            stepId: step.id,
+            contactId: row.contactId,
+            queueId: row.id,
+            status: "success",
+            metadata: { ...snapshot, waitedFor: "reply", handle: "timeout" },
+          });
+        }
+        return "completed";
+      }
+
+      const timeoutAt = new Date(now.getTime() + cfg.data.timeoutMinutes * 60_000);
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: { ...snapshot, waitingFor: "reply", timeoutAt: timeoutAt.toISOString() },
+      });
+      if ((await deps.enterReplyWait(row, timeoutAt)) === "cancelled") {
+        await deps.markCancelled(row, "run_cancelled");
+        return "cancelled";
+      }
       return "completed";
     }
 
@@ -398,7 +448,12 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
     // En un flujo de cita, el mensaje puede decir cuándo es: {{fecha}} y {{hora}} en la zona del negocio.
     const tz = booking ? await deps.timezone(row.organizationId) : null;
     const bookingIso = booking?.scheduledAt.toISOString();
+    // Una ejecución que nació de un anuncio sabe qué servicio u oferta lo trajo: `{{servicio}}`.
+    const ctx = row.runId && deps.runContext ? await deps.runContext(row.organizationId, row.runId) : {};
+    const servicio =
+      typeof ctx.serviceName === "string" ? ctx.serviceName : typeof ctx.comboName === "string" ? ctx.comboName : null;
     const vars = {
+      servicio,
       name: target.contactName,
       fecha: bookingIso && tz ? dayLabelInTz(bookingIso, tz, now) : null,
       hora: bookingIso && tz ? timeInTz(bookingIso, tz) : null,

@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import type { EdgeHandle } from "@/lib/automation";
+import { replyTimeoutKey, type EdgeHandle } from "@/lib/automation";
 import { resolveNextStep } from "@/server/automation/graph";
 
 /**
@@ -300,6 +300,189 @@ export async function completeAndAdvance(
     }
     return id;
   });
+}
+
+/**
+ * `wait_reply` empieza: la ejecución pasa a «esperando respuesta» y la tarea del paso se cambia por una tarea de
+ * TIMEOUT (mismo paso, a la hora límite, con una llave que el motor reconoce). Todo bajo el candado del `run`.
+ * Idempotente: si la ejecución ya espera en este paso (un reintento tras una caída) no se encola otro timeout.
+ * Devuelve `cancelled` si la ejecución ya no está viva.
+ */
+export async function enterReplyWait(row: QueueRow, timeoutAt: Date): Promise<"waiting" | "cancelled"> {
+  if (!row.runId) return "cancelled";
+  const runId = row.runId;
+  return getDb().transaction(async (tx) => {
+    const q = schema.automationQueue;
+    const r = schema.automationRun;
+    const [run] = await tx
+      .select({ status: r.status, waitingFor: r.waitingFor, currentStepId: r.currentStepId })
+      .from(r)
+      .where(scoped(r.organizationId, row.organizationId, eq(r.id, runId)))
+      .for("update");
+    if (!run || (run.status !== "running" && run.status !== "waiting")) return "cancelled";
+
+    const replay = run.waitingFor === "reply" && run.currentStepId === row.stepId;
+    await tx
+      .update(q)
+      .set({ status: "completed", lockedAt: null, error: null })
+      .where(scoped(q.organizationId, row.organizationId, eq(q.id, row.id), inArray(q.status, ["pending", "processing"])));
+    if (replay) return "waiting";
+
+    await tx
+      .update(r)
+      .set({ status: "waiting", waitingFor: "reply", waitingUntil: timeoutAt, currentStepId: row.stepId })
+      .where(scoped(r.organizationId, row.organizationId, eq(r.id, runId)));
+    await tx
+      .insert(q)
+      .values({
+        id: newId("automationQueue"),
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        contactId: row.contactId,
+        stepId: row.stepId,
+        scheduledFor: timeoutAt,
+        maxAttempts: row.maxAttempts,
+        dedupeKey: replyTimeoutKey(runId, row.stepId, timeoutAt),
+        bookingId: row.bookingId,
+        runId,
+      })
+      .onConflictDoNothing();
+    return "waiting";
+  });
+}
+
+export type ReplyResolution = {
+  /** `false`: la espera ya no estaba viva (la ganó la otra vía, o se canceló): nada que hacer. */
+  resolved: boolean;
+  /** El paso `wait_reply` que se resolvió. */
+  stepId?: string | null;
+  /** La tarea del paso al que llevó la arista (null: no había arista y la ejecución terminó). */
+  nextQueueId?: string | null;
+  /** La cita de la ejecución (para confirmarla si la respuesta fue «confirmó»). */
+  bookingId?: string | null;
+};
+
+/**
+ * Resuelve una espera de respuesta por el asa dada: la ÚNICA función que lo hace, la llame la respuesta del
+ * cliente (`confirmed`/`declined`/`reschedule`/`other`) o el temporizador (`timeout`).
+ *
+ * Toma `FOR UPDATE` la fila del `run` (el mismo orden de candados de la Fase 3: `run` y luego la cola). Si la
+ * ejecución ya no está esperando, no hace nada. Si lo está: cierra la(s) tarea(s) pendiente(s) del paso, sigue
+ * la arista `(paso, asa)` y encola el destino, o completa la ejecución si no hay arista. Por eso la carrera
+ * «respuesta vs. vencimiento» la gana exactamente una: la otra ve el `run` ya resuelto.
+ */
+export async function resolveReplyWait(input: {
+  organizationId: string;
+  runId: string;
+  handle: EdgeHandle;
+  at?: Date;
+}): Promise<ReplyResolution> {
+  return getDb().transaction(async (tx) => {
+    const q = schema.automationQueue;
+    const r = schema.automationRun;
+    const [run] = await tx
+      .select({
+        status: r.status,
+        waitingFor: r.waitingFor,
+        currentStepId: r.currentStepId,
+        flowId: r.flowId,
+        contactId: r.contactId,
+        context: r.context,
+      })
+      .from(r)
+      .where(scoped(r.organizationId, input.organizationId, eq(r.id, input.runId)))
+      .for("update");
+    if (!run || run.status !== "waiting" || run.waitingFor !== "reply" || !run.currentStepId) return { resolved: false };
+
+    const stepId = run.currentStepId;
+    // Las tareas del paso (la de timeout) se cierran: el candado del `run` ya decidió quién gana.
+    const closed = await tx
+      .update(q)
+      .set({ status: "completed", lockedAt: null, error: null })
+      .where(
+        scoped(
+          q.organizationId,
+          input.organizationId,
+          eq(q.runId, input.runId),
+          eq(q.stepId, stepId),
+          inArray(q.status, ["pending", "processing"])
+        )
+      )
+      .returning({ bookingId: q.bookingId, maxAttempts: q.maxAttempts });
+    const ctxBooking = (run.context as { bookingId?: unknown } | null)?.bookingId;
+    const bookingId = closed[0]?.bookingId ?? (typeof ctxBooking === "string" ? ctxBooking : null);
+
+    const nextStepId = await resolveNextStep(tx, input.organizationId, run.flowId, stepId, input.handle);
+    if (!nextStepId) {
+      await tx
+        .update(r)
+        .set({ status: "completed", waitingFor: null, waitingUntil: null, endedAt: new Date() })
+        .where(scoped(r.organizationId, input.organizationId, eq(r.id, input.runId)));
+      return { resolved: true, stepId, nextQueueId: null, bookingId };
+    }
+
+    const id = newId("automationQueue");
+    await tx.insert(q).values({
+      id,
+      organizationId: input.organizationId,
+      flowId: run.flowId,
+      contactId: run.contactId,
+      stepId: nextStepId,
+      scheduledFor: input.at ?? new Date(),
+      maxAttempts: closed[0]?.maxAttempts ?? 5,
+      bookingId,
+      runId: input.runId,
+    });
+    await tx
+      .update(r)
+      .set({ status: "running", waitingFor: null, waitingUntil: null, currentStepId: nextStepId })
+      .where(scoped(r.organizationId, input.organizationId, eq(r.id, input.runId)));
+    return { resolved: true, stepId, nextQueueId: id, bookingId };
+  });
+}
+
+/** Cancela una ejecución que esperaba respuesta (flujo apagado, etc.) y sus tareas pendientes. `true` si la cancelaba. */
+export async function cancelWaitingRun(organizationId: string, runId: string, reason: string): Promise<boolean> {
+  return getDb().transaction(async (tx) => {
+    const q = schema.automationQueue;
+    const r = schema.automationRun;
+    const [run] = await tx
+      .select({ status: r.status })
+      .from(r)
+      .where(scoped(r.organizationId, organizationId, eq(r.id, runId)))
+      .for("update");
+    if (!run || (run.status !== "running" && run.status !== "waiting")) return false;
+    await tx
+      .update(r)
+      .set({ status: "cancelled", waitingFor: null, waitingUntil: null, endedAt: new Date() })
+      .where(scoped(r.organizationId, organizationId, eq(r.id, runId)));
+    await tx
+      .update(q)
+      .set({ status: "cancelled", lockedAt: null, error: reason })
+      .where(scoped(q.organizationId, organizationId, eq(q.runId, runId), eq(q.status, "pending")));
+    return true;
+  });
+}
+
+/** Las ejecuciones de un contacto que esperan su respuesta (normalmente una). */
+export async function waitingRunsForContact(organizationId: string, contactId: string) {
+  const r = schema.automationRun;
+  return getDb()
+    .select({ id: r.id, flowId: r.flowId, currentStepId: r.currentStepId })
+    .from(r)
+    .where(scoped(r.organizationId, organizationId, eq(r.contactId, contactId), eq(r.status, "waiting"), eq(r.waitingFor, "reply")))
+    .orderBy(asc(r.startedAt));
+}
+
+/** El contexto estable de una ejecución (la cita, el anuncio y su servicio). `{}` si no existe. */
+export async function runContext(organizationId: string, runId: string): Promise<Record<string, unknown>> {
+  const r = schema.automationRun;
+  const [row] = await getDb()
+    .select({ context: r.context })
+    .from(r)
+    .where(scoped(r.organizationId, organizationId, eq(r.id, runId)))
+    .limit(1);
+  return (row?.context as Record<string, unknown> | null) ?? {};
 }
 
 async function setStatus(

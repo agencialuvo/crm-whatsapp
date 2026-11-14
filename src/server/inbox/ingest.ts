@@ -24,6 +24,7 @@ import {
 import { registrarAnuncioDeOrigen } from "@/server/attribution/store";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
+import { onInboundReply } from "@/server/automation/reply";
 
 /** Tipos de contenido soportados; el resto se ignora sin error. */
 const SUPPORTED_TYPES = new Set([
@@ -526,6 +527,15 @@ export async function ingestInboundMessage(input: {
   publish(organizationId, {
     type: "conversation.updated",
     data: { conversation: { id: conversation.id } },
+  });
+
+  // Automatizaciones: si un flujo esperaba la respuesta de este contacto (`wait_reply`), la reanuda. Nunca
+  // lanza ni toca al agente: el mensaje ya entró y el agente contesta como siempre.
+  await onInboundReply({
+    organizationId,
+    contactId: contact.id,
+    text: input.text,
+    messageId: message.id,
   });
 
   await maybeRunAgentTurn(conversation.id, organizationId, message.id);

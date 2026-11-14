@@ -247,9 +247,20 @@ export type ConditionOutcome = { result: boolean };
 
 /**
  * Por qué «asa» sale una arista: `default` (el camino normal), `true`/`false` (las dos ramas de `condition`),
- * `late` (una espera anclada a la cita que llega tarde) y `timeout` (reservada: espera de respuesta, Fase 4).
+ * `late` (una espera anclada a la cita que llega tarde) y, en `wait_reply`, la intención de la respuesta
+ * (`confirmed`, `declined`, `reschedule`, `other`) o `timeout` si venció el tiempo límite.
  */
-export const EDGE_HANDLES = ["default", "true", "false", "late", "timeout"] as const;
+export const EDGE_HANDLES = [
+  "default",
+  "true",
+  "false",
+  "late",
+  "timeout",
+  "confirmed",
+  "declined",
+  "reschedule",
+  "other",
+] as const;
 export type EdgeHandle = (typeof EDGE_HANDLES)[number];
 
 /**
@@ -294,6 +305,14 @@ export function compileLinearEdges(steps: readonly GraphStepInput[]): CompiledEd
     } else if (step.stepType === "wait_until") {
       edge(step, next, "default");
       edge(step, target(c.lateAction ?? "skip_next"), "late");
+    } else if (step.stepType === "wait_reply") {
+      // Sin «default»: la respuesta (o su ausencia) manda. Por defecto solo «confirmó» sigue.
+      const r = c as Record<string, unknown>;
+      edge(step, target(r.onConfirmed ?? "continue"), "confirmed");
+      edge(step, target(r.onDeclined ?? "stop"), "declined");
+      edge(step, target(r.onReschedule ?? "stop"), "reschedule");
+      edge(step, target(r.onOther ?? "stop"), "other");
+      edge(step, target(r.onTimeout ?? "stop"), "timeout");
     } else {
       edge(step, next, "default");
     }
@@ -316,6 +335,41 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): C
   }
 }
 
+/* ─── Esperar la respuesta del cliente ─── */
+
+/** La intención de una respuesta; cada una es un asa de salida de `wait_reply`. */
+export const REPLY_INTENTS = ["confirmed", "declined", "reschedule", "other"] as const;
+export type ReplyIntent = (typeof REPLY_INTENTS)[number];
+
+/** Por defecto la espera dura 7 días; el tope es 30: una espera siempre tiene tiempo límite (spec 035, D2). */
+export const REPLY_TIMEOUT_DEFAULT_MINUTES = 7 * 24 * 60;
+export const REPLY_TIMEOUT_MAX_MINUTES = 30 * 24 * 60;
+
+const branchAction = z.enum(BRANCH_ACTIONS);
+
+/**
+ * `wait_reply`: pausa hasta que el cliente responda o venza `timeoutMinutes`. Cada rama es la acción del Modo
+ * Simple (`continue` / `skip_next` / `stop`, ver `compileLinearEdges`). `confirmBooking`: si la intención es
+ * `confirmed` y la ejecución viene de una cita, la confirma (la misma función del botón de la Agenda).
+ */
+export const waitReplyConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  timeoutMinutes: z.number().int().min(1).max(REPLY_TIMEOUT_MAX_MINUTES).default(REPLY_TIMEOUT_DEFAULT_MINUTES),
+  onConfirmed: branchAction.default("continue"),
+  onDeclined: branchAction.default("stop"),
+  onReschedule: branchAction.default("stop"),
+  onOther: branchAction.default("stop"),
+  onTimeout: branchAction.default("stop"),
+  confirmBooking: z.boolean().default(true),
+});
+export type WaitReplyConfig = z.infer<typeof waitReplyConfigSchema>;
+
+/** La llave de la tarea de «venció el tiempo»: la reconoce el motor y la hace única por espera. */
+export const REPLY_TIMEOUT_PREFIX = "reply_timeout:";
+export const replyTimeoutKey = (runId: string, stepId: string, at: Date) =>
+  `${REPLY_TIMEOUT_PREFIX}${runId}:${stepId}:${at.getTime()}`;
+export const isReplyTimeoutKey = (key: string | null | undefined) => !!key && key.startsWith(REPLY_TIMEOUT_PREFIX);
+
 /** El nombre con que un paso aparece en el historial: el que le puso el dueño o su tipo. */
 export function stepLabel(stepType: string, config: unknown): string {
   const name = (config as { name?: unknown } | null)?.name;
@@ -330,13 +384,14 @@ export function stepLabel(stepType: string, config: unknown): string {
  */
 export function renderVars(
   text: string,
-  vars: { name: string | null; fecha?: string | null; hora?: string | null }
+  vars: { name: string | null; fecha?: string | null; hora?: string | null; servicio?: string | null }
 ): string {
   const name = vars.name?.trim() || "";
   return text
     .replace(/\{\{\s*(?:name|nombre)\s*\}\}/gi, name)
     .replace(/\{\{\s*fecha\s*\}\}/gi, vars.fecha?.trim() || "")
     .replace(/\{\{\s*hora\s*\}\}/gi, vars.hora?.trim() || "")
+    .replace(/\{\{\s*servicio\s*\}\}/gi, vars.servicio?.trim() || "")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
@@ -461,3 +516,12 @@ export const bookingConfirmedDedupeKey = (bookingId: string, scheduledAt: Date) 
   `booking_confirmed:${bookingId}:${scheduledAt.getTime()}`;
 /** Una vez por cita. */
 export const bookingNoShowDedupeKey = (bookingId: string) => `booking_no_show:${bookingId}`;
+
+/** `trigger_config` de un flujo `ad_referral`: el `source_id` al que reacciona (sin él, a cualquier anuncio). */
+export function parseAdReferralConfig(raw: unknown): { sourceId?: string } {
+  const id = (raw as { sourceId?: unknown } | null)?.sourceId;
+  return typeof id === "string" && id.trim() ? { sourceId: id.trim() } : {};
+}
+
+/** Una vez por contacto y anuncio: el mismo anuncio no vuelve a arrancar el flujo para la misma persona. */
+export const adReferralDedupeKey = (sourceId: string) => `ad_referral:${sourceId}`;

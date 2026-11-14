@@ -2001,6 +2001,8 @@ export const automationFlow = pgTable(
         "booking_created",
         "booking_confirmed",
         "booking_no_show",
+        // Una conversación registra su anuncio de origen (Click-to-WhatsApp; `trigger_config.sourceId` lo acota).
+        "ad_referral",
       ],
     }).notNull(),
     /**
@@ -2028,7 +2030,8 @@ export const automationStep = pgTable(
     stepType: text("step_type", {
       // `wait_until`: espera hasta una hora anclada a la cita (p. ej. «un día antes»).
       // `add_tag`/`remove_tag`/`set_stage`: acciones sobre el CRM; `condition`: decide si el flujo sigue.
-      enum: ["delay", "send_whatsapp", "condition", "add_tag", "remove_tag", "set_stage", "wait_until"],
+      // `wait_reply`: pausa la ejecución hasta que el cliente responda (o venza el tiempo límite).
+      enum: ["delay", "send_whatsapp", "condition", "add_tag", "remove_tag", "set_stage", "wait_until", "wait_reply"],
     }).notNull(),
     /** 
      * Configuración interna del nodo (JSON):
@@ -2063,7 +2066,9 @@ export const automationEdge = pgTable(
     targetStepId: text("target_step_id")
       .notNull()
       .references(() => automationStep.id, { onDelete: "cascade" }),
-    sourceHandle: text("source_handle", { enum: ["default", "true", "false", "late", "timeout"] })
+    sourceHandle: text("source_handle", {
+      enum: ["default", "true", "false", "late", "timeout", "confirmed", "declined", "reschedule", "other"],
+    })
       .notNull()
       .default("default"),
   },
@@ -2099,6 +2104,8 @@ export const automationRun = pgTable(
     context: jsonb("context").notNull().default(sql`'{}'::jsonb`),
     /** Qué espera mientras `waiting`: un instante (`time`) o la respuesta del cliente (`reply`, Fase 4). */
     waitingFor: text("waiting_for", { enum: ["reply", "time"] }),
+    /** Hasta cuándo espera la respuesta (el límite de `wait_reply`); NULL si no espera una respuesta. */
+    waitingUntil: timestamp("waiting_until"),
     dedupeKey: text("dedupe_key").notNull(),
     startedAt: timestamp("started_at").notNull().defaultNow(),
     endedAt: timestamp("ended_at"),

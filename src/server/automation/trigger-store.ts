@@ -25,6 +25,8 @@ export type EnqueueInput = {
   dedupeKey: string;
   /** Disparadores de cita: la cita que origina la tarea (viaja con el flujo). */
   bookingId?: string | null;
+  /** Datos estables del arranque que se guardan en `automation_run.context` (anuncio, servicio…). */
+  context?: Record<string, unknown>;
 };
 
 /** Lo que el orquestador necesita del mundo; en las pruebas se sustituye por dobles. */
@@ -138,7 +140,7 @@ export const dbTriggerStore: TriggerStore = {
           status: future ? "waiting" : "running",
           waitingFor: future ? "time" : null,
           currentStepId: first,
-          context: input.bookingId ? { bookingId: input.bookingId } : {},
+          context: { ...(input.bookingId ? { bookingId: input.bookingId } : {}), ...(input.context ?? {}) },
           dedupeKey: input.dedupeKey,
         })
         .onConflictDoNothing({ target: [run.organizationId, run.flowId, run.contactId, run.dedupeKey] })

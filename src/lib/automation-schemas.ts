@@ -7,6 +7,7 @@ import {
   removeTagConfigSchema,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
+  waitReplyConfigSchema,
   waitUntilConfigSchema,
 } from "@/lib/automation";
 
@@ -27,10 +28,20 @@ export const FLOW_TRIGGER_TYPES = [
   "booking_created",
   "booking_confirmed",
   "booking_no_show",
+  "ad_referral",
 ] as const;
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number];
 
-export const STEP_TYPES = ["send_whatsapp", "delay", "wait_until", "add_tag", "remove_tag", "set_stage", "condition"] as const;
+export const STEP_TYPES = [
+  "send_whatsapp",
+  "delay",
+  "wait_until",
+  "wait_reply",
+  "add_tag",
+  "remove_tag",
+  "set_stage",
+  "condition",
+] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
 /** Tope de nodos por flujo: un flujo de cientos de pasos es un error de uso, no un caso real. */
@@ -51,6 +62,8 @@ export const TRIGGER_CONFIG_SCHEMAS = {
   booking_created: z.object({}).strict(),
   booking_confirmed: z.object({}).strict(),
   booking_no_show: z.object({}).strict(),
+  // Sin `sourceId`, cualquier anuncio; con él, solo ese (el `source_id` del referral de Meta).
+  ad_referral: z.object({ sourceId: z.string().trim().min(1).max(200).nullish() }).strict(),
 } as const satisfies Record<FlowTriggerType, z.ZodTypeAny>;
 
 /**
@@ -106,6 +119,7 @@ export const stepCreateSchema = z
       z.object({ stepType: z.literal("send_whatsapp"), config: sendWhatsappConfigSchema }),
       z.object({ stepType: z.literal("delay"), config: delayConfigSchema }),
       z.object({ stepType: z.literal("wait_until"), config: waitUntilConfigSchema }),
+      z.object({ stepType: z.literal("wait_reply"), config: waitReplyConfigSchema }),
       z.object({ stepType: z.literal("add_tag"), config: addTagConfigSchema }),
       z.object({ stepType: z.literal("remove_tag"), config: removeTagConfigSchema }),
       z.object({ stepType: z.literal("set_stage"), config: setStageConfigSchema }),
@@ -141,6 +155,7 @@ const STEP_CONFIG_SCHEMAS = {
   send_whatsapp: sendWhatsappConfigSchema,
   delay: delayConfigSchema,
   wait_until: waitUntilConfigSchema,
+  wait_reply: waitReplyConfigSchema,
   add_tag: addTagConfigSchema,
   remove_tag: removeTagConfigSchema,
   set_stage: setStageConfigSchema,

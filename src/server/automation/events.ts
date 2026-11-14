@@ -22,6 +22,8 @@ export type AutomationEvent = {
   dedupeKey: string;
   /** Disparadores de cita: la cita que origina la ejecución (viaja con ella). */
   bookingId?: string | null;
+  /** Datos estables del arranque que viajan en el `run` (anuncio, servicio…). */
+  context?: Record<string, unknown>;
   /** Cuándo debe correr el primer paso (por defecto, ahora). */
   scheduledFor?: Date;
   /** Acota qué flujos reaccionan (p. ej. `stage_changed` con su etapa). Sin él, todos los activos. */
@@ -49,6 +51,7 @@ export async function emitAutomationEvent(
       scheduledFor: event.scheduledFor ?? now(),
       dedupeKey: event.dedupeKey,
       ...(event.bookingId ? { bookingId: event.bookingId } : {}),
+      ...(event.context ? { context: event.context } : {}),
     });
     if (inserted) started += 1;
   }
