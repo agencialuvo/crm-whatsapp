@@ -31,7 +31,14 @@ const step = (id: string, positionY: number, positionX = 0) => ({ id, positionX,
 
 describe("disparadores", () => {
   it("solo se ofrecen los que hoy tienen quién los dispare", () => {
-    expect([...CREATABLE_TRIGGERS]).toEqual(["birthday", "stage_changed", "lead_created"]);
+    expect([...CREATABLE_TRIGGERS]).toEqual([
+      "birthday",
+      "stage_changed",
+      "lead_created",
+      "booking_created",
+      "booking_confirmed",
+      "booking_no_show",
+    ]);
   });
   it("etiquetas en español, y un tipo desconocido se muestra tal cual", () => {
     expect(triggerLabel("birthday")).toBe("Cumpleaños");

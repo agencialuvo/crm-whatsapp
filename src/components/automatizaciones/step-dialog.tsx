@@ -12,11 +12,15 @@ import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { stepCreateSchema, STEP_TYPES } from "@/lib/automation-schemas";
 import {
   DELAY_UNIT_LABELS,
+  WAIT_LATE_LABELS,
   nextPositionY,
+  offsetMinutesOf,
+  offsetParts,
   stepLabel,
   type StepDto,
   type TemplateOption,
 } from "@/lib/automation-dto";
+import { WAIT_LATE_ACTIONS } from "@/lib/automation";
 import { countVariables } from "@/lib/templates";
 
 const STEP_TYPE_OPTIONS: SearchSelectOption[] = STEP_TYPES.map((t) => ({ value: t, label: stepLabel(t) }));
@@ -24,6 +28,19 @@ const STEP_TYPE_OPTIONS: SearchSelectOption[] = STEP_TYPES.map((t) => ({ value: 
 const UNIT_OPTIONS: SearchSelectOption[] = (
   Object.keys(DELAY_UNIT_LABELS) as (keyof typeof DELAY_UNIT_LABELS)[]
 ).map((u) => ({ value: u, label: DELAY_UNIT_LABELS[u].other }));
+
+const DIRECTION_OPTIONS: SearchSelectOption[] = [
+  { value: "before", label: "Antes de la cita" },
+  { value: "after", label: "Después de la cita" },
+];
+
+const LATE_OPTIONS: SearchSelectOption[] = WAIT_LATE_ACTIONS.map((a) => ({ value: a, label: WAIT_LATE_LABELS[a] }));
+
+const WINDOW_OPTIONS: SearchSelectOption[] = [
+  { value: "none", label: "Cuando toque (sin restricción)" },
+  { value: "at", label: "A una hora fija" },
+  { value: "between", label: "Solo dentro de un horario" },
+];
 
 /** Un número entero de un campo de texto: vacío o basura da `NaN` y el esquema lo rechaza con su mensaje. */
 const toNumber = (text: string): number => (text.trim() === "" ? Number.NaN : Number(text.trim()));
@@ -61,6 +78,19 @@ export function StepDialog({
   const [name, setName] = useState(typeof c.name === "string" ? c.name : "");
   const [amount, setAmount] = useState(typeof c.amount === "number" ? String(c.amount) : "1");
   const [unit, setUnit] = useState(typeof c.unit === "string" ? c.unit : "days");
+  // Esperar hasta la cita: «1 día antes», «2 horas antes»… (se guarda en minutos con signo).
+  const offset = offsetParts(typeof c.offsetMinutes === "number" ? c.offsetMinutes : -1440);
+  const [offsetAmount, setOffsetAmount] = useState(String(offset.amount));
+  const [offsetUnit, setOffsetUnit] = useState<string>(offset.unit);
+  const [offsetDir, setOffsetDir] = useState<string>(offset.direction);
+  const [lateAction, setLateAction] = useState<string>(typeof c.lateAction === "string" ? c.lateAction : "skip_next");
+  // Ventana horaria de envío (en «Esperar» y en «Esperar hasta la cita»).
+  const win = (c.window ?? null) as Record<string, unknown> | null;
+  const [windowMode, setWindowMode] = useState<string>(win && typeof win.mode === "string" ? win.mode : "none");
+  const [winHour, setWinHour] = useState(typeof win?.hour === "number" ? String(win.hour) : "10");
+  const [winMinute, setWinMinute] = useState(typeof win?.minute === "number" ? String(win.minute) : "0");
+  const [winFrom, setWinFrom] = useState(typeof win?.fromHour === "number" ? String(win.fromHour) : "9");
+  const [winTo, setWinTo] = useState(typeof win?.toHour === "number" ? String(win.toHour) : "21");
   const [content, setContent] = useState(typeof c.content === "string" ? c.content : "");
   const [templateId, setTemplateId] = useState(typeof c.templateId === "string" ? c.templateId : "");
   const [variables, setVariables] = useState<string[]>(
@@ -101,9 +131,26 @@ export function StepDialog({
     setVariables((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""));
   }
 
+  /** La ventana horaria elegida, o nada si el envío es «cuando toque». */
+  function buildWindow(): Record<string, unknown> | undefined {
+    if (windowMode === "at") return { mode: "at", hour: toNumber(winHour), minute: toNumber(winMinute) };
+    if (windowMode === "between") return { mode: "between", fromHour: toNumber(winFrom), toHour: toNumber(winTo) };
+    return undefined;
+  }
+
   function buildConfig(): Record<string, unknown> {
+    const window = buildWindow();
     if (stepType === "delay") {
-      return { ...(name.trim() && { name: name.trim() }), amount: toNumber(amount), unit };
+      return { ...(name.trim() && { name: name.trim() }), amount: toNumber(amount), unit, ...(window && { window }) };
+    }
+    if (stepType === "wait_until") {
+      return {
+        ...(name.trim() && { name: name.trim() }),
+        anchor: "booking.scheduledAt",
+        offsetMinutes: offsetAmount.trim() === "" ? Number.NaN : offsetMinutesOf(offsetDir as "before" | "after", Number(offsetAmount), offsetUnit as "minutes" | "hours" | "days"),
+        lateAction,
+        ...(window && { window }),
+      };
     }
     return {
       ...(name.trim() && { name: name.trim() }),
@@ -118,6 +165,7 @@ export function StepDialog({
     setFormError(null);
     const config = buildConfig();
     const found: Record<string, string> = {};
+    if (stepType === "wait_until" && offsetAmount.trim() === "") found.offsetMinutes = "Escribe la cantidad";
 
     const parsed = stepCreateSchema.safeParse({
       stepType,
@@ -187,14 +235,76 @@ export function StepDialog({
             id="step-name"
             value={name}
             maxLength={120}
-            placeholder={stepType === "delay" ? "Esperar un día" : "Saludo de cumpleaños"}
+            placeholder={
+              stepType === "delay" ? "Esperar un día" : stepType === "wait_until" ? "Un día antes de la cita" : "Saludo de cumpleaños"
+            }
             autoComplete="off"
             disabled={busy}
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
 
-        {stepType === "delay" ? (
+        {stepType === "wait_until" ? (
+          <>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Cantidad" required htmlFor="step-offset" error={errors.offsetMinutes}>
+                <Input
+                  id="step-offset"
+                  inputMode="numeric"
+                  value={offsetAmount}
+                  maxLength={4}
+                  aria-invalid={!!errors.offsetMinutes}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setOffsetAmount(e.target.value.replace(/\D/g, ""));
+                    clear("offsetMinutes");
+                  }}
+                />
+              </Field>
+              <Field label="Unidad" required htmlFor="step-offset-unit">
+                <SearchSelect
+                  id="step-offset-unit"
+                  value={offsetUnit}
+                  onChange={setOffsetUnit}
+                  options={UNIT_OPTIONS}
+                  searchPlaceholder="Buscar unidad…"
+                  ariaLabel="Unidad de tiempo"
+                  disabled={busy}
+                />
+              </Field>
+              <Field label="Respecto a la cita" required htmlFor="step-offset-dir">
+                <SearchSelect
+                  id="step-offset-dir"
+                  value={offsetDir}
+                  onChange={setOffsetDir}
+                  options={DIRECTION_OPTIONS}
+                  searchPlaceholder="Buscar…"
+                  ariaLabel="Antes o después de la cita"
+                  disabled={busy}
+                />
+              </Field>
+            </div>
+            <Field
+              label="Si esa hora ya pasó"
+              htmlFor="step-late"
+              hint="Pasa cuando la cita se agenda con menos anticipación (p. ej. un recordatorio de «1 día antes» para una cita de hoy)."
+            >
+              <SearchSelect
+                id="step-late"
+                value={lateAction}
+                onChange={setLateAction}
+                options={LATE_OPTIONS}
+                searchPlaceholder="Buscar…"
+                ariaLabel="Qué hacer si la hora ya pasó"
+                disabled={busy}
+              />
+            </Field>
+            <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+              Solo para flujos de citas. Los pasos que siguen se ejecutan a esa hora, y se cancelan solos si la cita se
+              cancela o se reprograma.
+            </p>
+          </>
+        ) : stepType === "delay" ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Cantidad" required htmlFor="step-amount" error={errors.amount}>
               <Input
@@ -327,6 +437,85 @@ export function StepDialog({
               </p>
             )}
           </>
+        )}
+
+        {(stepType === "delay" || stepType === "wait_until") && (
+          <fieldset className="space-y-3 rounded-md border bg-subtle px-3 py-3" disabled={busy}>
+            <Field
+              label="Hora de envío"
+              htmlFor="step-window-mode"
+              hint="En la hora del negocio (Ajustes → Marca). Si cae fuera, el envío se retrasa a la próxima hora permitida: nunca se adelanta."
+            >
+              <SearchSelect
+                id="step-window-mode"
+                value={windowMode}
+                onChange={setWindowMode}
+                options={WINDOW_OPTIONS}
+                searchPlaceholder="Buscar…"
+                ariaLabel="Hora de envío"
+              />
+            </Field>
+            {windowMode === "at" && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Hora (0–23)" required htmlFor="step-win-hour" error={errors.hour}>
+                  <Input
+                    id="step-win-hour"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={winHour}
+                    aria-invalid={!!errors.hour}
+                    onChange={(e) => {
+                      setWinHour(e.target.value.replace(/\D/g, ""));
+                      clear("hour");
+                    }}
+                  />
+                </Field>
+                <Field label="Minutos (0–59)" htmlFor="step-win-minute" error={errors.minute}>
+                  <Input
+                    id="step-win-minute"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={winMinute}
+                    aria-invalid={!!errors.minute}
+                    onChange={(e) => {
+                      setWinMinute(e.target.value.replace(/\D/g, ""));
+                      clear("minute");
+                    }}
+                  />
+                </Field>
+              </div>
+            )}
+            {windowMode === "between" && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Desde (hora 0–23)" required htmlFor="step-win-from" error={errors.fromHour}>
+                  <Input
+                    id="step-win-from"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={winFrom}
+                    aria-invalid={!!errors.fromHour}
+                    onChange={(e) => {
+                      setWinFrom(e.target.value.replace(/\D/g, ""));
+                      clear("fromHour", "toHour");
+                    }}
+                  />
+                </Field>
+                <Field label="Hasta (hora 1–24)" required htmlFor="step-win-to" error={errors.toHour}>
+                  <Input
+                    id="step-win-to"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={winTo}
+                    aria-invalid={!!errors.toHour}
+                    onChange={(e) => {
+                      setWinTo(e.target.value.replace(/\D/g, ""));
+                      clear("toHour");
+                    }}
+                  />
+                </Field>
+              </div>
+            )}
+          </fieldset>
         )}
 
         <ModalFooter error={formError}>

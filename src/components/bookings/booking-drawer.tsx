@@ -15,7 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { bookingTitle, bookingTone, canRetrySync, statusLabel, type Booking } from "./booking-look";
+import { bookingTitle, bookingTone, canRetrySync, isConfirmed, statusLabel, type Booking } from "./booking-look";
 
 /**
  * 215 — La cita, abierta, sin salir del calendario. Tiene TODO lo que tenía la
@@ -139,7 +139,7 @@ export function BookingDrawer({
             <div className="flex flex-wrap gap-1.5">
               <Badge
                 variant={
-                  b.status === "realizada"
+                  b.status === "realizada" || isConfirmed(b)
                     ? "success"
                     : b.status === "no_show"
                       ? "warning"
@@ -258,6 +258,18 @@ export function BookingDrawer({
                 o se quita. */}
             {isSession && (
               <>
+                {/* Para la recepción: el cliente confirmó por llamada o en persona. Si lo confirma por WhatsApp,
+                    lo hace el flujo. Una vez confirmada no hay nada más que hacer aquí. */}
+                {active && !isConfirmed(b) && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => void run({ action: "confirm" })}
+                  >
+                    Confirmar asistencia
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"

@@ -11,9 +11,15 @@ export const STATUS_LABEL: Record<Booking["status"], string> = {
   cancelada: "Cancelada",
 };
 
+/** Una cita agendada cuya asistencia ya se confirmó (a mano o por el cliente). */
+export function isConfirmed(b: Booking): boolean {
+  return b.kind === "session" && b.status === "agendada" && !!b.confirmedAt;
+}
+
 /** Un bloqueo no se "agenda" ni se "cancela": está activo o se quitó. */
 export function statusLabel(b: Booking): string {
   if (b.kind === "block") return b.status === "cancelada" ? "Quitado" : "Activo";
+  if (isConfirmed(b)) return "Confirmada";
   return STATUS_LABEL[b.status];
 }
 

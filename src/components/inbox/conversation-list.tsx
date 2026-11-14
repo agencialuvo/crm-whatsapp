@@ -22,6 +22,11 @@ const STAGE_DOT: Record<string, string> = {
   Interesado: "var(--warning)",
   Cliente: "var(--success)",
   Perdido: "var(--danger)",
+  // Seed de los negocios nuevos (los anteriores conservan los nombres de arriba).
+  Contactado: "var(--accent)",
+  Citado: "var(--warning)",
+  Convertido: "var(--success)",
+  "No interesado": "var(--danger)",
 };
 const STAGE_DOT_FALLBACK = "var(--text-3)";
 
