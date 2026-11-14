@@ -63,6 +63,8 @@ const prefixes = {
   // Cuadre de caja y preferencias de vista
   cashRegisterShift: "shf",
   userUiPreferences: "pref",
+  // Enrutamiento por anuncio: qué servicio u oferta persigue el agente según el anuncio de origen
+  adFlow: "adf",
   // Automatizaciones — flujos, pasos y cola de ejecución
   automationFlow: "aut",
   automationStep: "stp",

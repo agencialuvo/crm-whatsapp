@@ -75,6 +75,10 @@ export async function bookSlot(input: {
   conversationId: string;
   startUtc: string;
   confirmation?: string;
+  /** Enrutamiento por anuncio: el servicio u oferta del flujo, para que la cita quede atribuida. */
+  serviceId?: string;
+  comboId?: string;
+  durationMinutes?: number;
 }): Promise<AgendaTurn> {
   try {
     const result = await createSessionBooking({
@@ -83,6 +87,10 @@ export async function bookSlot(input: {
       startUtc: input.startUtc,
       source: "ai",
       requireOffer: true,
+      serviceId: input.serviceId ?? null,
+      comboId: input.comboId ?? null,
+      // Sin duración definida en el servicio, `createSessionBooking` usa la franja estándar.
+      durationMinutes: input.durationMinutes,
     });
 
     const base =

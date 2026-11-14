@@ -1852,6 +1852,42 @@ export const adAttribution = pgTable(
 );
 
 /**
+ * Enrutamiento por anuncio: vincula el `source_id` de un anuncio de Meta con el servicio u oferta que
+ * el agente debe perseguir cuando una conversación llega de él, más reglas propias del negocio.
+ *
+ * Una fila por (organización, anuncio). `service_id` / `combo_id` son excluyentes (a lo sumo uno) y se
+ * ponen en NULL si el servicio u oferta se borra: el flujo degrada al comportamiento genérico del
+ * anuncio en vez de fallar. `exclusive` (por defecto sí) hace que el agente no ofrezca otros servicios
+ * por iniciativa propia. Que `exclusive` exija un destino lo valida Zod (`lib/ad-flow.ts`), no la base,
+ * justamente para que borrar el servicio no choque con un CHECK.
+ */
+export const adFlow = pgTable(
+  "ad_flow",
+  {
+    id: text("id").primaryKey(), // prefix: 'adf'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** El `source_id` del referral de Meta (el id del anuncio). */
+    sourceId: text("source_id").notNull(),
+    /** Etiqueta para reconocerlo en la lista (opcional: la lista también muestra el titular detectado). */
+    headline: text("headline"),
+    serviceId: text("service_id").references(() => service.id, { onDelete: "set null" }),
+    comboId: text("combo_id").references(() => combo.id, { onDelete: "set null" }),
+    /** Reglas libres del negocio para este anuncio (hasta 1500 caracteres). */
+    promptRules: text("prompt_rules"),
+    active: boolean("active").notNull().default(true),
+    exclusive: boolean("exclusive").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("ad_flow_org_source_uq").on(t.organizationId, t.sourceId),
+    check("ad_flow_one_target", sql`${t.serviceId} is null or ${t.comboId} is null`),
+  ]
+);
+
+/**
  * Cada intento de reportarle un desenlace a Meta. Las filas `skipped` no son
  * basura: son la respuesta a "¿por qué este lead no aparece en Meta?", que sin
  * ellas se contesta adivinando.

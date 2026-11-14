@@ -1,4 +1,6 @@
 import { and, asc, eq } from "drizzle-orm";
+import { shouldReplaceAttribution } from "@/lib/ad-flow";
+import { hasActiveAdFlow } from "@/server/attribution/ad-flow";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -70,8 +72,15 @@ export async function registrarAnuncioDeOrigen(input: {
     })
     .returning({ id: schema.adAttribution.id });
 
-  // Solo la fila nueva baja imagen: una reentrega no dispara otra descarga.
-  if (creadas[0] && a.sourceId && a.imageUrl) {
+  // Ya había un anuncio en esta conversación: el primero gana, SALVO que no tuviera flujo de enrutamiento y
+  // este sí. Así el agente no pierde el flujo por haber entrado antes por un anuncio sin configurar.
+  let reemplazada = false;
+  if (!creadas[0] && a.sourceId && atribucionEnabled()) {
+    reemplazada = await reemplazarSiGanaElFlujo(input.organizationId, input.conversationId, a);
+  }
+
+  // Solo la fila nueva (o reemplazada) baja imagen: una reentrega no dispara otra descarga.
+  if ((creadas[0] || reemplazada) && a.sourceId && a.imageUrl) {
     const { organizationId, conversationId } = input;
     const sourceId = a.sourceId;
     const imageUrl = a.imageUrl;
@@ -82,6 +91,64 @@ export async function registrarAnuncioDeOrigen(input: {
           err instanceof Error ? err.message : err
         )
     );
+  }
+}
+
+/**
+ * Sustituye el anuncio de la conversación por el nuevo SOLO si el actual no tiene flujo activo y el nuevo sí
+ * (`shouldReplaceAttribution`). Nunca lanza hacia arriba: es contexto, el mensaje del cliente ya entró.
+ * Devuelve si reemplazó.
+ */
+async function reemplazarSiGanaElFlujo(
+  organizationId: string,
+  conversationId: string,
+  a: AnuncioDeOrigen
+): Promise<boolean> {
+  try {
+    const actual = await getAttributionForConversation(organizationId, conversationId);
+    if (!actual || actual.sourceId === a.sourceId) return false;
+    const [existingHasFlow, incomingHasFlow] = await Promise.all([
+      hasActiveAdFlow(organizationId, actual.sourceId),
+      hasActiveAdFlow(organizationId, a.sourceId),
+    ]);
+    if (
+      !shouldReplaceAttribution({
+        existingSourceId: actual.sourceId,
+        incomingSourceId: a.sourceId,
+        existingHasFlow,
+        incomingHasFlow,
+      })
+    ) {
+      return false;
+    }
+    await getDb()
+      .update(schema.adAttribution)
+      .set({
+        ctwaClid: a.ctwaClid,
+        sourceId: a.sourceId,
+        sourceType: a.sourceType,
+        sourceUrl: a.sourceUrl,
+        headline: a.headline,
+        body: a.body,
+        mediaType: a.mediaType,
+        // La imagen era del anuncio anterior: se vuelve a copiar la del nuevo.
+        imageAssetId: null,
+        raw: a.raw,
+      })
+      .where(
+        scoped(
+          schema.adAttribution.organizationId,
+          organizationId,
+          eq(schema.adAttribution.id, actual.id)
+        )
+      );
+    return true;
+  } catch (err) {
+    console.warn(
+      `[atribucion] no se pudo evaluar el cambio de anuncio de ${conversationId}:`,
+      err instanceof Error ? err.message : err
+    );
+    return false;
   }
 }
 

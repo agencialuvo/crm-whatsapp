@@ -2,6 +2,9 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { getAttributionForConversation } from "@/server/attribution/store";
+import { atribucionEnabled } from "@/server/attribution/flag";
+import { bookingTargetOf } from "@/lib/ad-flow";
+import { getAdFlowContext } from "@/server/ai/ad-flow-context";
 import { scoped } from "@/lib/db/tenant";
 import { moveLeadToStage as moveLeadThroughHistory } from "@/server/leads/stage-history";
 import { getEnv } from "@/lib/env";
@@ -187,6 +190,16 @@ export async function runAgentTurn(
     }
   );
 
+  // Enrutamiento por anuncio: si ese anuncio tiene un flujo activo, el agente persigue SU servicio u oferta.
+  // Apagada `ATRIBUCION` no consulta nada; y un fallo degrada al comportamiento genérico del anuncio.
+  const adFlow =
+    attribution?.sourceId && atribucionEnabled()
+      ? await getAdFlowContext(organizationId, attribution.sourceId).catch((err) => {
+          console.error("[agente] no se pudo resolver el enrutamiento por anuncio:", err);
+          return null;
+        })
+      : null;
+
   const recientes = await db
     .select()
     .from(schema.message)
@@ -292,7 +305,8 @@ export async function runAgentTurn(
    * orden de saludar reconociendo la promoción. Apagado, no consulta nada. Un
    * fallo aquí degrada (el agente responde sin la instrucción), nunca tumba el turno.
    */
-  const instruccionCombo = salonEnabled()
+  // Con enrutamiento por anuncio la directiva del flujo ya fija el objetivo: no se duplica con la del combo.
+  const instruccionCombo = salonEnabled() && !adFlow
     ? await getComboTriggerInstruction(organizationId, lastInbound.text).catch((err) => {
         console.error("[agente] no se pudo evaluar la oferta del anuncio:", err);
         return null;
@@ -308,6 +322,7 @@ export async function runAgentTurn(
         stages,
         agenda,
         anuncio: attribution ? { headline: attribution.headline, body: attribution.body } : null,
+        adFlow,
       }),
     },
     ...history
@@ -360,6 +375,8 @@ export async function runAgentTurn(
                 conversationId,
                 startUtc: action.startUtc,
                 confirmation: action.reply,
+                // La cita queda atribuida al servicio u oferta del anuncio.
+                ...bookingTargetOf(adFlow),
               });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
