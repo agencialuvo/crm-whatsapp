@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { daysOffsetSchema, delayConfigSchema, sendWhatsappConfigSchema } from "@/lib/automation";
+import { daysOffsetSchema, delayConfigSchema, sendWhatsappConfigSchema, waitUntilConfigSchema } from "@/lib/automation";
 
 /**
  * Automatizaciones — contratos de la API de gestión de flujos y pasos (compartidos cliente/servidor).
@@ -10,10 +10,18 @@ import { daysOffsetSchema, delayConfigSchema, sendWhatsappConfigSchema } from "@
  * esquema); esta lista es lo que la API acepta.
  */
 
-export const FLOW_TRIGGER_TYPES = ["birthday", "stage_changed", "lead_created", "manual"] as const;
+export const FLOW_TRIGGER_TYPES = [
+  "birthday",
+  "stage_changed",
+  "lead_created",
+  "manual",
+  "booking_created",
+  "booking_confirmed",
+  "booking_no_show",
+] as const;
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number];
 
-export const STEP_TYPES = ["send_whatsapp", "delay"] as const;
+export const STEP_TYPES = ["send_whatsapp", "delay", "wait_until"] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
 /** Tope de nodos por flujo: un flujo de cientos de pasos es un error de uso, no un caso real. */
@@ -31,6 +39,9 @@ export const TRIGGER_CONFIG_SCHEMAS = {
   stage_changed: z.object({ toStageId: z.string().trim().min(1).max(64).nullish() }).strict(),
   lead_created: z.object({}).strict(),
   manual: z.object({}).strict(),
+  booking_created: z.object({}).strict(),
+  booking_confirmed: z.object({}).strict(),
+  booking_no_show: z.object({}).strict(),
 } as const satisfies Record<FlowTriggerType, z.ZodTypeAny>;
 
 /**
@@ -85,6 +96,7 @@ export const stepCreateSchema = z
     [
       z.object({ stepType: z.literal("send_whatsapp"), config: sendWhatsappConfigSchema }),
       z.object({ stepType: z.literal("delay"), config: delayConfigSchema }),
+      z.object({ stepType: z.literal("wait_until"), config: waitUntilConfigSchema }),
     ],
     {
       errorMap: (issue, ctx) =>
@@ -117,7 +129,8 @@ export function parseStepConfig(
   stepType: StepType,
   raw: unknown
 ): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
-  const schema = stepType === "delay" ? delayConfigSchema : sendWhatsappConfigSchema;
+  const schema =
+    stepType === "delay" ? delayConfigSchema : stepType === "wait_until" ? waitUntilConfigSchema : sendWhatsappConfigSchema;
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const i = parsed.error.issues[0];

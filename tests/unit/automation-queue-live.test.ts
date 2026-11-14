@@ -40,13 +40,14 @@ describe.skipIf(!live)("automation_queue contra Postgres", () => {
     schema = lib.schema;
     queue = await import("@/server/automation/queue");
     worker = await import("@/server/automation/worker");
-    const [org] = await db.select({ id: schema.organization.id }).from(schema.organization).limit(1);
-    orgId = org!.id;
+    // Un contacto real manda: «la primera organización» sin orden cambia con cualquier UPDATE de otra prueba
+    // y podía ser una sin contactos.
     const [ct] = await db
-      .select({ id: schema.contact.id })
+      .select({ id: schema.contact.id, organizationId: schema.contact.organizationId })
       .from(schema.contact)
-      .where(eq(schema.contact.organizationId, orgId))
+      .orderBy(schema.contact.id)
       .limit(1);
+    orgId = ct!.organizationId;
     contactId = ct!.id;
   });
 

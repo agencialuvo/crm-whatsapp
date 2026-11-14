@@ -3,6 +3,7 @@ import { parseBody, withAuth } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import {
   cancelBooking,
+  confirmBooking,
   markBookingStatus,
   rescheduleBooking,
   retryMeetingLink,
@@ -17,6 +18,7 @@ type Params = { params: Promise<{ id: string }> };
 const patchSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reschedule"), startUtc: z.string().min(1) }),
   z.object({ action: z.literal("cancel") }),
+  z.object({ action: z.literal("confirm") }),
   z.object({
     action: z.literal("status"),
     status: z.enum(["realizada", "no_show"]),
@@ -52,6 +54,13 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
           bookingId: id,
         });
         return Response.json({ ok: true });
+      }
+      case "confirm": {
+        const result = await confirmBooking({
+          organizationId: session.organizationId,
+          bookingId: id,
+        });
+        return Response.json({ ok: true, alreadyConfirmed: result.alreadyConfirmed });
       }
       case "status": {
         await markBookingStatus({

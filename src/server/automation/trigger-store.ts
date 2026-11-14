@@ -1,4 +1,4 @@
-import { and, asc, eq, or } from "drizzle-orm";
+import { and, asc, eq, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -22,6 +22,8 @@ export type EnqueueInput = {
   scheduledFor: Date;
   /** Llave de idempotencia: la misma llave para el mismo contacto y flujo no se encola dos veces. */
   dedupeKey: string;
+  /** Disparadores de cita: la cita que origina la tarea (viaja con el flujo). */
+  bookingId?: string | null;
 };
 
 /** Lo que el orquestador necesita del mundo; en las pruebas se sustituye por dobles. */
@@ -37,6 +39,17 @@ export type TriggerStore = {
   hasRealConversation(organizationId: string, contactId: string): Promise<boolean>;
   /** Encola el primer paso del flujo. `true` si insertó; `false` si ya estaba encolado o el flujo no tiene pasos. */
   enqueueFirstStep(input: EnqueueInput): Promise<boolean>;
+  /**
+   * Cancela las tareas PENDIENTES de una cita (cancelada, reprogramada, cerrada). Devuelve cuántas.
+   * `exceptTrigger` deja en paz los flujos de ese disparador: al marcar «No asistió» se cancelan los
+   * recordatorios, pero no la tarea del propio flujo de no-show (ni al repetir la marca).
+   */
+  cancelPendingForBooking(
+    organizationId: string,
+    bookingId: string,
+    reason: string,
+    opts?: { exceptTrigger?: string }
+  ): Promise<number>;
 };
 
 export const dbTriggerStore: TriggerStore = {
@@ -120,6 +133,7 @@ export const dbTriggerStore: TriggerStore = {
         stepId: first.id,
         scheduledFor: input.scheduledFor,
         dedupeKey: input.dedupeKey,
+        bookingId: input.bookingId ?? null,
       })
       .onConflictDoNothing({
         target: [
@@ -131,5 +145,26 @@ export const dbTriggerStore: TriggerStore = {
       })
       .returning({ id: schema.automationQueue.id });
     return inserted.length > 0;
+  },
+
+  async cancelPendingForBooking(organizationId, bookingId, reason, opts = {}) {
+    const q = schema.automationQueue;
+    const f = schema.automationFlow;
+    const rows = await getDb()
+      .update(q)
+      .set({ status: "cancelled", lockedAt: null, error: reason })
+      .where(
+        scoped(
+          q.organizationId,
+          organizationId,
+          eq(q.bookingId, bookingId),
+          eq(q.status, "pending"),
+          opts.exceptTrigger
+            ? sql`${q.flowId} not in (select ${f.id} from ${f} where ${f.organizationId} = ${organizationId} and ${f.triggerType} = ${opts.exceptTrigger})`
+            : undefined
+        )
+      )
+      .returning({ id: q.id });
+    return rows.length;
   },
 };

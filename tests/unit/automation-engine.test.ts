@@ -119,9 +119,15 @@ const baseRow: Row = {
   stepId: "stp_1",
   attempts: 1,
   maxAttempts: 5,
+  bookingId: null,
 };
 
 function setup(over: {
+  /** La cita de la tarea (flujos de cita); sin ella la tarea no es de una cita. */
+  booking?: { status: string; scheduledAt: Date } | null;
+  /** El disparador del flujo (decide qué estado de la cita lo mantiene vigente). */
+  trigger?: string;
+  timezone?: string;
   step?: Partial<Step> | null;
   target?: Partial<Target> | null;
   templateStatus?: string | null;
@@ -144,6 +150,9 @@ function setup(over: {
     now: () => NOW,
     loadStep: vi.fn(async () => step),
     isFlowActive: vi.fn(async () => over.flowActive ?? true),
+    loadBooking: vi.fn(async () => (over.booking === undefined ? null : over.booking)),
+    flowTriggerType: vi.fn(async () => over.trigger ?? "birthday"),
+    timezone: vi.fn(async () => over.timezone ?? "UTC"),
     loadTarget: vi.fn(async () => target),
     templateStatus: vi.fn(async () => over.templateStatus ?? null),
     sendText: vi.fn(over.sendTextImpl ?? (async () => ({ messageId: "msg_1" }))),
@@ -330,5 +339,142 @@ describe("processRow — esperas", () => {
     const t = setup({ step: { stepType: "delay", config: { amount: -1, unit: "hours" } } });
     expect(await t.run()).toBe("failed");
     expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "invalid_step_config");
+  });
+});
+
+/* ─── Citas: vigencia, espera anclada, ventana horaria y variables ─── */
+
+describe("processRow — citas", () => {
+  const bookingIn = (hours: number) => new Date(NOW.getTime() + hours * 3_600_000);
+  const waitStep = (cfg: Record<string, unknown> = {}): Partial<Step> => ({
+    stepType: "wait_until",
+    config: { anchor: "booking.scheduledAt", offsetMinutes: -1440, ...cfg },
+  });
+  const cita = { row: { bookingId: "bk_1" } };
+
+  it("una cita cancelada, realizada o inexistente cancela la tarea sin enviar nada", async () => {
+    for (const [booking, reason] of [
+      [{ status: "cancelada", scheduledAt: bookingIn(48) }, "booking_not_active"],
+      [{ status: "realizada", scheduledAt: bookingIn(48) }, "booking_not_active"],
+      [null, "booking_not_found"],
+    ] as const) {
+      const t = setup({ booking, trigger: "booking_created", ...cita });
+      expect(await t.run()).toBe("cancelled");
+      expect(t.deps.markCancelled).toHaveBeenCalledWith(t.row, reason);
+      expect(t.deps.sendText).not.toHaveBeenCalled();
+      expect(t.logs).toHaveLength(0);
+    }
+  });
+
+  it("una cita agendada sigue su camino y envía", async () => {
+    const t = setup({ booking: { status: "agendada", scheduledAt: bookingIn(48) }, trigger: "booking_created", ...cita });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("un flujo de no-show exige que la cita siga marcada como no-show", async () => {
+    const vigente = setup({ booking: { status: "no_show", scheduledAt: bookingIn(-2) }, trigger: "booking_no_show", ...cita });
+    expect(await vigente.run()).toBe("completed");
+    const reabierta = setup({ booking: { status: "agendada", scheduledAt: bookingIn(-2) }, trigger: "booking_no_show", ...cita });
+    expect(await reabierta.run()).toBe("cancelled");
+    expect(reabierta.deps.markCancelled).toHaveBeenCalledWith(reabierta.row, "booking_no_longer_no_show");
+  });
+
+  it("una tarea que no es de una cita no consulta ninguna", async () => {
+    const t = setup();
+    await t.run();
+    expect(t.deps.loadBooking).not.toHaveBeenCalled();
+    expect(t.deps.flowTriggerType).not.toHaveBeenCalled();
+  });
+
+  it("wait_until: el paso siguiente queda programado para la hora anclada a la cita", async () => {
+    const scheduledAt = bookingIn(72); // 2026-11-11T12:00Z
+    const t = setup({ step: waitStep(), booking: { status: "agendada", scheduledAt }, trigger: "booking_created", ...cita });
+    expect(await t.run()).toBe("completed");
+    const nextAt = new Date(scheduledAt.getTime() - 24 * 3_600_000);
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, nextAt);
+    expect(t.logs).toHaveLength(1);
+    expect(t.logs[0]).toMatchObject({ status: "success", metadata: { bookingId: "bk_1", nextAt: nextAt.toISOString() } });
+    expect(t.deps.sendText).not.toHaveBeenCalled();
+  });
+
+  it("wait_until ya es tarde: «omitir» salta el mensaje ligado y sigue con el resto; «continuar» sigue; «terminar» corta", async () => {
+    const booking = { status: "agendada", scheduledAt: bookingIn(10) }; // «1 día antes» ya pasó
+    const skip = setup({ step: waitStep(), booking, trigger: "booking_created", ...cita });
+    expect(await skip.run()).toBe("completed");
+    expect(skip.deps.completeAndAdvance).toHaveBeenCalledWith(skip.row, NOW, { skip: 1 });
+    expect(skip.logs[0]!.metadata).toMatchObject({ late: true, lateAction: "skip_next" });
+
+    const cont = setup({ step: waitStep({ lateAction: "continue" }), booking, trigger: "booking_created", ...cita });
+    await cont.run();
+    expect(cont.deps.completeAndAdvance).toHaveBeenCalledWith(cont.row, NOW, undefined);
+
+    const stop = setup({ step: waitStep({ lateAction: "stop" }), booking, trigger: "booking_created", ...cita });
+    await stop.run();
+    expect(stop.deps.completeAndAdvance).toHaveBeenCalledWith(stop.row, NOW, { stop: true });
+  });
+
+  it("wait_until respeta la ventana horaria en la zona del negocio", async () => {
+    // Cita en 72 h = 11-nov 12:00Z (07:00 en Lima). «1 día antes» = 10-nov 07:00 Lima; a las 10:00 fijas → 15:00Z.
+    const t = setup({
+      step: waitStep({ window: { mode: "at", hour: 10, minute: 0 } }),
+      booking: { status: "agendada", scheduledAt: bookingIn(72) },
+      trigger: "booking_created",
+      timezone: "America/Lima",
+      ...cita,
+    });
+    await t.run();
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, new Date("2026-11-10T15:00:00.000Z"));
+  });
+
+  it("wait_until sin cita (flujo que no es de citas) falla a la vista", async () => {
+    const t = setup({ step: waitStep() });
+    expect(await t.run()).toBe("failed");
+    expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "wait_until_requires_booking");
+  });
+
+  it("wait_until con configuración inválida falla a la vista", async () => {
+    const t = setup({
+      step: { stepType: "wait_until", config: { anchor: "lead.createdAt", offsetMinutes: -60 } },
+      booking: { status: "agendada", scheduledAt: bookingIn(72) },
+      trigger: "booking_created",
+      ...cita,
+    });
+    expect(await t.run()).toBe("failed");
+    expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "invalid_step_config");
+  });
+
+  it("«Esperar» con ventana: no sale de madrugada, espera a la apertura", async () => {
+    // NOW + 1 día = 9-nov 12:00Z = 07:00 en Lima → antes de las 09:00 → 09:00 Lima = 14:00Z.
+    const t = setup({
+      step: { stepType: "delay", config: { amount: 1, unit: "days", window: { mode: "between", fromHour: 9, toHour: 21 } } },
+      timezone: "America/Lima",
+    });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, new Date("2026-11-09T14:00:00.000Z"));
+  });
+
+  it("«Esperar» sin ventana sigue igual y no pide la zona horaria", async () => {
+    const t = setup({ step: { stepType: "delay", config: { amount: 2, unit: "hours" } } });
+    await t.run();
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, new Date(NOW.getTime() + 2 * 3_600_000));
+    expect(t.deps.timezone).not.toHaveBeenCalled();
+  });
+
+  it("el mensaje de un flujo de cita dice cuándo es: {{fecha}} y {{hora}} en la zona del negocio", async () => {
+    // 9-nov 20:00Z = 15:00 en Lima; «ahora» (8-nov 12:00Z = 07:00 Lima) → «mañana».
+    const t = setup({
+      step: { config: { name: "Recordatorio", content: "Hola {{name}}, tu cita es {{fecha}} a las {{hora}}." } },
+      booking: { status: "agendada", scheduledAt: new Date("2026-11-09T20:00:00.000Z") },
+      trigger: "booking_created",
+      timezone: "America/Lima",
+      ...cita,
+    });
+    expect(await t.run()).toBe("completed");
+    const text = (t.deps.sendText as ReturnType<typeof vi.fn>).mock.calls[0]![0].text as string;
+    expect(text).toContain("Hola Ana");
+    expect(text).toContain("mañana");
+    expect(text).toContain("9 de noviembre");
+    expect(text).toContain("15:00");
   });
 });

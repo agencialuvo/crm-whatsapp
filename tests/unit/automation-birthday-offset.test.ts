@@ -101,6 +101,7 @@ function fakeStore(flows: FlowRef[], birthdays: Birthday[], timezone = "America/
       enqueued.push(i);
       return true;
     }),
+    cancelPendingForBooking: vi.fn(async () => 0),
   } satisfies TriggerStore;
   return { store, enqueued };
 }

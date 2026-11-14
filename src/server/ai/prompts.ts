@@ -168,7 +168,7 @@ export function buildAgentSystemPrompt(input: {
       "- Todo mensaje del cliente que no sea un cierre recibe respuesta: un saludo, un mensaje corto, raro o confuso, o un «hola, prueba» se contestan (saluda y ofrece ayuda). Nunca supongas que es una prueba o un error.",
       "- Si el cliente pide hablar con una persona/humano/asesor → handoff.",
       "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala.",
-      "- Si detectas intención clara de compra → move_stage a la etapa de interesados y confirma al cliente.",
+      "- Si detectas intención clara de compra → move_stage a la etapa abierta que mejor represente a un cliente interesado (por ejemplo «Contactado» o «Interesado», según las etapas disponibles) y confirma al cliente.",
       ...agendaRules,
       "- JSON puro, sin markdown ni texto adicional.",
     ].join("\n"),

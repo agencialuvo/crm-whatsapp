@@ -1,5 +1,6 @@
 import { sendText } from "@/server/inbox/send";
 import { sendTemplate } from "@/server/whatsapp/templates";
+import { businessTimezone } from "@/server/analytics/period";
 import { processRow, type Deps, type Row } from "@/server/automation/engine";
 import * as queue from "@/server/automation/queue";
 import { runBirthdayTrigger } from "@/server/automation/triggers";
@@ -23,6 +24,9 @@ export function defaultDeps(): Deps {
     now: () => new Date(),
     loadStep: queue.loadStep,
     isFlowActive: queue.isFlowActive,
+    loadBooking: queue.loadBooking,
+    flowTriggerType: queue.flowTriggerType,
+    timezone: businessTimezone,
     loadTarget: queue.loadTarget,
     templateStatus: queue.templateStatus,
     // Nunca de IA (`aiGenerated`): lo escribió el dueño del negocio, no el agente.
@@ -31,7 +35,7 @@ export function defaultDeps(): Deps {
     waMessageIdOf: queue.waMessageIdOf,
     hasSuccessLog: queue.hasSuccessLog,
     writeLog: queue.writeLog,
-    completeAndAdvance: (row, nextAt) => queue.completeAndAdvance(row as queue.QueueRow, nextAt),
+    completeAndAdvance: (row, nextAt, opts) => queue.completeAndAdvance(row as queue.QueueRow, nextAt, opts),
     markFailed: (row, error) => queue.markFailed(row as queue.QueueRow, error),
     markCancelled: (row, reason) => queue.markCancelled(row as queue.QueueRow, reason),
     reschedule: (row, at, error) => queue.reschedule(row as queue.QueueRow, at, error),

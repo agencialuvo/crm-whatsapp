@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { addDaysISO, zonedWallClockToUtc } from "@/lib/time/slots";
+import { addDaysISO, dayIsoInTz, zonedWallClockToUtc } from "@/lib/time/slots";
 
 /**
  * Motor de automatizaciones — reglas puras (sin base de datos ni red).
@@ -49,15 +49,137 @@ export type SendWhatsappConfig = z.infer<typeof sendWhatsappConfigSchema>;
 export const DELAY_UNITS = ["minutes", "hours", "days"] as const;
 const UNIT_MS = { minutes: 60_000, hours: 3_600_000, days: 86_400_000 } as const;
 
+/* ─── Ventana horaria de envío ─── */
+
+/**
+ * Cuándo se permite enviar, en la hora local del negocio:
+ * - `at`: a una hora fija («a las 10:00»). Si el momento calculado cae a otra hora, pasa a la próxima 10:00.
+ * - `between`: solo dentro de un horario («de 09 a 21»). Si cae fuera, pasa al próximo inicio de horario.
+ *
+ * Siempre mueve hacia ADELANTE: la ventana retrasa, nunca adelanta (ver `applySendWindow`).
+ */
+export const sendWindowSchema = z
+  .discriminatedUnion("mode", [
+    z.object({
+      mode: z.literal("at"),
+      hour: z.number().int().min(0).max(23),
+      minute: z.number().int().min(0).max(59).default(0),
+    }),
+    z.object({
+      mode: z.literal("between"),
+      fromHour: z.number().int().min(0).max(23),
+      /** 24 = hasta el final del día. */
+      toHour: z.number().int().min(1).max(24),
+    }),
+  ])
+  .superRefine((w, ctx) => {
+    if (w.mode === "between" && w.fromHour >= w.toHour) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["toHour"], message: "La hora final debe ser posterior a la inicial" });
+    }
+  });
+export type SendWindow = z.infer<typeof sendWindowSchema>;
+
+const hh = (h: number, m = 0) => `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+
+/**
+ * Ajusta un instante a la ventana de envío del negocio. Pura, y apoyada en `zonedWallClockToUtc`, que ya
+ * resuelve los cambios de horario de verano. Nunca devuelve un instante anterior a `at`; si la hora local
+ * pedida no existe (el salto del horario de verano) deja `at` como está en vez de bloquear el envío.
+ */
+export function applySendWindow(at: Date, window: SendWindow, timezone: string): Date {
+  const day = dayIsoInTz(at, timezone);
+  const tomorrow = addDaysISO(day, 1);
+
+  if (window.mode === "at") {
+    const time = hh(window.hour, window.minute);
+    const same = zonedWallClockToUtc(day, time, timezone);
+    if (!same) return at;
+    if (same.getTime() >= at.getTime()) return same;
+    return zonedWallClockToUtc(tomorrow, time, timezone) ?? at;
+  }
+
+  const from = zonedWallClockToUtc(day, hh(window.fromHour), timezone);
+  const to =
+    window.toHour === 24
+      ? zonedWallClockToUtc(tomorrow, "00:00", timezone)
+      : zonedWallClockToUtc(day, hh(window.toHour), timezone);
+  if (!from || !to) return at;
+  if (at.getTime() < from.getTime()) return from;
+  if (at.getTime() < to.getTime()) return at;
+  return zonedWallClockToUtc(tomorrow, hh(window.fromHour), timezone) ?? at;
+}
+
 export const delayConfigSchema = z.object({
   name: z.string().trim().max(120).optional(),
   amount: z.number().int().positive().max(366),
   unit: z.enum(DELAY_UNITS),
+  /** Opcional: tras esperar, no salir de madrugada o forzar una hora fija. */
+  window: sendWindowSchema.optional(),
 });
 export type DelayConfig = z.infer<typeof delayConfigSchema>;
 
 export function delayToMs(cfg: Pick<DelayConfig, "amount" | "unit">): number {
   return cfg.amount * UNIT_MS[cfg.unit];
+}
+
+/* ─── Espera anclada a una cita ─── */
+
+/** Qué hacer cuando la hora de la espera ya pasó (p. ej. la cita se creó con menos anticipación). */
+export const WAIT_LATE_ACTIONS = ["skip_next", "continue", "stop"] as const;
+export type WaitLateAction = (typeof WAIT_LATE_ACTIONS)[number];
+
+/** Una espera se puede anclar hasta 30 días antes o después de la hora de la cita. */
+export const WAIT_OFFSET_MAX_MINUTES = 30 * 24 * 60;
+
+/**
+ * `wait_until`: espera hasta una hora relativa a la cita. `offsetMinutes` negativo = antes (−1440 = un día
+ * antes), positivo = después. `lateAction`: `skip_next` omite el paso que sigue (el mensaje ligado a esta
+ * espera) y sigue con el resto; `continue` no espera y sigue; `stop` termina el flujo.
+ */
+export const waitUntilConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  anchor: z.literal("booking.scheduledAt"),
+  offsetMinutes: z.number().int().min(-WAIT_OFFSET_MAX_MINUTES).max(WAIT_OFFSET_MAX_MINUTES),
+  lateAction: z.enum(WAIT_LATE_ACTIONS).default("skip_next"),
+  window: sendWindowSchema.optional(),
+});
+export type WaitUntilConfig = z.infer<typeof waitUntilConfigSchema>;
+
+export type WaitDecision = { kind: "wait"; at: Date } | { kind: "late"; action: WaitLateAction };
+
+/**
+ * ¿Hasta cuándo espera un `wait_until`, o ya es tarde?
+ *
+ * Es tarde si la hora pedida ya pasó, o si la ventana horaria la empujaría hasta la hora de la cita o
+ * después (un recordatorio jamás sale después de la cita).
+ */
+export function decideWaitUntil(input: {
+  now: Date;
+  scheduledAt: Date;
+  config: Pick<WaitUntilConfig, "offsetMinutes" | "lateAction" | "window">;
+  timezone: string;
+}): WaitDecision {
+  const { now, scheduledAt, config, timezone } = input;
+  const raw = new Date(scheduledAt.getTime() + config.offsetMinutes * 60_000);
+  if (raw.getTime() <= now.getTime()) return { kind: "late", action: config.lateAction };
+  const at = config.window ? applySendWindow(raw, config.window, timezone) : raw;
+  if (config.offsetMinutes < 0 && at.getTime() >= scheduledAt.getTime()) {
+    return { kind: "late", action: config.lateAction };
+  }
+  return { kind: "wait", at };
+}
+
+/**
+ * ¿Sigue vigente la cita de una tarea? `null` = sí; si no, el motivo con el que se cancela la tarea.
+ * `booking_created` y `booking_confirmed` exigen una cita agendada (una cancelada, realizada o ya marcada
+ * como no-show no recibe el recordatorio); `booking_no_show` exige que siga marcada como no-show.
+ */
+export function bookingGuard(triggerType: string, booking: { status: string } | null): string | null {
+  if (!booking) return "booking_not_found";
+  if (triggerType === "booking_no_show") {
+    return booking.status === "no_show" ? null : "booking_no_longer_no_show";
+  }
+  return booking.status === "agendada" ? null : "booking_not_active";
 }
 
 /** El nombre con que un paso aparece en el historial: el que le puso el dueño o su tipo. */
@@ -68,11 +190,19 @@ export function stepLabel(stepType: string, config: unknown): string {
 
 /* ─── Variables ─── */
 
-/** Reemplaza `{{name}}` / `{{nombre}}` por el nombre del contacto (o «» si no tiene). */
-export function renderVars(text: string, vars: { name: string | null }): string {
+/**
+ * Reemplaza `{{name}}` / `{{nombre}}` por el nombre del contacto y, en los flujos de cita, `{{fecha}}` y
+ * `{{hora}}` por el día y la hora de la cita en la zona del negocio (o «» si la tarea no es de una cita).
+ */
+export function renderVars(
+  text: string,
+  vars: { name: string | null; fecha?: string | null; hora?: string | null }
+): string {
   const name = vars.name?.trim() || "";
   return text
     .replace(/\{\{\s*(?:name|nombre)\s*\}\}/gi, name)
+    .replace(/\{\{\s*fecha\s*\}\}/gi, vars.fecha?.trim() || "")
+    .replace(/\{\{\s*hora\s*\}\}/gi, vars.hora?.trim() || "")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
@@ -187,3 +317,13 @@ export const birthdayDedupeKey = (year: number) => `birthday:${year}`;
 export const stageDedupeKey = (leadId: string, stageId: string) => `stage:${leadId}:${stageId}`;
 /** Una vez por lead. */
 export const leadCreatedDedupeKey = (leadId: string) => `lead_created:${leadId}`;
+/**
+ * Citas. La hora entra en la llave: al reprogramar, el flujo se rearma para la hora nueva, y reintentar el
+ * mismo disparo (o dos pestañas a la vez) no encola dos veces.
+ */
+export const bookingCreatedDedupeKey = (bookingId: string, scheduledAt: Date) =>
+  `booking_created:${bookingId}:${scheduledAt.getTime()}`;
+export const bookingConfirmedDedupeKey = (bookingId: string, scheduledAt: Date) =>
+  `booking_confirmed:${bookingId}:${scheduledAt.getTime()}`;
+/** Una vez por cita. */
+export const bookingNoShowDedupeKey = (bookingId: string) => `booking_no_show:${bookingId}`;

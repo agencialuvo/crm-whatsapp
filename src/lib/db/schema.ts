@@ -1647,6 +1647,11 @@ export const booking = pgTable(
     /** Módulo SALON: el servicio u oferta para el que se agendó (uno de los dos, o ninguno). */
     serviceId: text("service_id").references(() => service.id, { onDelete: "set null" }),
     comboId: text("combo_id").references(() => combo.id, { onDelete: "set null" }),
+    /**
+     * Cuándo se confirmó la asistencia (a mano desde la agenda, o por el flujo cuando el cliente responde que
+     * sí). null = sin confirmar. Reprogramar la cita la limpia: la hora nueva hay que confirmarla de nuevo.
+     */
+    confirmedAt: timestamp("confirmed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -1955,6 +1960,10 @@ export const automationFlow = pgTable(
         // El lead pasa a una etapa del embudo (`trigger_config.toStageId` la acota) / nace un lead nuevo.
         "stage_changed",
         "lead_created",
+        // La cita: se creó (o se movió) / se confirmó / el cliente no llegó.
+        "booking_created",
+        "booking_confirmed",
+        "booking_no_show",
       ],
     }).notNull(),
     /**
@@ -1980,7 +1989,8 @@ export const automationStep = pgTable(
       .notNull()
       .references(() => automationFlow.id, { onDelete: "cascade" }),
     stepType: text("step_type", {
-      enum: ["delay", "send_whatsapp", "condition", "add_tag"],
+      // `wait_until`: espera hasta una hora anclada a la cita (p. ej. «un día antes»).
+      enum: ["delay", "send_whatsapp", "condition", "add_tag", "wait_until"],
     }).notNull(),
     /** 
      * Configuración interna del nodo (JSON):
@@ -2028,9 +2038,16 @@ export const automationQueue = pgTable(
      * Los pasos siguientes de un flujo no la llevan (NULL: no choca).
      */
     dedupeKey: text("dedupe_key"),
+    /**
+     * La cita de la que nació la tarea (disparadores de cita). Es el contexto del paso: de ella salen la hora
+     * a la que se ancla `wait_until` y las variables `{{fecha}}`/`{{hora}}`, y con ella se revalida que siga
+     * vigente. Se copia al paso siguiente; al borrarse la cita se va la cola pendiente.
+     */
+    bookingId: text("booking_id").references(() => booking.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
+    index("automation_queue_booking_idx").on(t.bookingId),
     uniqueIndex("automation_queue_dedupe_uq").on(t.organizationId, t.flowId, t.contactId, t.dedupeKey),
     index("automation_queue_status_scheduled_idx").on(t.status, t.scheduledFor),
     index("automation_queue_org_contact_idx").on(t.organizationId, t.contactId),

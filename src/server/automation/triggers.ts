@@ -1,4 +1,7 @@
 import {
+  bookingConfirmedDedupeKey,
+  bookingCreatedDedupeKey,
+  bookingNoShowDedupeKey,
   birthdayDedupeKey,
   birthdaySendAt,
   birthdayTargetDate,
@@ -124,6 +127,144 @@ export async function onLeadCreated(
     return await enqueueForFlows(input, flows, leadCreatedDedupeKey(input.leadId), store, now);
   } catch (err) {
     console.error("[automatizaciones] el disparador de lead nuevo falló:", err);
+    return 0;
+  }
+}
+
+/* ─── Citas ─── */
+
+export type BookingEvent = {
+  organizationId: string;
+  bookingId: string;
+  /** Un bloqueo de agenda no tiene contacto: no dispara nada. */
+  contactId: string | null;
+  scheduledAt: Date;
+  /** Una cita del Laboratorio (sandbox) jamás dispara nada. */
+  isTest?: boolean;
+};
+
+/** Encola el primer paso de cada flujo de ese disparador, anclado a la cita. Sin chat real no hay a dónde mandar. */
+async function enqueueBookingFlows(
+  input: BookingEvent,
+  triggerType: "booking_created" | "booking_confirmed" | "booking_no_show",
+  dedupeKey: string,
+  store: TriggerStore,
+  now: () => Date
+): Promise<number> {
+  if (input.isTest || !input.contactId) return 0;
+  const flows = await store.activeFlows(input.organizationId, triggerType);
+  if (flows.length === 0) return 0;
+  if (!(await store.hasRealConversation(input.organizationId, input.contactId))) return 0;
+
+  let enqueued = 0;
+  for (const flow of flows) {
+    const inserted = await store.enqueueFirstStep({
+      organizationId: input.organizationId,
+      flowId: flow.id,
+      contactId: input.contactId,
+      scheduledFor: now(),
+      dedupeKey,
+      bookingId: input.bookingId,
+    });
+    if (inserted) enqueued += 1;
+  }
+  return enqueued;
+}
+
+/**
+ * Se agendó una cita: arranca cada flujo `booking_created` activo. La llave lleva la hora, así que un
+ * reintento no duplica y una reprogramación (otra hora) rearma el flujo. Nunca lanza: lo llama la agenda y
+ * un fallo aquí no puede costar la cita.
+ */
+export async function onBookingCreated(
+  input: BookingEvent,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    return await enqueueBookingFlows(input, "booking_created", bookingCreatedDedupeKey(input.bookingId, input.scheduledAt), store, now);
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de cita creada falló:", err);
+    return 0;
+  }
+}
+
+/** Se confirmó la asistencia: arranca cada flujo `booking_confirmed` activo. Nunca lanza. */
+export async function onBookingConfirmed(
+  input: BookingEvent,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    return await enqueueBookingFlows(input, "booking_confirmed", bookingConfirmedDedupeKey(input.bookingId, input.scheduledAt), store, now);
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de cita confirmada falló:", err);
+    return 0;
+  }
+}
+
+/**
+ * El cliente no llegó: cancela lo que quedaba pendiente de esa cita (los recordatorios ya no tienen
+ * sentido) y arranca cada flujo `booking_no_show` activo. Nunca lanza.
+ */
+export async function onBookingNoShow(
+  input: BookingEvent,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    // Los recordatorios ya no tienen sentido; la tarea del propio flujo de no-show NO se toca (así marcar dos
+    // veces «No asistió» no cancela el mensaje que acaba de encolarse).
+    await store.cancelPendingForBooking(input.organizationId, input.bookingId, "booking_no_show", {
+      exceptTrigger: "booking_no_show",
+    });
+    return await enqueueBookingFlows(input, "booking_no_show", bookingNoShowDedupeKey(input.bookingId), store, now);
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de no-show falló:", err);
+    return 0;
+  }
+}
+
+/**
+ * La cita cambió de hora: lo pendiente estaba anclado a la hora vieja, así que se cancela y se rearma
+ * `booking_created` con la hora nueva. Nunca lanza.
+ */
+export async function onBookingRescheduled(
+  input: BookingEvent,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    await store.cancelPendingForBooking(input.organizationId, input.bookingId, "booking_rescheduled");
+  } catch (err) {
+    console.error("[automatizaciones] no se pudo cancelar lo pendiente de la cita movida:", err);
+  }
+  return onBookingCreated(input, store, enabled, now);
+}
+
+/**
+ * La cita terminó (cancelada o realizada): lo que quedaba pendiente ya no aplica. Nunca lanza.
+ * `reason` queda en la tarea cancelada.
+ */
+export async function onBookingClosed(
+  input: { organizationId: string; bookingId: string },
+  reason: "booking_cancelled" | "booking_completed",
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    return await store.cancelPendingForBooking(input.organizationId, input.bookingId, reason);
+  } catch (err) {
+    console.error("[automatizaciones] no se pudo cancelar lo pendiente de la cita:", err);
     return 0;
   }
 }

@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -23,6 +23,13 @@ import {
 } from "@/server/agenda/connectors";
 import { ConnectorError } from "@/server/agenda/connectors/types";
 import { moveLeadToStage } from "@/server/leads/stage-history";
+import {
+  onBookingClosed,
+  onBookingConfirmed,
+  onBookingCreated,
+  onBookingNoShow,
+  onBookingRescheduled,
+} from "@/server/automation/triggers";
 import { publish } from "@/server/events/bus";
 import { notify } from "@/server/notifications/service";
 
@@ -251,6 +258,16 @@ export async function createSessionBooking(input: {
     data: { bookingId: delivered.id },
   });
 
+  // Automatizaciones: una cita nueva puede arrancar un flujo (recordatorios). Nunca lanza, y una cita de
+  // prueba jamás dispara nada.
+  await onBookingCreated({
+    organizationId: input.organizationId,
+    bookingId: delivered.id,
+    contactId,
+    scheduledAt: delivered.scheduledAt,
+    isTest,
+  });
+
   // Aviso al equipo solo cuando la agenda el agente de IA: la cita que agenda una
   // persona del equipo ya la conoce quien la agendó (y las de prueba no cuentan).
   if (input.source === "ai" && !isTest) {
@@ -340,7 +357,8 @@ export async function rescheduleBooking(input: {
   try {
     const updated = await db
       .update(schema.booking)
-      .set({ scheduledAt: new Date(slot.startUtc), updatedAt: new Date() })
+      // Reprogramar limpia la confirmación: la hora nueva hay que confirmarla de nuevo.
+      .set({ scheduledAt: new Date(slot.startUtc), confirmedAt: null, updatedAt: new Date() })
       .where(eq(schema.booking.id, booking.id))
       .returning();
     next = updated[0]!;
@@ -366,6 +384,18 @@ export async function rescheduleBooking(input: {
     type: "booking.updated",
     data: { bookingId: next.id },
   });
+
+  // Automatizaciones: lo pendiente estaba anclado a la hora vieja; se cancela y el flujo se rearma con la
+  // hora nueva. Nunca lanza.
+  if (next.kind === "session") {
+    await onBookingRescheduled({
+      organizationId: input.organizationId,
+      bookingId: next.id,
+      contactId: next.contactId,
+      scheduledAt: next.scheduledAt,
+      isTest: next.isTest,
+    });
+  }
   return {
     booking: next,
     meetingLink: next.meetingLink,
@@ -468,6 +498,9 @@ export async function cancelBooking(input: {
     type: "booking.updated",
     data: { bookingId: booking.id },
   });
+
+  // Automatizaciones: una cita cancelada ya no recibe recordatorios. Nunca lanza.
+  await onBookingClosed({ organizationId: input.organizationId, bookingId: booking.id }, "booking_cancelled");
 }
 
 export async function markBookingStatus(input: {
@@ -493,6 +526,77 @@ export async function markBookingStatus(input: {
     type: "booking.updated",
     data: { bookingId: booking.id },
   });
+
+  // Automatizaciones (nunca lanzan): «no asistió» cancela los recordatorios pendientes y arranca los flujos
+  // de no-show; «realizada» solo cancela lo pendiente.
+  if (booking.kind === "session") {
+    if (input.status === "no_show") {
+      await onBookingNoShow({
+        organizationId: input.organizationId,
+        bookingId: booking.id,
+        contactId: booking.contactId,
+        scheduledAt: booking.scheduledAt,
+        isTest: booking.isTest,
+      });
+    } else {
+      await onBookingClosed({ organizationId: input.organizationId, bookingId: booking.id }, "booking_completed");
+    }
+  }
+}
+
+/**
+ * Confirma la asistencia a una cita. La usan la agenda (botón «Confirmar asistencia», para quien confirmó
+ * por llamada o en persona) y, en la Fase 4, el paso `wait_reply` cuando el cliente confirma por WhatsApp.
+ *
+ * Idempotente: confirmar una cita ya confirmada no falla ni vuelve a disparar el flujo. La actualización es
+ * condicional (`confirmed_at is null`), así que dos confirmaciones simultáneas disparan UNA vez.
+ */
+export async function confirmBooking(input: {
+  organizationId: string;
+  bookingId: string;
+}): Promise<{ confirmedAt: Date; alreadyConfirmed: boolean }> {
+  const db = getDb();
+  const booking = await getOwnBooking(input.organizationId, input.bookingId);
+  if (booking.kind !== "session") {
+    throw new BookingError("invalid", "Un bloqueo no se confirma");
+  }
+  if (booking.status !== "agendada") {
+    throw new BookingError("invalid", "Solo se puede confirmar una cita agendada");
+  }
+  if (booking.confirmedAt) return { confirmedAt: booking.confirmedAt, alreadyConfirmed: true };
+
+  const now = new Date();
+  const updated = await db
+    .update(schema.booking)
+    .set({ confirmedAt: now, updatedAt: now })
+    .where(
+      and(
+        eq(schema.booking.id, booking.id),
+        eq(schema.booking.organizationId, input.organizationId),
+        eq(schema.booking.status, "agendada"),
+        isNull(schema.booking.confirmedAt)
+      )
+    )
+    .returning({ id: schema.booking.id });
+  if (updated.length === 0) {
+    // Otra confirmación (o una cancelación) se adelantó: lo que quedó guardado manda.
+    const again = await getOwnBooking(input.organizationId, input.bookingId);
+    if (again.status !== "agendada") throw new BookingError("invalid", "Solo se puede confirmar una cita agendada");
+    return { confirmedAt: again.confirmedAt ?? now, alreadyConfirmed: true };
+  }
+
+  publish(input.organizationId, {
+    type: "booking.updated",
+    data: { bookingId: booking.id },
+  });
+  await onBookingConfirmed({
+    organizationId: input.organizationId,
+    bookingId: booking.id,
+    contactId: booking.contactId,
+    scheduledAt: booking.scheduledAt,
+    isTest: booking.isTest,
+  });
+  return { confirmedAt: now, alreadyConfirmed: false };
 }
 
 /**

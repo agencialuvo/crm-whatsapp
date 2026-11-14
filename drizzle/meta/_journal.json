@@ -470,6 +470,13 @@
       "when": 1794691771292,
       "tag": "0066_true_jocasta",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1794693991230,
+      "tag": "0067_confused_bloodstrike",
+      "breakpoints": true
     }
   ]
 }

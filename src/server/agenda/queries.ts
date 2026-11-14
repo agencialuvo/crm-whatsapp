@@ -26,6 +26,8 @@ export type BookingListItem = {
   linkPending: boolean;
   isTest: boolean;
   notes: string | null;
+  /** Cuándo se confirmó la asistencia; null = sin confirmar. */
+  confirmedAt: string | null;
 };
 
 /** Tope del listado sin rango: el de siempre, que leen los guiones E2E. */
@@ -138,5 +140,6 @@ function toListItem(r: Row, timezone: string): BookingListItem {
     linkPending: r.booking.linkPending,
     isTest: r.booking.isTest,
     notes: r.booking.notes,
+    confirmedAt: r.booking.confirmedAt ? r.booking.confirmedAt.toISOString() : null,
   };
 }

@@ -1,14 +1,19 @@
 import {
   OUT_OF_WINDOW_ERROR,
+  applySendWindow,
   backoffMs,
+  bookingGuard,
   decideSend,
+  decideWaitUntil,
   delayConfigSchema,
   delayToMs,
   renderVars,
   sendWhatsappConfigSchema,
   stepLabel,
+  waitUntilConfigSchema,
   type SendDecision,
 } from "@/lib/automation";
+import { dayLabelInTz, timeInTz } from "@/lib/time/slots";
 import { isWindowOpen } from "@/server/inbox/window";
 
 /**
@@ -31,7 +36,15 @@ export type Row = {
   /** Intentos ya iniciados, incluido este (se suma al tomar la fila). */
   attempts: number;
   maxAttempts: number;
+  /** La cita de la que nació la tarea (disparadores de cita); null en el resto. */
+  bookingId: string | null;
 };
+
+/** Lo que el motor necesita de la cita de una tarea: si sigue vigente y a qué hora es. */
+export type BookingInfo = { status: string; scheduledAt: Date };
+
+/** Cómo avanza el flujo al terminar una tarea: `skip` omite los N pasos siguientes, `stop` no encola ninguno. */
+export type AdvanceOptions = { skip?: number; stop?: boolean };
 
 export type Step = { id: string; flowId: string; stepType: string; config: unknown };
 
@@ -73,8 +86,14 @@ export type Deps = {
   waMessageIdOf(organizationId: string, messageId: string): Promise<string | null>;
   hasSuccessLog(organizationId: string, queueId: string): Promise<boolean>;
   writeLog(entry: LogInput): Promise<void>;
+  /** La cita de una tarea de cita (`null` si ya no existe). */
+  loadBooking(organizationId: string, bookingId: string): Promise<BookingInfo | null>;
+  /** El disparador del flujo: de él depende qué estado de la cita lo mantiene vigente. */
+  flowTriggerType(organizationId: string, flowId: string): Promise<string | null>;
+  /** Zona horaria del negocio (Ajustes → Marca): la de las ventanas horarias y las variables de la cita. */
+  timezone(organizationId: string): Promise<string>;
   /** Completa la tarea y encola el paso siguiente para `nextAt` (una sola transacción). */
-  completeAndAdvance(row: Row, nextAt: Date): Promise<unknown>;
+  completeAndAdvance(row: Row, nextAt: Date, opts?: AdvanceOptions): Promise<unknown>;
   markFailed(row: Row, error: string): Promise<void>;
   markCancelled(row: Row, reason: string): Promise<void>;
   reschedule(row: Row, at: Date, error: string): Promise<void>;
@@ -122,6 +141,19 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       return "cancelled";
     }
 
+    // Una tarea de cita solo sigue si la cita sigue vigente: una cancelada, realizada o movida no recibe el
+    // recordatorio. Es la red de seguridad de la cancelación inmediata (también cubre el cobro en Caja).
+    let booking: BookingInfo | null = null;
+    if (row.bookingId) {
+      const trigger = await deps.flowTriggerType(row.organizationId, row.flowId);
+      booking = await deps.loadBooking(row.organizationId, row.bookingId);
+      const stale = bookingGuard(trigger ?? "", booking);
+      if (stale) {
+        await deps.markCancelled(row, stale);
+        return "cancelled";
+      }
+    }
+
     // La foto del paso: el historial se entiende aunque el nodo se edite o se borre después.
     const snapshot = {
       queueId: row.id,
@@ -156,7 +188,11 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
     if (step.stepType === "delay") {
       const cfg = delayConfigSchema.safeParse(step.config);
       if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
-      const nextAt = new Date(now.getTime() + delayToMs(cfg.data));
+      let nextAt = new Date(now.getTime() + delayToMs(cfg.data));
+      // Ventana horaria: tras esperar, no salir de madrugada o forzar una hora fija (en la zona del negocio).
+      if (cfg.data.window) {
+        nextAt = applySendWindow(nextAt, cfg.data.window, await deps.timezone(row.organizationId));
+      }
       await deps.writeLog({
         organizationId: row.organizationId,
         flowId: row.flowId,
@@ -167,6 +203,54 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         metadata: { ...snapshot, nextAt: nextAt.toISOString() },
       });
       await deps.completeAndAdvance(row, nextAt);
+      return "completed";
+    }
+
+    if (step.stepType === "wait_until") {
+      const cfg = waitUntilConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      // Sin cita no hay a qué anclar la espera (el flujo no es de citas).
+      if (!booking) return await fail("wait_until_requires_booking");
+      const decision = decideWaitUntil({
+        now,
+        scheduledAt: booking.scheduledAt,
+        config: cfg.data,
+        timezone: await deps.timezone(row.organizationId),
+      });
+      if (decision.kind === "wait") {
+        await deps.writeLog({
+          organizationId: row.organizationId,
+          flowId: row.flowId,
+          stepId: step.id,
+          contactId: row.contactId,
+          queueId: row.id,
+          status: "success",
+          metadata: { ...snapshot, bookingId: row.bookingId, bookingAt: booking.scheduledAt.toISOString(), nextAt: decision.at.toISOString() },
+        });
+        await deps.completeAndAdvance(row, decision.at);
+        return "completed";
+      }
+      // Ya es tarde (la cita se creó con menos anticipación, o la ventana pasaría de la hora de la cita).
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: {
+          ...snapshot,
+          bookingId: row.bookingId,
+          bookingAt: booking.scheduledAt.toISOString(),
+          late: true,
+          lateAction: decision.action,
+        },
+      });
+      await deps.completeAndAdvance(
+        row,
+        now,
+        decision.action === "skip_next" ? { skip: 1 } : decision.action === "stop" ? { stop: true } : undefined
+      );
       return "completed";
     }
 
@@ -201,7 +285,14 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       });
     }
 
-    const vars = { name: target.contactName };
+    // En un flujo de cita, el mensaje puede decir cuándo es: {{fecha}} y {{hora}} en la zona del negocio.
+    const tz = booking ? await deps.timezone(row.organizationId) : null;
+    const bookingIso = booking?.scheduledAt.toISOString();
+    const vars = {
+      name: target.contactName,
+      fecha: bookingIso && tz ? dayLabelInTz(bookingIso, tz, now) : null,
+      hora: bookingIso && tz ? timeInTz(bookingIso, tz) : null,
+    };
     let payload: Record<string, unknown>;
     let sent: { messageId: string };
     if (decision.kind === "text") {

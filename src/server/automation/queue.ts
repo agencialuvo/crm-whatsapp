@@ -87,6 +87,31 @@ export async function loadStep(organizationId: string, stepId: string): Promise<
   return row ?? null;
 }
 
+/** La cita de una tarea: su estado y su hora. `null` si ya no existe. */
+export async function loadBooking(
+  organizationId: string,
+  bookingId: string
+): Promise<{ status: string; scheduledAt: Date } | null> {
+  const b = schema.booking;
+  const [row] = await getDb()
+    .select({ status: b.status, scheduledAt: b.scheduledAt })
+    .from(b)
+    .where(scoped(b.organizationId, organizationId, eq(b.id, bookingId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** El disparador de un flujo (`booking_created`…), o `null` si el flujo ya no existe. */
+export async function flowTriggerType(organizationId: string, flowId: string): Promise<string | null> {
+  const f = schema.automationFlow;
+  const [row] = await getDb()
+    .select({ triggerType: f.triggerType })
+    .from(f)
+    .where(scoped(f.organizationId, organizationId, eq(f.id, flowId)))
+    .limit(1);
+  return row?.triggerType ?? null;
+}
+
 export async function isFlowActive(organizationId: string, flowId: string): Promise<boolean> {
   const f = schema.automationFlow;
   const [row] = await getDb()
@@ -182,7 +207,11 @@ export async function writeLog(entry: LogEntry): Promise<void> {
  * El «siguiente» es el que sigue en el orden del lienzo (`position_y`, `position_x`, id): la tabla
  * no tiene aristas, así que el orden visual es el orden de ejecución.
  */
-export async function completeAndAdvance(row: QueueRow, nextAt: Date): Promise<string | null> {
+export async function completeAndAdvance(
+  row: QueueRow,
+  nextAt: Date,
+  opts: { skip?: number; stop?: boolean } = {}
+): Promise<string | null> {
   return getDb().transaction(async (tx) => {
     const s = schema.automationStep;
     const q = schema.automationQueue;
@@ -192,7 +221,9 @@ export async function completeAndAdvance(row: QueueRow, nextAt: Date): Promise<s
       .where(scoped(s.organizationId, row.organizationId, eq(s.flowId, row.flowId)))
       .orderBy(asc(s.positionY), asc(s.positionX), asc(s.id));
     const at = steps.findIndex((x) => x.id === row.stepId);
-    const next = at >= 0 ? steps[at + 1] : undefined;
+    // `skip` omite los N pasos siguientes (la espera de una cita que ya pasó omite su mensaje); `stop`
+    // termina el flujo.
+    const next = at >= 0 && !opts.stop ? steps[at + 1 + Math.max(0, opts.skip ?? 0)] : undefined;
 
     await tx
       .update(q)
@@ -209,6 +240,8 @@ export async function completeAndAdvance(row: QueueRow, nextAt: Date): Promise<s
       stepId: next.id,
       scheduledFor: nextAt,
       maxAttempts: row.maxAttempts,
+      // La cita viaja con el flujo: el paso siguiente sigue anclado a ella.
+      bookingId: row.bookingId,
     });
     return id;
   });

@@ -4,13 +4,16 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { pickInitialPlan } from "@/server/business/plan-selection";
 
-/** Etapas sembradas del pipeline (US2). */
-const SEED_STAGES: { name: string; kind: "open" | "won" | "lost" }[] = [
+/**
+ * Etapas sembradas del pipeline (US2) para los negocios NUEVOS. Los existentes conservan las suyas: nada del
+ * sistema compara nombres de etapa (el motor de automatizaciones y el agente trabajan con `id` y `kind`).
+ */
+export const SEED_STAGES: { name: string; kind: "open" | "won" | "lost" }[] = [
   { name: "Nuevo", kind: "open" },
-  { name: "En conversación", kind: "open" },
-  { name: "Interesado", kind: "open" },
-  { name: "Cliente", kind: "won" },
-  { name: "Perdido", kind: "lost" },
+  { name: "Contactado", kind: "open" },
+  { name: "Citado", kind: "open" },
+  { name: "Convertido", kind: "won" },
+  { name: "No interesado", kind: "lost" },
 ];
 
 /** Sector con el que nace un negocio si el registro no dice otro. */

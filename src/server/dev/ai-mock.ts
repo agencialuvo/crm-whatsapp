@@ -169,7 +169,14 @@ export function aiMockCompletion(messages: InMessage[]): string {
     return JSON.stringify({ action: "handoff", reason: "cliente" });
   }
 
-  // Intención de compra → mover a Interesado.
+  // Intención de compra → mover a la etapa de interés que tenga ESTE negocio (el prompt las lista): los
+  // negocios nuevos nacen con «Contactado»; los anteriores conservan «Interesado».
+  const etapas = (messages
+    .map((m) => /Etapas del pipeline disponibles: (.+)/.exec(m.content)?.[1])
+    .find((x) => x) ?? "")
+    .split("|")
+    .map((x) => x.trim());
+  const etapaDeInteres = ["Interesado", "Contactado"].find((e) => etapas.includes(e)) ?? "Interesado";
   if (
     text.includes("lo compro") ||
     text.includes("quiero comprar") ||
@@ -177,7 +184,7 @@ export function aiMockCompletion(messages: InMessage[]): string {
   ) {
     return JSON.stringify({
       action: "move_stage",
-      stage: "Interesado",
+      stage: etapaDeInteres,
       reply: "¡Excelente! Te aparto el producto y un compañero te confirma el pago.",
     });
   }

@@ -91,6 +91,7 @@ type FakeOpts = {
 function fakeStore(o: FakeOpts = {}) {
   const keys = new Set<string>();
   const enqueued: EnqueueInput[] = [];
+  const cancelled: { bookingId: string; reason: string }[] = [];
   const store = {
     listOrganizationIds: vi.fn(async () => o.orgs ?? ["org_1"]),
     activeFlows: vi.fn(async (org: string, type: string) => {
@@ -113,8 +114,12 @@ function fakeStore(o: FakeOpts = {}) {
       enqueued.push(i);
       return true;
     }),
+    cancelPendingForBooking: vi.fn(async (_org: string, bookingId: string, reason: string) => {
+      cancelled.push({ bookingId, reason });
+      return 1;
+    }),
   } satisfies TriggerStore;
-  return { store, enqueued };
+  return { store, enqueued, cancelled };
 }
 
 const flow = (id: string, triggerConfig: unknown = null, organizationId = "org_1"): FlowRef => ({ id, organizationId, triggerConfig });
