@@ -101,7 +101,7 @@ describe("stepCreateSchema", () => {
       expect(r.success).toBe(false);
       if (!r.success) expect(r.error.issues[0]!.message).toContain("stepType debe ser uno de");
     }
-    expect(STEP_TYPES).toEqual(["send_whatsapp", "delay", "wait_until", "add_tag", "remove_tag", "set_stage", "condition"]);
+    expect(STEP_TYPES).toEqual(["send_whatsapp", "delay", "wait_until", "wait_reply", "add_tag", "remove_tag", "set_stage", "condition"]);
   });
   it("las posiciones valen 0 por defecto y se acotan a enteros razonables", () => {
     const ok = stepCreateSchema.parse({ stepType: "delay", config: { amount: 1, unit: "days" } });

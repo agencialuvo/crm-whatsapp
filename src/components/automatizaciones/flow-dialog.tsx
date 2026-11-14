@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
@@ -8,6 +8,7 @@ import { apiFetch, describeError } from "@/components/negocio/api";
 import { Field } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { BIRTHDAY_DEFAULT_HOUR } from "@/lib/automation";
+import type { AdFlowListDto } from "@/lib/ad-flow";
 import {
   flowCreateSchema,
   flowPatchSchema,
@@ -65,9 +66,31 @@ export function FlowDialog({
   const [stageId, setStageId] = useState(
     typeof flow?.triggerConfig?.toStageId === "string" ? flow.triggerConfig.toStageId : ""
   );
+  const [adSourceId, setAdSourceId] = useState(
+    typeof flow?.triggerConfig?.sourceId === "string" ? flow.triggerConfig.sourceId : ""
+  );
+  // Los anuncios detectados salen de Ajustes → Anuncios (solo del dueño o admin, y con la atribución encendida):
+  // si no se pueden listar, el campo es un texto libre con el id del anuncio.
+  const [ads, setAds] = useState<{ sourceId: string; headline: string | null }[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (triggerType !== "ad_referral") return;
+    let alive = true;
+    apiFetch<AdFlowListDto>("/api/settings/ad-flows")
+      .then((r) => alive && setAds(r.items.map((i) => ({ sourceId: i.sourceId, headline: i.headline }))))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [triggerType]);
+
+  const adOptions = useMemo<SearchSelectOption[]>(() => {
+    const list = ads.some((a) => a.sourceId === adSourceId) || !adSourceId ? ads : [...ads, { sourceId: adSourceId, headline: null }];
+    return list.map((a) => ({ value: a.sourceId, label: a.headline || a.sourceId, hint: a.headline ? a.sourceId : undefined }));
+  }, [ads, adSourceId]);
 
   /** Un error se va en cuanto la persona toca el campo que lo causó (no se queda en rojo ya corregido). */
   const clear = (...keys: string[]) =>
@@ -90,6 +113,7 @@ export function FlowDialog({
   function buildConfig(): Record<string, unknown> | null {
     if (triggerType === "birthday") return { hour: Number(hour), daysOffset: Number(daysOffset) };
     if (triggerType === "stage_changed" && stageId) return { toStageId: stageId };
+    if (triggerType === "ad_referral" && adSourceId.trim()) return { sourceId: adSourceId.trim() };
     return null;
   }
 
@@ -231,6 +255,44 @@ export function FlowDialog({
               ariaLabel="Hora del saludo"
               disabled={busy}
             />
+          </Field>
+        )}
+
+        {triggerType === "ad_referral" && (
+          <Field
+            label="Anuncio"
+            htmlFor="flow-ad"
+            error={errors.triggerConfig}
+            hint="Déjalo vacío para que se active con cualquier anuncio, o elige uno. Los anuncios aparecen aquí cuando ya llegó alguien desde ellos."
+          >
+            {adOptions.length > 0 ? (
+              <SearchSelect
+                id="flow-ad"
+                value={adSourceId}
+                onChange={(v) => {
+                  setAdSourceId(v);
+                  clear("triggerConfig");
+                }}
+                options={adOptions}
+                emptyLabel="Cualquier anuncio"
+                searchPlaceholder="Buscar anuncio…"
+                ariaLabel="Anuncio que activa el flujo"
+                disabled={busy}
+              />
+            ) : (
+              <Input
+                id="flow-ad"
+                value={adSourceId}
+                maxLength={200}
+                placeholder="ID del anuncio (opcional)"
+                autoComplete="off"
+                disabled={busy}
+                onChange={(e) => {
+                  setAdSourceId(e.target.value);
+                  clear("triggerConfig");
+                }}
+              />
+            )}
           </Field>
         )}
 

@@ -14,6 +14,7 @@ import {
   BRANCH_ACTION_LABELS,
   CONDITION_RULE_LABELS,
   DELAY_UNIT_LABELS,
+  REPLY_BRANCHES,
   WAIT_LATE_LABELS,
   nextPositionY,
   offsetMinutesOf,
@@ -24,7 +25,13 @@ import {
   type TagOption,
   type TemplateOption,
 } from "@/lib/automation-dto";
-import { BRANCH_ACTIONS, CONDITION_RULE_TYPES, WAIT_LATE_ACTIONS } from "@/lib/automation";
+import {
+  BRANCH_ACTIONS,
+  CONDITION_RULE_TYPES,
+  REPLY_TIMEOUT_DEFAULT_MINUTES,
+  WAIT_LATE_ACTIONS,
+} from "@/lib/automation";
+import { Switch } from "@/components/ui/switch";
 import { tagColorClass } from "@/lib/tags";
 import { countVariables } from "@/lib/templates";
 
@@ -119,6 +126,16 @@ export function StepDialog({
   const [ruleStageId, setRuleStageId] = useState(typeof rule?.stageId === "string" ? rule.stageId : "");
   const [ifTrue, setIfTrue] = useState<string>(typeof c.ifTrue === "string" ? c.ifTrue : "continue");
   const [ifFalse, setIfFalse] = useState<string>(typeof c.ifFalse === "string" ? c.ifFalse : "stop");
+  // Esperar respuesta: tiempo límite (cantidad + unidad), qué hacer en cada caso y si confirma la cita.
+  const replyTimeout = offsetParts(typeof c.timeoutMinutes === "number" ? c.timeoutMinutes : REPLY_TIMEOUT_DEFAULT_MINUTES);
+  const [replyAmount, setReplyAmount] = useState(String(replyTimeout.amount));
+  const [replyUnit, setReplyUnit] = useState<string>(replyTimeout.unit);
+  const [replyBranches, setReplyBranches] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      REPLY_BRANCHES.map((b) => [b.key, typeof c[b.key] === "string" ? (c[b.key] as string) : b.key === "onConfirmed" ? "continue" : "stop"])
+    )
+  );
+  const [confirmBookingOn, setConfirmBookingOn] = useState(typeof c.confirmBooking === "boolean" ? c.confirmBooking : true);
   const [newTagName, setNewTagName] = useState("");
   const [creatingTag, setCreatingTag] = useState(false);
   const [content, setContent] = useState(typeof c.content === "string" ? c.content : "");
@@ -204,6 +221,17 @@ export function StepDialog({
 
   function buildConfig(): Record<string, unknown> {
     const window = buildWindow();
+    if (stepType === "wait_reply") {
+      return {
+        ...(name.trim() && { name: name.trim() }),
+        timeoutMinutes:
+          replyAmount.trim() === ""
+            ? Number.NaN
+            : offsetMinutesOf("after", Number(replyAmount), replyUnit as "minutes" | "hours" | "days"),
+        ...replyBranches,
+        ...(isBookingFlow && { confirmBooking: confirmBookingOn }),
+      };
+    }
     if (stepType === "add_tag" || stepType === "remove_tag") {
       return { ...(name.trim() && { name: name.trim() }), tagId };
     }
@@ -249,6 +277,7 @@ export function StepDialog({
     const config = buildConfig();
     const found: Record<string, string> = {};
     if (stepType === "wait_until" && offsetAmount.trim() === "") found.offsetMinutes = "Escribe la cantidad";
+    if (stepType === "wait_reply" && replyAmount.trim() === "") found.timeoutMinutes = "Escribe cuánto esperar";
     // El esquema pide un id no vacío, pero «Elige una etiqueta» se entiende mejor que «String must contain 1 character».
     if ((stepType === "add_tag" || stepType === "remove_tag") && !tagId) found.tagId = "Elige una etiqueta";
     if (stepType === "set_stage" && !stageId) found.stageId = "Elige una etapa";
@@ -332,7 +361,66 @@ export function StepDialog({
           />
         </Field>
 
-        {stepType === "add_tag" || stepType === "remove_tag" ? (
+        {stepType === "wait_reply" ? (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Esperar hasta" required htmlFor="step-reply-amount" error={errors.timeoutMinutes} hint="Si no responde en ese tiempo, sale por «No responde a tiempo».">
+                <Input
+                  id="step-reply-amount"
+                  inputMode="numeric"
+                  value={replyAmount}
+                  maxLength={4}
+                  aria-invalid={!!errors.timeoutMinutes}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setReplyAmount(e.target.value.replace(/\D/g, ""));
+                    clear("timeoutMinutes");
+                  }}
+                />
+              </Field>
+              <Field label="Unidad" required htmlFor="step-reply-unit">
+                <SearchSelect
+                  id="step-reply-unit"
+                  value={replyUnit}
+                  onChange={setReplyUnit}
+                  options={UNIT_OPTIONS}
+                  searchPlaceholder="Buscar unidad…"
+                  ariaLabel="Unidad de tiempo"
+                  disabled={busy}
+                />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {REPLY_BRANCHES.map((b) => (
+                <Field key={b.key} label={b.label} htmlFor={`step-${b.key}`}>
+                  <SearchSelect
+                    id={`step-${b.key}`}
+                    value={replyBranches[b.key] ?? "stop"}
+                    onChange={(v) => setReplyBranches((prev) => ({ ...prev, [b.key]: v }))}
+                    options={BRANCH_OPTIONS}
+                    searchPlaceholder="Buscar…"
+                    ariaLabel={b.label}
+                    disabled={busy}
+                  />
+                </Field>
+              ))}
+            </div>
+            {isBookingFlow && (
+              <label className="flex items-center justify-between gap-3 rounded-md border bg-subtle px-3 py-2.5">
+                <span className="text-sm">
+                  <span className="font-medium">Confirmar la cita si confirma</span>
+                  <span className="block text-xs text-text-3">Igual que el botón «Confirmar asistencia» de la agenda.</span>
+                </span>
+                <Switch size="sm" checked={confirmBookingOn} label="Confirmar la cita si confirma" onCheckedChange={setConfirmBookingOn} />
+              </label>
+            )}
+            <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+              Entiende respuestas como «sí», «no puedo» o «quiero reagendar»; si no está seguro, cuenta como «responde
+              otra cosa». Un sticker o una imagen sin texto no cuenta como respuesta. Con «Terminar el flujo» el flujo
+              se detiene; con «Continuar» sigue con el paso que viene.
+            </p>
+          </>
+        ) : stepType === "add_tag" || stepType === "remove_tag" ? (
           <TagField
             label={stepType === "add_tag" ? "Etiqueta que se agrega" : "Etiqueta que se quita"}
             value={tagId}

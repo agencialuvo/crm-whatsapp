@@ -38,6 +38,7 @@ describe("disparadores", () => {
       "booking_created",
       "booking_confirmed",
       "booking_no_show",
+      "ad_referral",
     ]);
   });
   it("etiquetas en español, y un tipo desconocido se muestra tal cual", () => {

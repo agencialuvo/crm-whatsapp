@@ -61,6 +61,7 @@ export const TRIGGER_LABELS: Record<string, string> = {
   booking_created: "Cita agendada",
   booking_confirmed: "Cita confirmada",
   booking_no_show: "Cliente no asistió",
+  ad_referral: "Llegó de un anuncio",
 };
 
 /**
@@ -78,6 +79,8 @@ export const TRIGGER_HINTS: Record<(typeof CREATABLE_TRIGGERS)[number], string> 
     "Se activa al agendar una cita (y de nuevo si se reprograma). Ideal para recordatorios: usa «Esperar hasta la cita».",
   booking_confirmed: "Se activa cuando se confirma la asistencia a una cita.",
   booking_no_show: "Se activa cuando una cita se marca como «No asistió».",
+  ad_referral:
+    "Se activa cuando un cliente escribe desde un anuncio de Facebook o Instagram. Puedes acotarlo a un anuncio y usar {{servicio}} en los mensajes.",
 };
 
 export const triggerLabel = (type: string): string => TRIGGER_LABELS[type] ?? type;
@@ -131,6 +134,10 @@ export function describeTrigger(
       return "Cuando se confirma la asistencia a una cita";
     case "booking_no_show":
       return "Cuando una cita se marca como «No asistió»";
+    case "ad_referral":
+      return typeof config?.sourceId === "string"
+        ? `Cuando alguien llega del anuncio ${config.sourceId}`
+        : "Cuando alguien llega de cualquier anuncio";
     case "manual":
       return "Se inicia a mano";
     default:
@@ -148,6 +155,7 @@ export const STEP_LABELS: Record<string, string> = {
   remove_tag: "Quitar etiqueta",
   set_stage: "Mover de etapa",
   wait_until: "Esperar hasta la cita",
+  wait_reply: "Esperar respuesta",
 };
 
 export const stepLabel = (type: string): string => STEP_LABELS[type] ?? type;
@@ -227,6 +235,22 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   stage_is: "El lead está en la etapa",
 };
 
+/** Las ramas de «Esperar respuesta» en el orden del formulario: campo de la configuración → etiqueta. */
+export const REPLY_BRANCHES = [
+  { key: "onConfirmed", label: "Si confirma", intent: "confirmed" },
+  { key: "onDeclined", label: "Si dice que no", intent: "declined" },
+  { key: "onReschedule", label: "Si pide reagendar", intent: "reschedule" },
+  { key: "onOther", label: "Si responde otra cosa", intent: "other" },
+  { key: "onTimeout", label: "Si no responde a tiempo", intent: "timeout" },
+] as const;
+
+/** «7 días», «2 horas», «30 minutos» para el tiempo límite de la espera. */
+export function describeTimeout(minutes: number): string {
+  const { amount, unit } = offsetParts(minutes);
+  const label = DELAY_UNIT_LABELS[unit];
+  return `${amount} ${amount === 1 ? label.one : label.other}`;
+}
+
 export const BRANCH_ACTION_LABELS: Record<BranchAction, string> = {
   continue: "Continuar con el siguiente paso",
   skip_next: "Omitir el siguiente paso y continuar",
@@ -276,6 +300,18 @@ export function describeStep(
   if (step.stepType === "set_stage") {
     const n = refs.stages?.find((st) => st.id === c.stageId)?.name;
     return { title: `Mover a la etapa ${n ? `«${n}»` : "(ya no existe)"}`, detail: "No dispara otros flujos de cambio de etapa." };
+  }
+  if (step.stepType === "wait_reply") {
+    const minutes = typeof c.timeoutMinutes === "number" ? c.timeoutMinutes : 7 * 24 * 60;
+    const action = (key: string, fallback: BranchAction) => BRANCH_ACTION_LABELS[(c[key] as BranchAction) ?? fallback].toLowerCase();
+    return {
+      title: `Esperar respuesta (hasta ${describeTimeout(minutes)})`,
+      detail: [
+        `Confirma → ${action("onConfirmed", "continue")}`,
+        `Dice que no → ${action("onDeclined", "stop")}`,
+        `Sin respuesta → ${action("onTimeout", "stop")}`,
+      ].join(" · "),
+    };
   }
   if (step.stepType === "condition") {
     const t = (c.ifTrue as BranchAction) ?? "continue";

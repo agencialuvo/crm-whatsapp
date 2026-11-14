@@ -98,7 +98,9 @@ describe("esquemas de los pasos nuevos", () => {
     expect(STEP_TYPES).toEqual(expect.arrayContaining(["add_tag", "remove_tag", "set_stage", "condition"]));
     const ok = stepCreateSchema.safeParse({ stepType: "set_stage", config: { stageId: "stg_1" } });
     expect(ok.success).toBe(true);
-    for (const t of STEP_TYPES) expect(parseStepConfig(t, {}).ok).toBe(false); // todos exigen algo
+    // Todos exigen algo, salvo «Esperar respuesta»: todo en ella tiene valor por defecto (7 días, solo «confirmó» sigue).
+    for (const t of STEP_TYPES.filter((x) => x !== "wait_reply")) expect(parseStepConfig(t, {}).ok).toBe(false);
+    expect(parseStepConfig("wait_reply", {}).ok).toBe(true);
     expect(parseStepConfig("add_tag", { tagId: "tag_1" })).toEqual({ ok: true, value: { tagId: "tag_1" } });
     const bad = parseStepConfig("condition", { rule: { type: "tag_has" } });
     expect(bad.ok).toBe(false);

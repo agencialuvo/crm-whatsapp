@@ -75,8 +75,8 @@ describe("compileLinearEdges", () => {
 });
 
 describe("asas", () => {
-  it("el catálogo incluye las cinco y la condición mapea a true/false", () => {
-    expect(EDGE_HANDLES).toEqual(["default", "true", "false", "late", "timeout"]);
+  it("el catálogo incluye las nueve asas y la condición mapea a true/false", () => {
+    expect(EDGE_HANDLES).toEqual(["default", "true", "false", "late", "timeout", "confirmed", "declined", "reschedule", "other"]);
     expect(conditionHandle({ result: true })).toBe("true");
     expect(conditionHandle({ result: false })).toBe("false");
   });
