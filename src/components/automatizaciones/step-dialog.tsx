@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
@@ -72,7 +72,7 @@ const toNumber = (text: string): number => (text.trim() === "" ? Number.NaN : Nu
 export function StepDialog({
   flowId,
   step,
-  steps,
+  steps = [],
   templates,
   tags,
   stages,
@@ -80,12 +80,15 @@ export function StepDialog({
   onTagCreated,
   onClose,
   onSaved,
+  inline = false,
+  onApply,
 }: {
-  flowId: string;
+  /** Solo el modo diálogo guarda por la API de pasos; en `inline` no se usa. */
+  flowId?: string;
   /** `null` agrega un paso nuevo. */
   step: StepDto | null;
   /** Los pasos actuales: de ahí sale dónde cae el nuevo. */
-  steps: StepDto[];
+  steps?: StepDto[];
   templates: TemplateOption[];
   /** Etiquetas y etapas del negocio: lo que ofrecen `add_tag`, `set_stage` y `condition`. */
   tags: TagOption[];
@@ -94,8 +97,14 @@ export function StepDialog({
   triggerType: string;
   /** Una etiqueta creada «al vuelo» desde el diálogo, para que el detalle del flujo la conozca. */
   onTagCreated: (tag: TagOption) => void;
-  onClose: () => void;
-  onSaved: (step: StepDto) => void;
+  onClose?: () => void;
+  onSaved?: (step: StepDto) => void;
+  /**
+   * Presentación en el panel del lienzo (spec 036, D14): sin `Modal`, sin guardar por la API de pasos; la
+   * configuración válida se entrega en vivo con `onApply`. Las reglas del formulario son las mismas del diálogo.
+   */
+  inline?: boolean;
+  onApply?: (config: Record<string, unknown>) => void;
 }) {
   const editing = step !== null;
   const c = step?.config ?? {};
@@ -271,9 +280,8 @@ export function StepDialog({
     };
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setFormError(null);
+  /** Las reglas del formulario (las mismas del diálogo y del panel): los errores por campo y el resultado del esquema. */
+  function validate() {
     const config = buildConfig();
     const found: Record<string, string> = {};
     if (stepType === "wait_until" && offsetAmount.trim() === "") found.offsetMinutes = "Escribe la cantidad";
@@ -303,6 +311,13 @@ export function StepDialog({
     if (stepType === "send_whatsapp" && templateId && variableCount > 0 && variables.slice(0, variableCount).some((v) => !v.trim())) {
       found.variables = `Escribe el valor de ${variableCount === 1 ? "{{1}}" : `las ${variableCount} variables`} de la plantilla.`;
     }
+    return { found, parsed };
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    const { found, parsed } = validate();
     setErrors(found);
     if (Object.keys(found).length > 0 || !parsed.success) return;
 
@@ -313,21 +328,26 @@ export function StepDialog({
         // Editar manda solo la configuración: el tipo no cambia y el orden se mueve con las flechas.
         { method: editing ? "PATCH" : "POST", json: editing ? { config: parsed.data.config } : parsed.data }
       );
-      onSaved(saved);
+      onSaved?.(saved);
     } catch (err) {
       setFormError(describeError(err));
       setBusy(false);
     }
   }
 
-  return (
-    <Modal
-      title={editing ? "Editar paso" : "Agregar paso"}
-      description="Cada paso se ejecuta en orden, uno después del otro."
-      onClose={onClose}
-      busy={busy}
-      size="lg"
-    >
+  // Panel del lienzo: cada vez que la configuración cambia se valida y, si es válida, se entrega. Una inválida se
+  // muestra bajo su campo y no se aplica (el bloque conserva la última configuración buena).
+  const liveKey = inline ? JSON.stringify(buildConfig()) : "";
+  useEffect(() => {
+    if (!inline || !onApply) return;
+    const { found, parsed } = validate();
+    setErrors(found);
+    if (Object.keys(found).length === 0 && parsed.success) onApply(parsed.data.config as Record<string, unknown>);
+    // `validate` y `onApply` cambian en cada render; lo que dispara el efecto es la configuración.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKey]);
+
+  const form = (
       <form onSubmit={submit} noValidate className="space-y-4">
         <Field label="Tipo de paso" required htmlFor="step-type" hint={editing ? "El tipo no se puede cambiar: elimina el paso y crea otro." : undefined}>
           {editing ? (
@@ -390,6 +410,7 @@ export function StepDialog({
                 />
               </Field>
             </div>
+            {!inline && (
             <div className="grid gap-4 sm:grid-cols-2">
               {REPLY_BRANCHES.map((b) => (
                 <Field key={b.key} label={b.label} htmlFor={`step-${b.key}`}>
@@ -405,6 +426,7 @@ export function StepDialog({
                 </Field>
               ))}
             </div>
+            )}
             {isBookingFlow && (
               <label className="flex items-center justify-between gap-3 rounded-md border bg-subtle px-3 py-2.5">
                 <span className="text-sm">
@@ -416,8 +438,10 @@ export function StepDialog({
             )}
             <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
               Entiende respuestas como «sí», «no puedo» o «quiero reagendar»; si no está seguro, cuenta como «responde
-              otra cosa». Un sticker o una imagen sin texto no cuenta como respuesta. Con «Terminar el flujo» el flujo
-              se detiene; con «Continuar» sigue con el paso que viene.
+              otra cosa». Un sticker o una imagen sin texto no cuenta como respuesta.{" "}
+              {inline
+                ? "Conecta cada salida del bloque (Confirma, No, Reagendar, Otra cosa, Sin respuesta) a lo que debe pasar; una salida sin conectar termina el flujo."
+                : "Con «Terminar el flujo» el flujo se detiene; con «Continuar» sigue con el paso que viene."}
             </p>
           </>
         ) : stepType === "add_tag" || stepType === "remove_tag" ? (
@@ -523,6 +547,7 @@ export function StepDialog({
                 Se mira al llegar a este paso: si el cliente confirmó mientras el flujo esperaba, cuenta como confirmada.
               </p>
             )}
+            {!inline && (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Si es verdadero" htmlFor="step-if-true">
                 <SearchSelect
@@ -547,9 +572,11 @@ export function StepDialog({
                 />
               </Field>
             </div>
+            )}
             <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
-              Hoy los pasos se ejecutan en fila: la condición decide si el flujo sigue, se salta el siguiente paso o
-              termina. Más adelante cada resultado podrá llevar a un camino distinto.
+              {inline
+                ? "Conecta la salida «Sí» y la salida «No» a lo que debe pasar en cada caso; una salida sin conectar termina el flujo."
+                : "Hoy los pasos se ejecutan en fila: la condición decide si el flujo sigue, se salta el siguiente paso o termina. Más adelante cada resultado podrá llevar a un camino distinto."}
             </p>
           </>
         ) : stepType === "wait_until" ? (
@@ -592,6 +619,7 @@ export function StepDialog({
                 />
               </Field>
             </div>
+            {!inline && (
             <Field
               label="Si esa hora ya pasó"
               htmlFor="step-late"
@@ -607,9 +635,11 @@ export function StepDialog({
                 disabled={busy}
               />
             </Field>
+            )}
             <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
               Solo para flujos de citas. Los pasos que siguen se ejecutan a esa hora, y se cancelan solos si la cita se
               cancela o se reprograma.
+              {inline && " Conecta la salida «Si ya pasó» a lo que debe hacerse cuando esa hora ya pasó."}
             </p>
           </>
         ) : stepType === "delay" ? (
@@ -826,12 +856,26 @@ export function StepDialog({
           </fieldset>
         )}
 
-        <ModalFooter error={formError}>
-          <Button type="submit" disabled={busy}>
-            {busy ? "Guardando…" : editing ? "Guardar cambios" : "Agregar paso"}
-          </Button>
-        </ModalFooter>
+        {!inline && (
+          <ModalFooter error={formError}>
+            <Button type="submit" disabled={busy}>
+              {busy ? "Guardando…" : editing ? "Guardar cambios" : "Agregar paso"}
+            </Button>
+          </ModalFooter>
+        )}
       </form>
+  );
+
+  if (inline) return form;
+  return (
+    <Modal
+      title={editing ? "Editar paso" : "Agregar paso"}
+      description="Cada paso se ejecuta en orden, uno después del otro."
+      onClose={onClose ?? (() => undefined)}
+      busy={busy}
+      size="lg"
+    >
+      {form}
     </Modal>
   );
 }

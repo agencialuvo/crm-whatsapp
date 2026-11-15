@@ -1,0 +1,38 @@
+/*
+  El lienzo de Automatizaciones: los tokens de React Flow apuntan a los del sistema de diseño de Vocero, así el
+  tema claro/oscuro y el acento de la marca (white-label) funcionan sin un segundo juego de colores.
+*/
+.vocero-flow {
+  --xy-background-color: var(--bg-subtle);
+  --xy-background-pattern-dots-color-default: var(--border-strong);
+  --xy-edge-stroke-default: var(--text-3);
+  --xy-edge-stroke-selected-default: var(--accent);
+  --xy-edge-stroke-width-default: 1.6;
+  --xy-edge-label-color-default: var(--text-2);
+  --xy-edge-label-background-color-default: var(--bg);
+  --xy-handle-background-color-default: var(--accent);
+  --xy-handle-border-color-default: var(--bg);
+  --xy-connectionline-stroke-default: var(--accent);
+  --xy-minimap-background-color-default: var(--bg);
+  --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--bg-subtle) 70%, transparent);
+  --xy-controls-button-background-color-default: var(--bg);
+  --xy-controls-button-background-color-hover-default: var(--bg-hover);
+  --xy-controls-button-color-default: var(--text-2);
+  --xy-controls-button-border-color-default: var(--border-strong);
+  --xy-attribution-background-color-default: transparent;
+}
+
+/* Las asas, más grandes que las de fábrica: se agarran mejor con el mouse y con el dedo. */
+.vocero-flow .react-flow__handle {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.vocero-flow .react-flow__edge-textbg {
+  stroke: var(--border-strong);
+}
+
+.vocero-flow .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--accent);
+}

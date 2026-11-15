@@ -26,6 +26,7 @@ import { Switch } from "@/components/ui/switch";
 import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
 import { HistoryPanel } from "@/components/automatizaciones/history-panel";
 import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
+import { FlowCanvasLazy } from "@/components/automatizaciones/canvas/flow-canvas-loader";
 import { StepDialog } from "@/components/automatizaciones/step-dialog";
 import { apiErrorStatus, apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog } from "@/components/negocio/modal";
@@ -81,6 +82,12 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
   const [removeStep, setRemoveStep] = useState<StepDto | null>(null);
   const [removeFlow, setRemoveFlow] = useState(false);
+  // Modo Visual: si el lienzo tiene cambios sin guardar, volver al Modo Simple pide confirmación.
+  const [canvasDirty, setCanvasDirty] = useState(false);
+  const [confirmSimple, setConfirmSimple] = useState(false);
+  const [modeBusy, setModeBusy] = useState(false);
+  // El motivo por el que no se pudo cambiar de modo: se muestra junto al lienzo/lista, no arriba de la página.
+  const [modeError, setModeError] = useState<string | null>(null);
   const [tab, setTab] = useState<"pasos" | "historial">("pasos");
   const [historyKey, setHistoryKey] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -115,6 +122,24 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Cambia entre Modo Simple y Modo Visual. Simple → Visual siempre se puede; Visual → Simple solo si el grafo
+   * cabe en una lista (si no, el servidor responde 409 con los motivos y no toca nada).
+   */
+  async function changeMode(mode: "simple" | "canvas") {
+    setModeError(null);
+    setModeBusy(true);
+    try {
+      await apiFetch(`/api/automations/${flowId}/mode`, { method: "POST", json: { mode } });
+      setCanvasDirty(false);
+      await load();
+    } catch (err) {
+      setModeError(describeError(err));
+    } finally {
+      setModeBusy(false);
+    }
+  }
 
   async function toggleActive(active: boolean) {
     if (!flow) return;
@@ -239,7 +264,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const block = activationBlock(steps.length, flow.active);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
+    <div className={cn("mx-auto space-y-5", flow.editorMode === "canvas" && tab === "pasos" ? "max-w-[1500px]" : "max-w-5xl")}>
       {back}
 
       <section className="rounded-lg border border-border-strong bg-card p-4 shadow-sm sm:p-5" aria-label="Datos del flujo">
@@ -311,7 +336,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
       <div role="tablist" aria-label="Secciones del flujo" className="flex gap-1 border-b">
         {(
           [
-            ["pasos", "Pasos"],
+            ["pasos", flow.editorMode === "canvas" ? "Lienzo" : "Pasos"],
             ["historial", "Historial"],
           ] as const
         ).map(([value, label]) => (
@@ -339,16 +364,49 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
         </div>
       )}
 
-      {tab === "pasos" && (
+      {tab === "pasos" && flow.editorMode === "canvas" && (
+        <section id="panel-pasos" role="tabpanel" aria-labelledby="tab-pasos" aria-label="Lienzo del flujo" className="space-y-3">
+          {modeError && (
+            <p role="alert" className="rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text">
+              {modeError}
+            </p>
+          )}
+          <FlowCanvasLazy
+            flowId={flow.id}
+            active={flow.active}
+            templates={templates}
+            tags={tags}
+            stages={stages}
+            onTagCreated={(t) => setTags((prev) => (prev.some((x) => x.id === t.id) ? prev : [...prev, t]))}
+            onFlowChanged={() => void load()}
+            onDirtyChange={setCanvasDirty}
+            onBackToSimple={() => (canvasDirty ? setConfirmSimple(true) : void changeMode("simple"))}
+          />
+          {modeBusy && <p className="text-xs text-text-3">Cambiando de modo…</p>}
+        </section>
+      )}
+
+      {tab === "pasos" && flow.editorMode !== "canvas" && (
       <section id="panel-pasos" role="tabpanel" aria-labelledby="tab-pasos" aria-label="Pasos del flujo" className="max-w-3xl space-y-3">
+        {modeError && (
+          <p role="alert" className="rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text">
+            {modeError}
+          </p>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-[15px] font-bold tracking-tight">
             Pasos <span className="font-normal text-text-3">({ordered.length})</span>
           </h3>
-          <Button size="sm" onClick={() => setStepDialog({ step: null })}>
-            <Plus className="h-4 w-4" aria-hidden />
-            Agregar paso
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" disabled={modeBusy} onClick={() => void changeMode("canvas")} title="Dibuja el flujo con ramas y saltos">
+              <Workflow className="h-4 w-4" aria-hidden />
+              {modeBusy ? "Abriendo…" : "Modo Visual"}
+            </Button>
+            <Button size="sm" onClick={() => setStepDialog({ step: null })}>
+              <Plus className="h-4 w-4" aria-hidden />
+              Agregar paso
+            </Button>
+          </div>
         </div>
 
         {ordered.length === 0 ? (
@@ -489,6 +547,16 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           confirmLabel="Eliminar"
           onClose={() => setRemoveStep(null)}
           onConfirm={() => deleteStep(removeStep)}
+        />
+      )}
+
+      {confirmSimple && (
+        <ConfirmDialog
+          title="Cambios sin guardar"
+          message="Hay cambios en el lienzo que no se han guardado. Si vuelves al Modo Simple ahora, se descartan."
+          confirmLabel="Descartar y volver"
+          onClose={() => setConfirmSimple(false)}
+          onConfirm={() => changeMode("simple")}
         />
       )}
 
