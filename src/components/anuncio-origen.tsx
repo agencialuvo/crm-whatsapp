@@ -72,6 +72,17 @@ export function AnuncioOrigen({ anuncio }: { anuncio: AnuncioDto }) {
         {etiqueta === "Anuncio" ? "Llegó por un anuncio" : "Llegó por una publicación"}
       </p>
 
+      {/* 038 — Campaña › Conjunto › Anuncio, solo si la Marketing API ya los trajo. */}
+      {(anuncio.campaignName || anuncio.adsetName || anuncio.adName) && (
+        <p
+          className="mt-1.5 break-words text-[12px] leading-snug text-info-text"
+          data-jerarquia
+          title={[anuncio.campaignName, anuncio.adsetName, anuncio.adName].filter(Boolean).join(" › ")}
+        >
+          {[anuncio.campaignName, anuncio.adsetName, anuncio.adName].filter(Boolean).join(" › ")}
+        </p>
+      )}
+
       <div className="mt-2 flex items-start gap-2.5">
         {anuncio.imageAssetId && !imagenRota && (
           // eslint-disable-next-line @next/next/no-img-element -- adjunto privado servido con sesión; no hay host que optimizar

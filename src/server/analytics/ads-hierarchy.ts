@@ -1,0 +1,360 @@
+import { and, between, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { getDb, schema } from "@/lib/db";
+import { scoped } from "@/lib/db/tenant";
+import {
+  costOf,
+  rate,
+  type AdGroupBy,
+  type AdGroupRowDto,
+  type AdRowDto,
+  type AdsHierarchyDto,
+  type SpendDto,
+} from "@/lib/analytics";
+import { countsByStatus } from "@/server/attribution/meta-ads/catalog";
+import type { ResolvedPeriod } from "@/server/analytics/period";
+import { firstAttributionIdExpr, notLabContact } from "@/server/analytics/shared";
+
+/**
+ * 038 — Campaña › Conjunto › Anuncio y gasto sobre los conteos de 019.
+ *
+ * Dos mitades a propósito: cargadores de base de datos al final, y una función
+ * PURA (`armarJerarquia`) que combina lo cargado. Así cada regla —qué fila
+ * aparece, cuándo un costo es «—», cómo se agrupa— se prueba sin base.
+ *
+ * Reglas que no se mezclan (spec 038, D9):
+ *  - el gasto de una fila es la suma de sus días del rango; sin ningún día
+ *    registrado es `null`, no 0;
+ *  - un costo es `gasto ÷ resultados` y es `null` si falta el gasto o el
+ *    denominador es 0;
+ *  - al agrupar, el denominador cuenta solo los anuncios CON gasto conocido: con
+ *    los demás el costo saldría más barato de lo que fue.
+ */
+
+export const SIN_IDENTIFICAR = "sin-identificar";
+export const MAX_GRUPOS = 100;
+
+export type AdsQuery = {
+  group: AdGroupBy;
+  /** Id de campaña, o `sin-identificar`. */
+  campaignId: string | null;
+  adsetId: string | null;
+};
+
+export const CONSULTA_POR_DEFECTO: AdsQuery = { group: "ad", campaignId: null, adsetId: null };
+
+export type CatalogEntry = {
+  adId: string;
+  adName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+};
+
+export type SpendEntry = { amount: number; currencies: string[] };
+
+export type FilaConInstante = AdRowDto & { lastAt: number };
+
+export type HierarchyInput = {
+  rows: FilaConInstante[];
+  catalog: Map<string, CatalogEntry>;
+  spend: Map<string, SpendEntry>;
+  /** `null` con la agenda apagada: ni citas ni costo por cita. */
+  bookings: Map<string, number> | null;
+  query: AdsQuery;
+  maxAds: number;
+};
+
+export type HierarchyOutput = {
+  ads: AdRowDto[];
+  groups: AdGroupRowDto[];
+  campaigns: { id: string; name: string }[];
+  adsets: { id: string; name: string; campaignId: string | null }[];
+  mixedCurrency: boolean;
+};
+
+const SIN_COSTOS: SpendDto = {
+  spend: null,
+  costPerConversation: null,
+  costPerLead: null,
+  costPerBooking: null,
+};
+
+function redondear(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function costos(
+  spend: number | null,
+  base: { conversations: number; leads: number; bookings: number | null }
+): SpendDto {
+  if (spend === null) return SIN_COSTOS;
+  return {
+    spend: redondear(spend),
+    costPerConversation: costOf(spend, base.conversations),
+    costPerLead: costOf(spend, base.leads),
+    costPerBooking: costOf(spend, base.bookings),
+  };
+}
+
+export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
+  const monedas = new Set<string>();
+  for (const s of i.spend.values()) for (const c of s.currencies) monedas.add(c);
+  const mixedCurrency = monedas.size > 1;
+
+  // 1. Las filas de 019 más los anuncios que solo tienen gasto (dinero sin una sola conversación).
+  const porClave = new Map<string, FilaConInstante>();
+  for (const r of i.rows) porClave.set(r.key, r);
+  for (const [adId] of i.spend) {
+    if (porClave.has(adId)) continue;
+    const nombre = i.catalog.get(adId)?.adName ?? null;
+    porClave.set(adId, {
+      key: adId,
+      sourceId: adId,
+      sourceType: "ad",
+      headline: nombre,
+      imageAssetId: null,
+      conversations: 0,
+      leads: 0,
+      won: 0,
+      winRate: rate(0, 0),
+      lastAt: 0,
+    });
+  }
+
+  // 2. Jerarquía, citas y gasto de cada fila.
+  const enriquecidas = [...porClave.values()].map((r) => {
+    const cat = r.sourceId ? i.catalog.get(r.sourceId) : undefined;
+    const gasto = i.spend.get(r.key) ?? (r.sourceId ? i.spend.get(r.sourceId) : undefined);
+    const bookings = i.bookings ? (i.bookings.get(r.key) ?? 0) : null;
+    const spend = gasto && !mixedCurrency ? gasto.amount : null;
+    return {
+      ...r,
+      adName: cat?.adName ?? null,
+      adsetId: cat?.adsetId ?? null,
+      adsetName: cat?.adsetName ?? null,
+      campaignId: cat?.campaignId ?? null,
+      campaignName: cat?.campaignName ?? null,
+      bookings,
+      ...costos(spend, { conversations: r.conversations, leads: r.leads, bookings }),
+    };
+  });
+
+  // 3. Opciones de los filtros: lo que hay en el rango, sin filtrar todavía.
+  const campaigns = new Map<string, string>();
+  const adsets = new Map<string, { name: string; campaignId: string | null }>();
+  for (const r of enriquecidas) {
+    if (r.campaignId) campaigns.set(r.campaignId, r.campaignName ?? r.campaignId);
+    if (r.adsetId) adsets.set(r.adsetId, { name: r.adsetName ?? r.adsetId, campaignId: r.campaignId });
+  }
+
+  // 4. Filtros.
+  const coincide = (valor: string | null, filtro: string | null) =>
+    filtro === null || (filtro === SIN_IDENTIFICAR ? valor === null : valor === filtro);
+  const filtradas = enriquecidas.filter(
+    (r) => coincide(r.campaignId, i.query.campaignId) && coincide(r.adsetId, i.query.adsetId)
+  );
+
+  const ordenadas = [...filtradas].sort(
+    (a, b) =>
+      b.conversations - a.conversations ||
+      b.leads - a.leads ||
+      (b.spend ?? -1) - (a.spend ?? -1) ||
+      b.lastAt - a.lastAt
+  );
+
+  const ads: AdRowDto[] = ordenadas.slice(0, i.maxAds).map(({ lastAt: _lastAt, ...fila }) => fila);
+
+  // 5. Agrupar por conjunto o campaña.
+  let groups: AdGroupRowDto[] = [];
+  if (i.query.group !== "ad") {
+    const nivel = i.query.group;
+    type Acum = {
+      key: string;
+      name: string;
+      campaignName: string | null;
+      ads: number;
+      conversations: number;
+      leads: number;
+      won: number;
+      bookings: number | null;
+      spend: number | null;
+      cConv: number;
+      cLeads: number;
+      cBook: number | null;
+    };
+    const acum = new Map<string, Acum>();
+    for (const r of filtradas) {
+      const id = nivel === "campaign" ? r.campaignId : r.adsetId;
+      const key = id ?? SIN_IDENTIFICAR;
+      const name = id
+        ? ((nivel === "campaign" ? r.campaignName : r.adsetName) ?? id)
+        : "Sin identificar";
+      const g =
+        acum.get(key) ??
+        ({
+          key,
+          name,
+          campaignName: nivel === "adset" ? r.campaignName : null,
+          ads: 0,
+          conversations: 0,
+          leads: 0,
+          won: 0,
+          bookings: i.bookings ? 0 : null,
+          spend: null,
+          cConv: 0,
+          cLeads: 0,
+          cBook: i.bookings ? 0 : null,
+        } satisfies Acum);
+      g.ads += 1;
+      g.conversations += r.conversations;
+      g.leads += r.leads;
+      g.won += r.won;
+      if (g.bookings !== null) g.bookings += r.bookings ?? 0;
+      if (r.spend !== null && r.spend !== undefined) {
+        g.spend = (g.spend ?? 0) + r.spend;
+        g.cConv += r.conversations;
+        g.cLeads += r.leads;
+        if (g.cBook !== null) g.cBook += r.bookings ?? 0;
+      }
+      acum.set(key, g);
+    }
+    groups = [...acum.values()]
+      .map((g): AdGroupRowDto => ({
+        key: g.key,
+        level: nivel,
+        name: g.name,
+        campaignName: g.campaignName,
+        ads: g.ads,
+        conversations: g.conversations,
+        leads: g.leads,
+        won: g.won,
+        winRate: rate(g.won, g.leads),
+        bookings: g.bookings,
+        ...costos(g.spend, { conversations: g.cConv, leads: g.cLeads, bookings: g.cBook }),
+      }))
+      .sort(
+        (a, b) =>
+          b.conversations - a.conversations ||
+          (b.spend ?? -1) - (a.spend ?? -1) ||
+          a.name.localeCompare(b.name, "es")
+      )
+      .slice(0, MAX_GRUPOS);
+  }
+
+  return {
+    ads,
+    groups,
+    campaigns: [...campaigns].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "es")),
+    adsets: [...adsets]
+      .map(([id, v]) => ({ id, name: v.name, campaignId: v.campaignId }))
+      .sort((a, b) => a.name.localeCompare(b.name, "es")),
+    mixedCurrency,
+  };
+}
+
+/* ── Cargadores ─────────────────────────────────────────────────── */
+
+export async function cargarCatalogo(organizationId: string): Promise<Map<string, CatalogEntry>> {
+  const filas = await getDb()
+    .select({
+      adId: schema.metaAd.adId,
+      adName: schema.metaAd.adName,
+      adsetId: schema.metaAd.adsetId,
+      adsetName: schema.metaAd.adsetName,
+      campaignId: schema.metaAd.campaignId,
+      campaignName: schema.metaAd.campaignName,
+    })
+    .from(schema.metaAd)
+    .where(scoped(schema.metaAd.organizationId, organizationId, eq(schema.metaAd.status, "synced")));
+  return new Map(filas.map((f) => [f.adId, f]));
+}
+
+/** Gasto por anuncio en las fechas locales del periodo (inclusivas). */
+export async function cargarGasto(
+  organizationId: string,
+  period: ResolvedPeriod
+): Promise<Map<string, SpendEntry>> {
+  const filas = await getDb()
+    .select({
+      adId: schema.metaAdSpend.adId,
+      amount: sql<string>`sum(${schema.metaAdSpend.spend})::text`,
+      currencies: sql<string[]>`array_agg(distinct ${schema.metaAdSpend.currency})`,
+    })
+    .from(schema.metaAdSpend)
+    .where(
+      scoped(
+        schema.metaAdSpend.organizationId,
+        organizationId,
+        between(schema.metaAdSpend.day, period.dto.from, period.dto.to)
+      )
+    )
+    .groupBy(schema.metaAdSpend.adId);
+  return new Map(filas.map((f) => [f.adId, { amount: Number(f.amount), currencies: f.currencies }]));
+}
+
+/**
+ * Citas agendadas en el periodo por quienes llegaron de cada anuncio (su PRIMER
+ * anuncio, como en 019: un contacto cuenta una vez). Sin canceladas ni pruebas.
+ */
+export async function cargarCitasPorAnuncio(
+  organizationId: string,
+  period: ResolvedPeriod
+): Promise<Map<string, number>> {
+  const llave = sql<string>`coalesce(${schema.adAttribution.sourceId}, ${schema.adAttribution.id})`;
+  const filas = await getDb()
+    .select({ key: llave, n: sql<number>`count(*)::int` })
+    .from(schema.booking)
+    .innerJoin(
+      schema.adAttribution,
+      and(
+        eq(schema.adAttribution.organizationId, schema.booking.organizationId),
+        eq(schema.adAttribution.contactId, schema.booking.contactId),
+        sql`${schema.adAttribution.id} = ${firstAttributionIdExpr(schema.booking.organizationId, schema.booking.contactId)}`
+      )
+    )
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        organizationId,
+        eq(schema.booking.kind, "session"),
+        eq(schema.booking.isTest, false),
+        ne(schema.booking.status, "cancelada"),
+        gte(schema.booking.createdAt, period.start),
+        lt(schema.booking.createdAt, period.end),
+        notLabContact(schema.booking.contactId)
+      )
+    )
+    .groupBy(llave);
+  return new Map(filas.map((f) => [f.key, f.n]));
+}
+
+/** El estado del conector para la pantalla: sin descifrar nada. */
+export async function cargarEstado(
+  organizationId: string,
+  catalog: Map<string, CatalogEntry>,
+  mixedCurrency: boolean,
+  monedaDelGasto: string | null
+): Promise<AdsHierarchyDto> {
+  const filas = await getDb()
+    .select({
+      status: schema.metaAdsSettings.status,
+      lastError: schema.metaAdsSettings.lastError,
+      currency: schema.metaAdsSettings.currency,
+      lastSpendSyncAt: schema.metaAdsSettings.lastSpendSyncAt,
+    })
+    .from(schema.metaAdsSettings)
+    .where(scoped(schema.metaAdsSettings.organizationId, organizationId))
+    .limit(1);
+  const s = filas[0];
+  const counts = s ? await countsByStatus(organizationId) : { pending: 0, failed: 0 };
+  return {
+    connected: !!s,
+    problem: s?.status === "error" ? (s.lastError ?? "El conector tiene un problema") : null,
+    currency: s?.currency ?? monedaDelGasto,
+    lastSyncAt: s?.lastSpendSyncAt?.toISOString() ?? null,
+    pending: counts.pending,
+    mixedCurrency,
+    hasData: catalog.size > 0,
+  };
+}

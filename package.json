@@ -23,6 +23,7 @@
     "test:e2e:salon": "node --env-file=.env scripts/e2e-salon.mjs",
     "test:e2e:automations": "node --env-file=.env scripts/e2e-automations.mjs",
     "test:e2e:medios": "node --env-file=.env scripts/e2e-medios.mjs",
+    "test:e2e:meta-ads": "node --env-file=.env scripts/e2e-meta-ads.mjs",
     "eval:silencios": "esbuild scripts/eval-silencios.ts --bundle --platform=node --format=esm --outfile=.tmp-eval-silencios.mjs --alias:@=./src --log-level=warning && node --env-file=.env .tmp-eval-silencios.mjs",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",

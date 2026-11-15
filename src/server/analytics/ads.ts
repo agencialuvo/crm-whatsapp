@@ -9,7 +9,18 @@ import {
   type SourceKey,
   type SourceRowDto,
 } from "@/lib/analytics";
+import { agendaEnabled } from "@/server/agenda/flag";
+import { atribucionEnabled } from "@/server/attribution/flag";
 import { SOURCE_LABELS, SOURCE_VALUES } from "@/server/contact-source";
+import {
+  armarJerarquia,
+  cargarCatalogo,
+  cargarCitasPorAnuncio,
+  cargarEstado,
+  cargarGasto,
+  CONSULTA_POR_DEFECTO,
+  type AdsQuery,
+} from "@/server/analytics/ads-hierarchy";
 import type { ResolvedPeriod } from "@/server/analytics/period";
 import {
   effectiveSourceExpr,
@@ -40,7 +51,8 @@ export const MAX_ANUNCIOS = 50;
 
 export async function adsBlock(
   organizationId: string,
-  period: ResolvedPeriod
+  period: ResolvedPeriod,
+  query: AdsQuery = CONSULTA_POR_DEFECTO
 ): Promise<AdsBlockDto> {
   const [convsPorFuente, leadsPorFuente, convsPorAnuncio, leadsPorAnuncio, previas] =
     await Promise.all([
@@ -52,12 +64,13 @@ export async function adsBlock(
     ]);
 
   const sources = unirFuentes(convsPorFuente, leadsPorFuente);
-  const ads = unirAnuncios(convsPorAnuncio, leadsPorAnuncio);
+  const todos = unirAnunciosTodos(convsPorAnuncio, leadsPorAnuncio);
+  const ads = recortar(todos);
   const conversaciones = sources.reduce((a, s) => a + s.conversations, 0);
   const deAnuncio = sources.find((s) => s.value === "anuncio")?.conversations ?? 0;
   const prospectos = sources.reduce((a, s) => a + s.leads, 0);
 
-  return {
+  const base: AdsBlockDto = {
     period: period.dto,
     conversations: comparable(conversaciones, previas),
     adShare: rate(deAnuncio, conversaciones),
@@ -65,6 +78,39 @@ export async function adsBlock(
     ads,
     empty: conversaciones === 0 && prospectos === 0,
   };
+
+  // Sin la bandera `ATRIBUCION` el bloque es exactamente el de 019: ni una clave más.
+  if (!atribucionEnabled()) return base;
+
+  // 038 — La jerarquía de la Marketing API y el gasto. Si falla, el bloque de 019 sale igual:
+  // el conector es contexto, los conteos no dependen de él.
+  try {
+    const [catalog, spend, bookings] = await Promise.all([
+      cargarCatalogo(organizationId),
+      cargarGasto(organizationId, period),
+      agendaEnabled() ? cargarCitasPorAnuncio(organizationId, period) : Promise.resolve(null),
+    ]);
+    const out = armarJerarquia({ rows: todos, catalog, spend, bookings, query, maxAds: MAX_ANUNCIOS });
+    const moneda = [...spend.values()][0]?.currencies[0] ?? null;
+    const hierarchy = await cargarEstado(organizationId, catalog, out.mixedCurrency, moneda);
+    return {
+      ...base,
+      ads: out.ads,
+      hierarchy,
+      groupBy: query.group,
+      groups: out.groups,
+      campaigns: out.campaigns,
+      adsets: out.adsets,
+      // Con gasto sin una sola conversación el bloque no está vacío.
+      empty: base.empty && out.ads.length === 0,
+    };
+  } catch (err) {
+    console.warn(
+      "[resultados] la jerarquía de anuncios no se pudo calcular:",
+      err instanceof Error ? err.message : err
+    );
+    return base;
+  }
 }
 
 type Conteo = { key: string | null; n: number };
@@ -278,6 +324,14 @@ export function unirAnuncios(
   convs: (Metadatos & { conversations: number })[],
   leads: (Metadatos & { leads: number; won: number })[]
 ): AdRowDto[] {
+  return recortar(unirAnunciosTodos(convs, leads));
+}
+
+/** Las filas ya ordenadas, sin recortar y con su último instante (la jerarquía las necesita todas). */
+export function unirAnunciosTodos(
+  convs: (Metadatos & { conversations: number })[],
+  leads: (Metadatos & { leads: number; won: number })[]
+): (AdRowDto & { lastAt: number })[] {
   const filas = new Map<string, AdRowDto & { lastAt: number }>();
   const base = (m: Metadatos) => ({
     key: m.key,
@@ -308,13 +362,14 @@ export function unirAnuncios(
     filas.set(l.key, fila);
   }
 
-  return [...filas.values()]
-    .sort(
-      (a, b) =>
-        b.conversations - a.conversations ||
-        b.leads - a.leads ||
-        b.lastAt - a.lastAt
-    )
-    .slice(0, MAX_ANUNCIOS)
-    .map(({ lastAt: _lastAt, ...fila }) => fila);
+  return [...filas.values()].sort(
+    (a, b) =>
+      b.conversations - a.conversations ||
+      b.leads - a.leads ||
+      b.lastAt - a.lastAt
+  );
+}
+
+function recortar(filas: (AdRowDto & { lastAt: number })[]): AdRowDto[] {
+  return filas.slice(0, MAX_ANUNCIOS).map(({ lastAt: _lastAt, ...fila }) => fila);
 }

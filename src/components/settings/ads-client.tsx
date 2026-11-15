@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchSelect } from "@/components/ui/search-select";
+import { MetaAdsCard } from "@/components/settings/meta-ads-card";
 
 /**
  * 016 — Ajustes → Anuncios: conectar el dataset de Meta, decir qué etapa
@@ -233,6 +234,8 @@ export function AdsClient() {
           </div>
         </CardContent>
       </Card>
+
+      <MetaAdsCard />
 
       <Card>
         <CardHeader>

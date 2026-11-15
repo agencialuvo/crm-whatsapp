@@ -7,7 +7,7 @@ import type {
   HygieneBlockDto,
   SalesBlockDto,
 } from "@/lib/analytics";
-import { AdsSection } from "./ads-section";
+import { AdsSection, VISTA_INICIAL, type AdsView } from "./ads-section";
 import { BotSection } from "./bot-section";
 import { HygieneSection } from "./hygiene-section";
 import { defaultRange, RangePicker, type Range } from "./range-picker";
@@ -73,6 +73,7 @@ export function ResultsClient({
   const [range, setRange] = useState<Range>(() => defaultRange(today));
   const [sales, setSales] = useState<Block<SalesBlockDto>>(inicial);
   const [ads, setAds] = useState<Block<AdsBlockDto>>(inicial);
+  const [adsView, setAdsView] = useState<AdsView>(VISTA_INICIAL);
   const [bot, setBot] = useState<Block<BotBlockDto>>(inicial);
   const [hygiene, setHygiene] = useState<Block<HygieneBlockDto>>(inicial);
 
@@ -80,10 +81,20 @@ export function ResultsClient({
     const ctl = new AbortController();
     const q = `from=${range.from}&to=${range.to}`;
     void cargar(`/api/analytics/sales?${q}`, setSales, ctl.signal);
-    void cargar(`/api/analytics/ads?${q}`, setAds, ctl.signal);
     void cargar(`/api/analytics/bot?${q}`, setBot, ctl.signal);
     return () => ctl.abort();
   }, [range]);
+
+  // 038 — Anuncios: además del rango, depende del nivel y de los filtros. Aparte para que cambiar de
+  // campaña no recalcule ventas ni agente.
+  useEffect(() => {
+    const ctl = new AbortController();
+    const p = new URLSearchParams({ from: range.from, to: range.to, group: adsView.group });
+    if (adsView.campaignId) p.set("campaignId", adsView.campaignId);
+    if (adsView.adsetId) p.set("adsetId", adsView.adsetId);
+    void cargar(`/api/analytics/ads?${p.toString()}`, setAds, ctl.signal);
+    return () => ctl.abort();
+  }, [range, adsView]);
 
   // La higiene describe el AHORA: no depende del rango elegido.
   useEffect(() => {
@@ -106,7 +117,7 @@ export function ResultsClient({
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 sm:p-6">
         <SalesSection {...sales} currency={currency} />
-        <AdsSection {...ads} />
+        <AdsSection {...ads} view={adsView} onViewChange={setAdsView} />
         <BotSection {...bot} agenda={agenda} />
         <HygieneSection {...hygiene} currency={currency} />
       </div>

@@ -196,6 +196,55 @@ export type AdRowDto = {
   leads: number;
   won: number;
   winRate: RateDto;
+  /* 038 — Solo con la Marketing API conectada; ausentes si no. */
+  adName?: string | null;
+  adsetId?: string | null;
+  adsetName?: string | null;
+  campaignId?: string | null;
+  campaignName?: string | null;
+  /** Citas agendadas en el periodo por quienes llegaron de este anuncio (solo con la agenda encendida). */
+  bookings?: number | null;
+} & Partial<SpendDto>;
+
+/** 038 — Gasto del periodo y lo que cuesta cada resultado. `null` = sin dato, nunca un 0 que lo parezca. */
+export type SpendDto = {
+  spend: number | null;
+  costPerConversation: number | null;
+  costPerLead: number | null;
+  costPerBooking: number | null;
+};
+
+export type AdGroupBy = "ad" | "adset" | "campaign";
+
+/** 038 — Una fila agrupada por campaña o por conjunto de anuncios. */
+export type AdGroupRowDto = {
+  /** El id de Meta, o `sin-identificar` para lo que el catálogo no resuelve. */
+  key: string;
+  level: "adset" | "campaign";
+  name: string;
+  /** Campaña a la que pertenece (solo en filas de conjunto). */
+  campaignName: string | null;
+  ads: number;
+  conversations: number;
+  leads: number;
+  won: number;
+  winRate: RateDto;
+  bookings: number | null;
+} & SpendDto;
+
+export type AdsHierarchyDto = {
+  /** Hay credenciales guardadas. */
+  connected: boolean;
+  /** El conector tiene un problema que el dueño debe atender (token, permisos). */
+  problem: string | null;
+  currency: string | null;
+  lastSyncAt: string | null;
+  /** Anuncios que aún no se han consultado. */
+  pending: number;
+  /** El rango mezcla monedas: el gasto y los costos no se suman. */
+  mixedCurrency: boolean;
+  /** Hay catálogo o gasto que enseñar (aunque se haya desconectado). */
+  hasData: boolean;
 };
 
 export type AdsBlockDto = {
@@ -207,7 +256,22 @@ export type AdsBlockDto = {
   sources: SourceRowDto[];
   ads: AdRowDto[];
   empty: boolean;
+  /** 038 — `null` sin la bandera `ATRIBUCION`: el bloque es exactamente el de 019. */
+  hierarchy?: AdsHierarchyDto | null;
+  groupBy?: AdGroupBy;
+  /** Filas por campaña o conjunto cuando `groupBy` no es `ad`. */
+  groups?: AdGroupRowDto[];
+  /** Opciones de los filtros. */
+  campaigns?: { id: string; name: string }[];
+  adsets?: { id: string; name: string; campaignId: string | null }[];
 };
+
+/** Gasto ÷ resultados, a dos decimales. `null` sin gasto o sin resultados (no hay costo que decir). */
+export function costOf(spend: number | null | undefined, results: number | null | undefined): number | null {
+  if (spend === null || spend === undefined || results === null || results === undefined) return null;
+  if (!Number.isFinite(spend) || results <= 0) return null;
+  return Math.round((spend / results) * 100) / 100;
+}
 
 /* ── El trabajo del agente ──────────────────────────────────────── */
 
