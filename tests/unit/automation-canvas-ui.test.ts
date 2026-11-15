@@ -52,10 +52,10 @@ describe("la paleta", () => {
     for (const t of STEP_TYPES) expect(inPalette.has(t), t).toBe(true);
   });
 
-  it("«Enviar multimedia» se muestra pero no se puede soltar (el motor aún no envía medios)", () => {
-    const media = PALETTE.find((i) => i.id === "soon:media")!;
-    expect(media).toMatchObject({ soon: true, kind: "step" });
-    expect(media.stepType).toBeUndefined();
+  it("«Enviar multimedia» ya se puede soltar: es el paso send_media (Fase 6)", () => {
+    const media = PALETTE.find((i) => i.id === "step:send_media")!;
+    expect(media).toMatchObject({ kind: "step", stepType: "send_media" });
+    expect(media.soon).toBeFalsy();
   });
 
   it("los bloques de cita lo avisan", () => {

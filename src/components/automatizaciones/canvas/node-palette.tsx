@@ -25,7 +25,7 @@ export function NodePalette({
   return (
     <aside
       aria-label="Bloques"
-      className="flex max-h-56 shrink-0 flex-col gap-3 overflow-y-auto border-b border-border-strong bg-card p-3 lg:max-h-none lg:w-56 lg:border-b-0 lg:border-r"
+      className="flex max-h-40 shrink-0 flex-col gap-3 overflow-y-auto overscroll-contain border-b border-border-strong bg-card p-3 lg:max-h-none lg:w-56 lg:border-b-0 lg:border-r"
     >
       <p className="text-[11px] text-text-3">Arrastra un bloque al lienzo, o tócalo para añadirlo.</p>
       {CATEGORIES.map((cat) => (

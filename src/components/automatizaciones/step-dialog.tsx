@@ -20,6 +20,7 @@ import {
   offsetMinutesOf,
   offsetParts,
   stepLabel,
+  type MediaOption,
   type StageOption,
   type StepDto,
   type TagOption,
@@ -35,6 +36,7 @@ import { Switch } from "@/components/ui/switch";
 import { tagColorClass } from "@/lib/tags";
 import { countVariables } from "@/lib/templates";
 
+const NO_MEDIA: MediaOption[] = [];
 const STEP_TYPE_OPTIONS: SearchSelectOption[] = STEP_TYPES.map((t) => ({ value: t, label: stepLabel(t) }));
 
 const BRANCH_OPTIONS: SearchSelectOption[] = BRANCH_ACTIONS.map((a) => ({ value: a, label: BRANCH_ACTION_LABELS[a] }));
@@ -76,6 +78,7 @@ export function StepDialog({
   templates,
   tags,
   stages,
+  media = NO_MEDIA,
   triggerType,
   onTagCreated,
   onClose,
@@ -93,6 +96,8 @@ export function StepDialog({
   /** Etiquetas y etapas del negocio: lo que ofrecen `add_tag`, `set_stage` y `condition`. */
   tags: TagOption[];
   stages: StageOption[];
+  /** Los archivos de la biblioteca de Medios: lo que ofrece «Enviar imagen o video». */
+  media?: MediaOption[];
   /** El disparador del flujo: decide qué pasos y reglas tienen sentido (los de cita, solo en flujos de cita). */
   triggerType: string;
   /** Una etiqueta creada «al vuelo» desde el diálogo, para que el detalle del flujo la conozca. */
@@ -130,6 +135,9 @@ export function StepDialog({
   const isBookingFlow = triggerType.startsWith("booking_");
   const [tagId, setTagId] = useState(typeof c.tagId === "string" ? c.tagId : "");
   const [stageId, setStageId] = useState(typeof c.stageId === "string" ? c.stageId : "");
+  // Enviar imagen o video: el archivo (por id de la biblioteca) y su leyenda.
+  const [mediaId, setMediaId] = useState(typeof c.mediaId === "string" ? c.mediaId : "");
+  const [caption, setCaption] = useState(typeof c.caption === "string" ? c.caption : "");
   const [ruleType, setRuleType] = useState<string>(typeof rule?.type === "string" ? rule.type : "tag_has");
   const [ruleTagId, setRuleTagId] = useState(typeof rule?.tagId === "string" ? rule.tagId : "");
   const [ruleStageId, setRuleStageId] = useState(typeof rule?.stageId === "string" ? rule.stageId : "");
@@ -199,6 +207,11 @@ export function StepDialog({
     () => STEP_TYPE_OPTIONS.filter((o) => isBookingFlow || o.value !== "wait_until"),
     [isBookingFlow]
   );
+  const mediaOptions = useMemo<SearchSelectOption[]>(
+    () => media.map((m) => ({ value: m.id, label: `${m.nombre} · ${m.tipo === "video" ? "Video" : "Imagen"}` })),
+    [media]
+  );
+  const chosenMedia = media.find((m) => m.id === mediaId);
   const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
   const stageOptions = useMemo<SearchSelectOption[]>(() => stages.map((s) => ({ value: s.id, label: s.name })), [stages]);
   const ruleOptions = useMemo<SearchSelectOption[]>(
@@ -247,6 +260,9 @@ export function StepDialog({
     if (stepType === "set_stage") {
       return { ...(name.trim() && { name: name.trim() }), stageId };
     }
+    if (stepType === "send_media") {
+      return { ...(name.trim() && { name: name.trim() }), mediaId, ...(caption.trim() && { caption: caption.trim() }) };
+    }
     if (stepType === "condition") {
       return {
         ...(name.trim() && { name: name.trim() }),
@@ -289,6 +305,7 @@ export function StepDialog({
     // El esquema pide un id no vacío, pero «Elige una etiqueta» se entiende mejor que «String must contain 1 character».
     if ((stepType === "add_tag" || stepType === "remove_tag") && !tagId) found.tagId = "Elige una etiqueta";
     if (stepType === "set_stage" && !stageId) found.stageId = "Elige una etapa";
+    if (stepType === "send_media" && !mediaId) found.mediaId = "Elige un archivo de la biblioteca";
     if (stepType === "condition" && (ruleType === "tag_has" || ruleType === "tag_missing") && !ruleTagId) found.tagId = "Elige una etiqueta";
     if (stepType === "condition" && ruleType === "stage_is" && !ruleStageId) found.stageId = "Elige una etapa";
 
@@ -640,6 +657,55 @@ export function StepDialog({
               Solo para flujos de citas. Los pasos que siguen se ejecutan a esa hora, y se cancelan solos si la cita se
               cancela o se reprograma.
               {inline && " Conecta la salida «Si ya pasó» a lo que debe hacerse cuando esa hora ya pasó."}
+            </p>
+          </>
+        ) : stepType === "send_media" ? (
+          <>
+            <Field label="Archivo" required htmlFor="step-media" error={errors.mediaId} hint="Imágenes y videos de tu biblioteca de Medios.">
+              <SearchSelect
+                id="step-media"
+                value={mediaId}
+                onChange={setMediaId}
+                options={mediaOptions}
+                emptyLabel="Sin elegir"
+                searchPlaceholder="Buscar archivo…"
+                ariaLabel="Archivo a enviar"
+                disabled={busy}
+              />
+              {media.length === 0 && (
+                <p className="text-xs text-text-3">
+                  Aún no tienes archivos.{" "}
+                  <Link href="/medios" className="font-semibold underline">
+                    Sube uno en Medios
+                  </Link>
+                  .
+                </p>
+              )}
+              {mediaId && !chosenMedia && <p className="text-xs text-danger-text">Ese archivo ya no está en la biblioteca: elige otro.</p>}
+            </Field>
+            {chosenMedia && (
+              <div className="overflow-hidden rounded-md border bg-subtle">
+                {chosenMedia.tipo === "video" ? (
+                  <video src={chosenMedia.ruta} controls preload="metadata" className="max-h-56 w-full bg-black" aria-label={`Vista previa de ${chosenMedia.nombre}`} />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={chosenMedia.ruta} alt={`Vista previa de ${chosenMedia.nombre}`} className="max-h-56 w-full object-contain" />
+                )}
+              </div>
+            )}
+            <Field label="Leyenda (opcional)" htmlFor="step-caption" error={errors.caption} hint="Puedes usar {{name}}, {{fecha}}, {{hora}} y {{servicio}}.">
+              <Textarea
+                id="step-caption"
+                rows={3}
+                maxLength={1024}
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
+                disabled={busy}
+              />
+            </Field>
+            <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+              Un archivo no tiene plantilla: solo se envía mientras la ventana de 24 h del cliente está abierta (si no, el
+              paso falla y queda en el historial). Si el cliente pidió la baja, no se envía.
             </p>
           </>
         ) : stepType === "delay" ? (

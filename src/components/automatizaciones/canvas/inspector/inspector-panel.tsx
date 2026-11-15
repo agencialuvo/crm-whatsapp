@@ -3,7 +3,7 @@
 import { Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StepDialog } from "@/components/automatizaciones/step-dialog";
-import { stepLabel, triggerLabel, type StageOption, type StepDto, type TagOption, type TemplateOption } from "@/lib/automation-dto";
+import { stepLabel, triggerLabel, type MediaOption, type StageOption, type StepDto, type TagOption, type TemplateOption } from "@/lib/automation-dto";
 import type { CanvasNodeData } from "@/lib/automation-canvas";
 import { TriggerInspector } from "./trigger-inspector";
 
@@ -19,6 +19,7 @@ export function InspectorPanel({
   templates,
   tags,
   stages,
+  media,
   triggerType,
   onTagCreated,
   onStepConfig,
@@ -33,6 +34,7 @@ export function InspectorPanel({
   templates: TemplateOption[];
   tags: TagOption[];
   stages: StageOption[];
+  media?: MediaOption[];
   /** El disparador del lienzo (puede ser distinto del guardado si aún no se guarda). */
   triggerType: string;
   onTagCreated: (tag: TagOption) => void;
@@ -49,7 +51,7 @@ export function InspectorPanel({
   return (
     <aside
       aria-label="Configuración del bloque"
-      className="flex max-h-[70vh] shrink-0 flex-col overflow-hidden border-t border-border-strong bg-card lg:max-h-none lg:w-[360px] lg:border-l lg:border-t-0"
+      className="flex max-h-[45%] shrink-0 flex-col overflow-hidden border-t border-border-strong bg-card lg:max-h-none lg:w-[360px] lg:border-l lg:border-t-0"
     >
       <header className="flex items-center justify-between gap-2 border-b border-border-strong px-4 py-3">
         <h4 className="min-w-0 truncate text-sm font-bold tracking-tight">{title}</h4>
@@ -104,6 +106,7 @@ export function InspectorPanel({
             templates={templates}
             tags={tags}
             stages={stages}
+            media={media}
             triggerType={triggerType}
             onTagCreated={onTagCreated}
             onApply={(config) => onStepConfig(nodeId, config)}

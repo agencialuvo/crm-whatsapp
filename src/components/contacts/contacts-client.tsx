@@ -200,6 +200,14 @@ export function ContactsClient() {
                     {c.archivedAt && (
                       <Badge variant="secondary">Archivado</Badge>
                     )}
+                    {c.optedOut && (
+                      <Badge
+                        variant="warning"
+                        title="Pidió no recibir mensajes automáticos: las automatizaciones no le envían"
+                      >
+                        Dado de baja
+                      </Badge>
+                    )}
                     {c.aiPaused && (
                       <Badge
                         variant="warning"
@@ -348,11 +356,12 @@ function EditDialog({
 }: {
   contact: ContactDto;
   onClose: () => void;
-  onSave: (patch: { name: string; notes: string; aiPaused?: boolean }) => Promise<void>;
+  onSave: (patch: { name: string; notes: string; aiPaused?: boolean; optedOut?: boolean }) => Promise<void>;
 }) {
   const [name, setName] = useState(contact.name);
   const [notes, setNotes] = useState(contact.notes ?? "");
   const [aiPaused, setAiPaused] = useState(contact.aiPaused ?? false);
+  const [optedOut, setOptedOut] = useState(contact.optedOut ?? false);
 
   return (
     <div
@@ -400,6 +409,22 @@ function EditDialog({
               </span>
             </span>
           </label>
+          {/* 037 */}
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={optedOut}
+              onChange={(e) => setOptedOut(e.target.checked)}
+              className="mt-0.5 accent-primary"
+            />
+            <span>
+              Dado de baja de mensajes automáticos
+              <span className="block text-[11px] text-text-3">
+                Las automatizaciones no le envían nada. También se marca solo si escribe «baja» o «stop». Tus mensajes
+                desde la Bandeja no se bloquean.
+              </span>
+            </span>
+          </label>
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
@@ -414,6 +439,7 @@ function EditDialog({
                 // Solo si cambió: mandarlo siempre reescribiría el interruptor
                 // de la Bandeja cada vez que alguien corrige un nombre.
                 ...(aiPaused !== (contact.aiPaused ?? false) ? { aiPaused } : {}),
+                ...(optedOut !== (contact.optedOut ?? false) ? { optedOut } : {}),
               })
             }
           >

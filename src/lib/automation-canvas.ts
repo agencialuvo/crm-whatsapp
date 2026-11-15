@@ -29,7 +29,7 @@ export type CanvasNodeLite = { id: string; type: string; position: Pos; data: Ca
 export type CanvasEdgeLite = { id: string; source: string; target: string; sourceHandle?: string | null };
 
 /** Cómo se dibuja cada tipo de paso: la clave de `nodeTypes` del lienzo. */
-export type NodeKind = "trigger" | "message" | "wait" | "condition" | "waitReply" | "action";
+export type NodeKind = "trigger" | "message" | "media" | "wait" | "condition" | "waitReply" | "action";
 
 export function nodeKindOf(type: string): NodeKind {
   switch (type) {
@@ -37,6 +37,8 @@ export function nodeKindOf(type: string): NodeKind {
       return "trigger";
     case "send_whatsapp":
       return "message";
+    case "send_media":
+      return "media";
     case "delay":
     case "wait_until":
       return "wait";
@@ -163,7 +165,7 @@ export const PALETTE: PaletteItem[] = [
   { id: "step:wait_until", category: "logic", kind: "step", stepType: "wait_until", label: "Esperar hasta la cita", hint: "Antes o después de la hora de la cita", needsBooking: true },
   { id: "step:wait_reply", category: "logic", kind: "step", stepType: "wait_reply", label: "Esperar respuesta", hint: "Pausa hasta que el cliente conteste" },
   { id: "step:send_whatsapp", category: "actions", kind: "step", stepType: "send_whatsapp", label: "Enviar WhatsApp", hint: "Texto libre o plantilla aprobada" },
-  { id: "soon:media", category: "actions", kind: "step", label: "Enviar multimedia", hint: "Imagen o video", soon: true },
+  { id: "step:send_media", category: "actions", kind: "step", stepType: "send_media", label: "Enviar multimedia", hint: "Imagen o video de tu biblioteca" },
   { id: "step:add_tag", category: "actions", kind: "step", stepType: "add_tag", label: "Asignar etiqueta", hint: "Marca al contacto" },
   { id: "step:remove_tag", category: "actions", kind: "step", stepType: "remove_tag", label: "Quitar etiqueta", hint: "Desmarca al contacto" },
   { id: "step:set_stage", category: "actions", kind: "step", stepType: "set_stage", label: "Cambiar etapa", hint: "Mueve al lead en el pipeline" },

@@ -5,11 +5,12 @@ import "./canvas.css";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { AlertTriangle, ArrowLeftRight, LayoutGrid, Loader2, Save, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowLeftRight, History, LayoutGrid, Loader2, Pencil, Save, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { apiFetch, describeError } from "@/components/negocio/api";
-import type { StageOption, TagOption, TemplateOption } from "@/lib/automation-dto";
+import type { MediaOption, StageOption, TagOption, TemplateOption } from "@/lib/automation-dto";
 import { PALETTE, PALETTE_DRAG_TYPE, nodeKindOf, type PaletteItem } from "@/lib/automation-canvas";
 import { cn } from "@/lib/utils";
 import { CanvasRefsContext } from "./canvas-context";
@@ -17,6 +18,7 @@ import { InspectorPanel } from "./inspector/inspector-panel";
 import { NodePalette } from "./node-palette";
 import { ActionNode } from "./nodes/action-node";
 import { ConditionNode } from "./nodes/condition-node";
+import { MediaNode } from "./nodes/media-node";
 import { MessageNode } from "./nodes/message-node";
 import { TriggerNode } from "./nodes/trigger-node";
 import { WaitNode } from "./nodes/wait-node";
@@ -27,20 +29,35 @@ import { useFlowGraph, type FlowNode } from "./use-flow-graph";
 const NODE_TYPES = {
   trigger: TriggerNode,
   message: MessageNode,
+  media: MediaNode,
   wait: WaitNode,
   condition: ConditionNode,
   waitReply: WaitReplyNode,
   action: ActionNode,
 } as const;
 
+/** El encuadre deja libre el espacio de la barra flotante (arriba) para que ningún bloque quede debajo. */
+const FIT_OPTIONS = { maxZoom: 1, padding: { top: "140px", right: "40px", bottom: "40px", left: "40px" } } as const;
+
 type Banner = { kind: "error" | "stale" | "ok"; message: string } | null;
 
 export type FlowCanvasProps = {
   flowId: string;
+  /** El nombre del flujo, en la barra flotante. */
+  flowName: string;
+  /** Un aviso de la pantalla que lo envuelve (error al cambiar de modo o de encendido), a la vista sobre el lienzo. */
+  notice?: string | null;
+  onBack: () => void;
+  onHistory: () => void;
+  onEditFlow: () => void;
+  onToggleActive: (active: boolean) => void;
+  toggleDisabled?: boolean;
   active: boolean;
   templates: TemplateOption[];
   tags: TagOption[];
   stages: StageOption[];
+  /** Los archivos de la biblioteca de Medios (para los bloques «Enviar multimedia»). */
+  media?: MediaOption[];
   onTagCreated: (tag: TagOption) => void;
   /** El flujo cambió en el servidor (se encendió desde aquí): quien lo muestra lo vuelve a pedir. */
   onFlowChanged: () => void;
@@ -62,9 +79,9 @@ export function FlowCanvas(props: FlowCanvasProps) {
   );
 }
 
-function CanvasInner({ flowId, active, templates, tags, stages, onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
+function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
   const g = useFlowGraph(flowId);
-  const { screenToFlowPosition, getViewport, fitView, setCenter } = useReactFlow();
+  const { screenToFlowPosition, getViewport, setCenter } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
   const [banner, setBanner] = useState<Banner>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
@@ -161,14 +178,14 @@ function CanvasInner({ flowId, active, templates, tags, stages, onTagCreated, on
 
   if (g.loading) {
     return (
-      <div className="flex h-72 items-center justify-center rounded-lg border border-border-strong bg-card text-sm text-text-3" role="status">
+      <div className="flex h-full items-center justify-center bg-subtle text-sm text-text-3" role="status">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Cargando el lienzo…
       </div>
     );
   }
   if (g.loadError) {
     return (
-      <div className="rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm text-danger-text" role="alert">
+      <div className="m-4 rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm text-danger-text" role="alert">
         <p>{g.loadError}</p>
         <Button variant="outline" size="sm" className="mt-3" onClick={() => void g.load()}>
           Reintentar
@@ -180,136 +197,160 @@ function CanvasInner({ flowId, active, templates, tags, stages, onTagCreated, on
   const hasCamera = typeof g.viewport?.x === "number" && typeof g.viewport?.y === "number" && typeof g.viewport?.zoom === "number";
 
   return (
-    <CanvasRefsContext.Provider value={{ templates, tags, stages }}>
-      <div className="space-y-2">
-        {/* Barra: estado, ordenar, volver al Modo Simple y guardar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-strong bg-card px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            {g.dirty ? <Badge variant="warning">Cambios sin guardar</Badge> : <Badge variant="secondary">Todo guardado</Badge>}
-            <button
-              type="button"
-              onClick={() => setProblemsOpen((o) => !o)}
-              aria-expanded={problemsOpen}
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                errors.length > 0 ? "bg-danger-tint text-danger-text" : warnings.length > 0 ? "bg-warning-tint text-warning-text" : "bg-success-tint text-success-text"
-              )}
-            >
-              <AlertTriangle className="h-3 w-3" aria-hidden />
-              {errors.length === 0 && warnings.length === 0
-                ? "Sin problemas"
-                : [errors.length ? `${errors.length} ${errors.length === 1 ? "error" : "errores"}` : null, warnings.length ? `${warnings.length} ${warnings.length === 1 ? "aviso" : "avisos"}` : null]
-                    .filter(Boolean)
-                    .join(" · ")}
-            </button>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={g.relayout} title="Reacomoda los bloques por niveles">
-              <LayoutGrid className="h-4 w-4" aria-hidden /> Ordenar
-            </Button>
-            <Button variant="outline" size="sm" onClick={onBackToSimple} title="Volver a la lista de pasos">
-              <Undo2 className="h-4 w-4" aria-hidden /> Modo Simple
-            </Button>
-            <Button size="sm" variant={active ? "default" : "outline"} disabled={g.saving || blocked || !g.dirty} onClick={() => void save(false)} title={blocked ? "Corrige los errores para guardar" : undefined}>
-              {g.saving && !publishing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />} Guardar
-            </Button>
-            {!active && (
-              <Button size="sm" disabled={g.saving || publishing || blocked} onClick={() => void save(true)} title={blocked ? "Corrige los errores para publicar" : "Guarda y enciende el flujo"}>
-                {publishing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ArrowLeftRight className="h-4 w-4" aria-hidden />} Guardar y encender
-              </Button>
-            )}
-          </div>
-        </div>
+    <CanvasRefsContext.Provider value={{ templates, tags, stages, media }}>
+      {/* Pantalla completa: la paleta, el lienzo y el panel comparten la altura del área; nada desplaza la página. */}
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background lg:flex-row">
+        <NodePalette triggerType={g.triggerType} onAdd={addAtCenter} />
 
-        {banner && (
-          <div
-            role={banner.kind === "ok" ? "status" : "alert"}
-            className={cn(
-              "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm",
-              banner.kind === "ok" ? "border-success-soft bg-success-tint text-success-text" : "border-danger-soft bg-danger-tint text-danger-text"
-            )}
+        <div ref={wrapper} className="vocero-flow relative min-h-0 min-w-0 flex-1" onDrop={onDrop} onDragOver={(e) => (e.preventDefault(), (e.dataTransfer.dropEffect = "move"))}>
+          {/* El lienzo ocupa todo el recuadro; el paneo y el zoom son solo de React Flow (la rueda no mueve la página). */}
+          <ReactFlow<FlowNode>
+            className="absolute inset-0"
+            nodes={g.nodes}
+            edges={g.edges}
+            nodeTypes={NODE_TYPES}
+            onNodesChange={g.onNodesChange}
+            onEdgesChange={g.onEdgesChange}
+            onConnect={g.onConnect}
+            isValidConnection={g.isValidConnection}
+            onPaneClick={() => g.select(null)}
+            deleteKeyCode={["Backspace", "Delete"]}
+            minZoom={0.2}
+            maxZoom={1.5}
+            fitViewOptions={FIT_OPTIONS}
+            panOnDrag
+            zoomOnScroll
+            preventScrolling
+            {...(hasCamera ? { defaultViewport: { x: g.viewport!.x!, y: g.viewport!.y!, zoom: g.viewport!.zoom! } } : { fitView: true })}
+            aria-label="Lienzo del flujo"
           >
-            <span>{banner.message}</span>
-            {banner.kind === "stale" && (
-              <Button variant="outline" size="sm" onClick={() => void g.load().then(() => setBanner(null))}>
-                Recargar (descarta lo no guardado)
-              </Button>
-            )}
-          </div>
-        )}
+            <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} />
+            {/* Zoom y «ver todo» abajo a la izquierda del lienzo; el mapa abajo a la derecha: fuera del flujo del DOM. */}
+            <Controls showInteractive={false} position="bottom-left" />
+            <MiniMap pannable zoomable position="bottom-right" ariaLabel="Mapa del flujo" nodeColor={(n) => (nodeKindOf((n.type as string) ?? "") === "trigger" ? "var(--accent)" : "var(--text-4)")} />
+          </ReactFlow>
 
-        {problemsOpen && (errors.length > 0 || warnings.length > 0) && (
-          <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border-strong bg-card p-2" aria-label="Problemas del flujo">
-            {[...errors.map((i) => ({ i, kind: "error" as const })), ...warnings.map((i) => ({ i, kind: "warning" as const }))].map(({ i, kind }, k) => (
-              <li key={`${i.code}-${k}`}>
+          {/* Barra flotante: no empuja nada, deja pasar el ratón al lienzo salvo sobre sus propios controles. */}
+          <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col gap-2">
+            <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-strong bg-card/95 px-3 py-2 shadow-md backdrop-blur">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={onBack} aria-label="Volver a Automatizaciones" title="Volver a Automatizaciones">
+                  <ArrowLeft className="h-4 w-4" aria-hidden />
+                </Button>
+                <h3 className="max-w-[220px] truncate text-sm font-bold tracking-tight" title={flowName}>
+                  {flowName}
+                </h3>
+                {g.dirty ? <Badge variant="warning">Cambios sin guardar</Badge> : <Badge variant="secondary">Todo guardado</Badge>}
                 <button
                   type="button"
-                  disabled={!i.nodeIds?.[0]}
-                  onClick={() => i.nodeIds?.[0] && focusNode(i.nodeIds[0])}
+                  onClick={() => setProblemsOpen((o) => !o)}
+                  aria-expanded={problemsOpen}
                   className={cn(
-                    "w-full rounded px-2 py-1 text-left text-xs",
-                    kind === "error" ? "bg-danger-tint text-danger-text" : "bg-warning-tint text-warning-text",
-                    i.nodeIds?.[0] && "hover:opacity-80"
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    errors.length > 0 ? "bg-danger-tint text-danger-text" : warnings.length > 0 ? "bg-warning-tint text-warning-text" : "bg-success-tint text-success-text"
                   )}
                 >
-                  <span className="font-semibold">{kind === "error" ? "Error: " : "Aviso: "}</span>
-                  {i.message}
+                  <AlertTriangle className="h-3 w-3" aria-hidden />
+                  {errors.length === 0 && warnings.length === 0
+                    ? "Sin problemas"
+                    : [errors.length ? `${errors.length} ${errors.length === 1 ? "error" : "errores"}` : null, warnings.length ? `${warnings.length} ${warnings.length === 1 ? "aviso" : "avisos"}` : null]
+                        .filter(Boolean)
+                        .join(" · ")}
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs font-medium text-text-2">
+                  <Switch checked={active} disabled={toggleDisabled} label={`${active ? "Apagar" : "Encender"} el flujo`} onCheckedChange={onToggleActive} />
+                  {active ? "Activo" : "Pausado"}
+                </label>
+                <Button variant="outline" size="sm" onClick={onHistory} title="Estado del motor e historial de este flujo">
+                  <History className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Historial</span><span className="sr-only sm:hidden">Historial</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={onEditFlow} title="Nombre y ajustes del disparador">
+                  <Pencil className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Editar</span><span className="sr-only sm:hidden">Editar</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={g.relayout} title="Reacomoda los bloques por niveles">
+                  <LayoutGrid className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Ordenar</span><span className="sr-only sm:hidden">Ordenar</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={onBackToSimple} title="Volver a la lista de pasos">
+                  <Undo2 className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Modo Simple</span><span className="sr-only sm:hidden">Modo Simple</span>
+                </Button>
+                <Button size="sm" variant={active ? "default" : "outline"} disabled={g.saving || blocked || !g.dirty} onClick={() => void save(false)} title={blocked ? "Corrige los errores para guardar" : undefined}>
+                  {g.saving && !publishing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />} Guardar
+                </Button>
+                {!active && (
+                  <Button size="sm" disabled={g.saving || publishing || blocked} onClick={() => void save(true)} title={blocked ? "Corrige los errores para publicar" : "Guarda y enciende el flujo"}>
+                    {publishing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ArrowLeftRight className="h-4 w-4" aria-hidden />} Guardar y encender
+                  </Button>
+                )}
+              </div>
+            </div>
 
-        <div className="flex h-[min(80vh,860px)] min-h-[560px] flex-col overflow-hidden rounded-lg border border-border-strong bg-card lg:flex-row">
-          <NodePalette triggerType={g.triggerType} onAdd={addAtCenter} />
+            {notice && (
+              <p role="alert" className="pointer-events-auto rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text shadow-md">
+                {notice}
+              </p>
+            )}
 
-          <div ref={wrapper} className="vocero-flow relative min-h-[320px] flex-1" onDrop={onDrop} onDragOver={(e) => (e.preventDefault(), (e.dataTransfer.dropEffect = "move"))}>
-            <ReactFlow<FlowNode>
-              nodes={g.nodes}
-              edges={g.edges}
-              nodeTypes={NODE_TYPES}
-              onNodesChange={g.onNodesChange}
-              onEdgesChange={g.onEdgesChange}
-              onConnect={g.onConnect}
-              isValidConnection={g.isValidConnection}
-              onPaneClick={() => g.select(null)}
-              deleteKeyCode={["Backspace", "Delete"]}
-              minZoom={0.2}
-              maxZoom={1.5}
-              {...(hasCamera ? { defaultViewport: { x: g.viewport!.x!, y: g.viewport!.y!, zoom: g.viewport!.zoom! } } : { fitView: true, fitViewOptions: { maxZoom: 1, padding: 0.2 } })}
-              aria-label="Lienzo del flujo"
-            >
-              <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} />
-              <Controls showInteractive={false} />
-              <MiniMap pannable zoomable ariaLabel="Mapa del flujo" nodeColor={(n) => (nodeKindOf((n.type as string) ?? "") === "trigger" ? "var(--accent)" : "var(--text-4)")} />
-            </ReactFlow>
-            <button
-              type="button"
-              onClick={() => void fitView({ maxZoom: 1, padding: 0.2, duration: 300 })}
-              className="absolute right-3 top-3 rounded-md border border-border-strong bg-card px-2 py-1 text-xs font-medium text-text-2 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Ver todo
-            </button>
+            {banner && (
+              <div
+                role={banner.kind === "ok" ? "status" : "alert"}
+                className={cn(
+                  "pointer-events-auto flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm shadow-md",
+                  banner.kind === "ok" ? "border-success-soft bg-success-tint text-success-text" : "border-danger-soft bg-danger-tint text-danger-text"
+                )}
+              >
+                <span>{banner.message}</span>
+                {banner.kind === "stale" && (
+                  <Button variant="outline" size="sm" onClick={() => void g.load().then(() => setBanner(null))}>
+                    Recargar (descarta lo no guardado)
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {problemsOpen && (errors.length > 0 || warnings.length > 0) && (
+              <ul className="pointer-events-auto max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border-strong bg-card p-2 shadow-md" aria-label="Problemas del flujo">
+                {[...errors.map((i) => ({ i, kind: "error" as const })), ...warnings.map((i) => ({ i, kind: "warning" as const }))].map(({ i, kind }, k) => (
+                  <li key={`${i.code}-${k}`}>
+                    <button
+                      type="button"
+                      disabled={!i.nodeIds?.[0]}
+                      onClick={() => i.nodeIds?.[0] && focusNode(i.nodeIds[0])}
+                      className={cn(
+                        "w-full rounded px-2 py-1 text-left text-xs",
+                        kind === "error" ? "bg-danger-tint text-danger-text" : "bg-warning-tint text-warning-text",
+                        i.nodeIds?.[0] && "hover:opacity-80"
+                      )}
+                    >
+                      <span className="font-semibold">{kind === "error" ? "Error: " : "Aviso: "}</span>
+                      {i.message}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-
-          {selected && (
-            <InspectorPanel
-              nodeId={selected.id}
-              data={selected.data}
-              flowId={flowId}
-              templates={templates}
-              tags={tags}
-              stages={stages}
-              triggerType={g.triggerType}
-              onTagCreated={onTagCreated}
-              onStepConfig={g.updateStepConfig}
-              onTriggerType={g.setTriggerType}
-              onTriggerConfig={g.updateTriggerConfig}
-              onDelete={g.deleteNode}
-              onClose={() => g.select(null)}
-            />
-          )}
         </div>
+
+        {selected && (
+          <InspectorPanel
+            nodeId={selected.id}
+            data={selected.data}
+            flowId={flowId}
+            templates={templates}
+            tags={tags}
+            stages={stages}
+            media={media}
+            triggerType={g.triggerType}
+            onTagCreated={onTagCreated}
+            onStepConfig={g.updateStepConfig}
+            onTriggerType={g.setTriggerType}
+            onTriggerConfig={g.updateTriggerConfig}
+            onDelete={g.deleteNode}
+            onClose={() => g.select(null)}
+          />
+        )}
       </div>
     </CanvasRefsContext.Provider>
   );

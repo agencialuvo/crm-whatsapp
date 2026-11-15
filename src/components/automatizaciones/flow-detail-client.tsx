@@ -11,6 +11,7 @@ import {
   Clock,
   GitBranch,
   Flag,
+  ImageIcon,
   MessageCircle,
   MessageSquareReply,
   Pencil,
@@ -40,6 +41,7 @@ import {
   type FlowDto,
   type StageOption,
   type StepDto,
+  type MediaOption,
   type TagOption,
   type TemplateOption,
 } from "@/lib/automation-dto";
@@ -50,6 +52,7 @@ type StepDialogState = { step: StepDto | null } | null;
 const STEP_ICON: Record<string, typeof Clock> = {
   delay: Clock,
   send_whatsapp: MessageCircle,
+  send_media: ImageIcon,
   wait_until: CalendarClock,
   wait_reply: MessageSquareReply,
   add_tag: Tag,
@@ -72,6 +75,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const [templates, setTemplates] = useState<TemplateOption[]>([]);
   const [stages, setStages] = useState<StageOption[]>([]);
   const [tags, setTags] = useState<TagOption[]>([]);
+  const [media, setMedia] = useState<MediaOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -99,18 +103,21 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
     setLoadError(null);
     setNotFound(false);
     try {
-      const [detail, tpl, st, tg] = await Promise.all([
+      const [detail, tpl, st, tg, md] = await Promise.all([
         apiFetch<{ flow: FlowDto; steps: StepDto[] }>(`/api/automations/${flowId}`),
         // Las plantillas y las etapas solo dan nombres: si fallan, el detalle se muestra igual.
         apiFetch<{ templates: TemplateOption[] }>("/api/templates").catch(() => ({ templates: [] as TemplateOption[] })),
         apiFetch<{ stages: StageOption[] }>("/api/pipeline/stages").catch(() => ({ stages: [] as StageOption[] })),
         apiFetch<{ tags: TagOption[] }>("/api/tags").catch(() => ({ tags: [] as TagOption[] })),
+        // La biblioteca solo da archivos para «Enviar imagen o video»: si falla, el resto se muestra igual.
+        apiFetch<{ medios: MediaOption[] }>("/api/medios").catch(() => ({ medios: [] as MediaOption[] })),
       ]);
       setFlow(detail.flow);
       setSteps(detail.steps);
       setTemplates(tpl.templates);
       setStages(st.stages);
       setTags(tg.tags);
+      setMedia(md.medios.map((m) => ({ id: m.id, nombre: m.nombre, tipo: m.tipo, ruta: m.ruta })));
     } catch (err) {
       if (apiErrorStatus(err) === 404) setNotFound(true);
       else setLoadError(describeError(err));
@@ -263,8 +270,14 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
 
   const block = activationBlock(steps.length, flow.active);
 
+  // El editor visual es una pantalla propia: llena el área bajo el título (la hoja de la página no se desplaza) y
+  // todo lo demás (datos del flujo, estadísticas, pestañas) se resuelve desde su barra flotante.
+  const immersive = flow.editorMode === "canvas" && tab === "pasos";
+
   return (
-    <div className={cn("mx-auto space-y-5", flow.editorMode === "canvas" && tab === "pasos" ? "max-w-[1500px]" : "max-w-5xl")}>
+    <div className={immersive ? "absolute inset-0 z-10 overflow-hidden bg-background" : "mx-auto max-w-5xl space-y-5"}>
+      {!immersive && (
+      <>
       {back}
 
       <section className="rounded-lg border border-border-strong bg-card p-4 shadow-sm sm:p-5" aria-label="Datos del flujo">
@@ -357,6 +370,8 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           </button>
         ))}
       </div>
+      </>
+      )}
 
       {tab === "historial" && (
         <div role="tabpanel" id="panel-historial" aria-labelledby="tab-historial">
@@ -365,24 +380,26 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
       )}
 
       {tab === "pasos" && flow.editorMode === "canvas" && (
-        <section id="panel-pasos" role="tabpanel" aria-labelledby="tab-pasos" aria-label="Lienzo del flujo" className="space-y-3">
-          {modeError && (
-            <p role="alert" className="rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text">
-              {modeError}
-            </p>
-          )}
+        <section id="panel-pasos" role="tabpanel" aria-labelledby="tab-pasos" aria-label="Lienzo del flujo" className="h-full">
           <FlowCanvasLazy
             flowId={flow.id}
+            flowName={flow.name}
+            notice={modeError ?? actionError}
+            onBack={() => router.push("/automatizaciones")}
+            onHistory={() => setTab("historial")}
+            onEditFlow={() => setEditingFlow(true)}
+            onToggleActive={(v) => void toggleActive(v)}
+            toggleDisabled={toggling || block !== null}
             active={flow.active}
             templates={templates}
             tags={tags}
             stages={stages}
+            media={media}
             onTagCreated={(t) => setTags((prev) => (prev.some((x) => x.id === t.id) ? prev : [...prev, t]))}
             onFlowChanged={() => void load()}
             onDirtyChange={setCanvasDirty}
             onBackToSimple={() => (canvasDirty ? setConfirmSimple(true) : void changeMode("simple"))}
           />
-          {modeBusy && <p className="text-xs text-text-3">Cambiando de modo…</p>}
         </section>
       )}
 
@@ -426,7 +443,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
         ) : (
           <ol className="space-y-0">
             {ordered.map((step, i) => {
-              const { title, detail } = describeStep(step, templates, { tags, stages });
+              const { title, detail } = describeStep(step, templates, { tags, stages, media });
               const Icon = STEP_ICON[step.stepType] ?? Workflow;
               const unsupported = !(step.stepType in STEP_ICON);
               return (
@@ -523,6 +540,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           templates={templates}
           tags={tags}
           stages={stages}
+          media={media}
           triggerType={flow.triggerType}
           onTagCreated={(t) => setTags((prev) => (prev.some((x) => x.id === t.id) ? prev : [...prev, t]))}
           onClose={() => setStepDialog(null)}
@@ -538,7 +556,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           title="Eliminar paso"
           message={
             <>
-              ¿Eliminar <strong>{describeStep(removeStep, templates, { tags, stages }).title}</strong>? Los mensajes de este paso que
+              ¿Eliminar <strong>{describeStep(removeStep, templates, { tags, stages, media }).title}</strong>? Los mensajes de este paso que
               estén pendientes dejarán de salir.
               {steps.length === 1 && flow.active && " Como es el único paso, el flujo se apagará."} Esta acción no se
               puede deshacer.

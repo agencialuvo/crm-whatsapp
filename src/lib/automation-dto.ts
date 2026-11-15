@@ -152,6 +152,7 @@ export function describeTrigger(
 export const STEP_LABELS: Record<string, string> = {
   delay: "Esperar",
   send_whatsapp: "Enviar mensaje de WhatsApp",
+  send_media: "Enviar imagen o video",
   condition: "Condición (si / si no)",
   add_tag: "Agregar etiqueta",
   remove_tag: "Quitar etiqueta",
@@ -260,7 +261,10 @@ export const BRANCH_ACTION_LABELS: Record<BranchAction, string> = {
 };
 
 /** Lo que resuelve nombres de etiquetas y etapas en las tarjetas (por id: el motor nunca compara nombres). */
-export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOption[] };
+/** Un archivo de la biblioteca de Medios, lo justo para elegirlo y mostrarlo en un bloque `send_media`. */
+export type MediaOption = { id: string; nombre: string; tipo: "image" | "video"; ruta: string };
+
+export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOption[]; media?: readonly MediaOption[] };
 
 /** La regla en una frase: «El contacto tiene la etiqueta «VIP»». */
 export function describeRule(rule: ConditionRule | Record<string, unknown> | null | undefined, refs: StepRefs = {}): string {
@@ -349,6 +353,17 @@ export function describeStep(
       typeof c.templateId === "string" ? `Plantilla: ${tpl ? tpl.name : "ya no existe"}` : null,
     ].filter((p): p is string => p !== null);
     return { title: name ?? stepLabel(step.stepType), detail: parts.join(" · ") || null };
+  }
+  if (step.stepType === "send_media") {
+    const name = typeof c.name === "string" && c.name.trim() ? c.name.trim() : null;
+    const m = typeof c.mediaId === "string" && c.mediaId ? refs.media?.find((x) => x.id === c.mediaId) : undefined;
+    // Sin archivo elegido (un bloque recién creado) no es «ya no existe»: falta elegirlo.
+    const file = !c.mediaId ? "(sin elegir)" : m ? `«${m.nombre}»` : "(ya no existe)";
+    const caption = typeof c.caption === "string" && c.caption.trim() ? `«${clip(c.caption, 100)}»` : null;
+    return {
+      title: name ?? `${m?.tipo === "video" ? "Video" : "Imagen"} ${file}`,
+      detail: caption ?? "Sin leyenda. Solo sale con la ventana de 24 h abierta.",
+    };
   }
   return { title: stepLabel(step.stepType), detail: "Este tipo de paso todavía no se puede ejecutar." };
 }
