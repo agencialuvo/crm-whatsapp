@@ -33,6 +33,17 @@ export async function orderedSteps(tx: Tx, organizationId: string, flowId: strin
     .orderBy(...stepOrder());
 }
 
+/** El modo de edición del flujo (`simple` si no existe: un flujo borrado no debe romper a quien pregunta). */
+export async function flowEditorMode(tx: Tx, organizationId: string, flowId: string): Promise<"simple" | "canvas"> {
+  const f = schema.automationFlow;
+  const [row] = await tx
+    .select({ mode: f.editorMode })
+    .from(f)
+    .where(scoped(f.organizationId, organizationId, eq(f.id, flowId)))
+    .limit(1);
+  return row?.mode ?? "simple";
+}
+
 /** La compilación del flujo tal como está hoy (sin tocar la base). */
 export async function compileFlowEdges(tx: Tx, organizationId: string, flowId: string): Promise<CompiledEdge[]> {
   return compileLinearEdges(await orderedSteps(tx, organizationId, flowId));
@@ -42,8 +53,10 @@ export async function compileFlowEdges(tx: Tx, organizationId: string, flowId: s
  * Recompila y guarda las aristas del flujo: borra las que había e inserta las nuevas, todo en la transacción de
  * quien llama (o en una propia). Idempotente.
  */
-export async function syncEdges(organizationId: string, flowId: string, tx?: Tx): Promise<number> {
+export async function syncEdges(organizationId: string, flowId: string, tx?: Tx, opts: { force?: boolean } = {}): Promise<number> {
   const run = async (t: Tx) => {
+    // En `canvas` las aristas son las que el usuario dibujó: recompilarlas desde la lista las destruiría.
+    if (!opts.force && (await flowEditorMode(t, organizationId, flowId)) === "canvas") return 0;
     const edges = await compileFlowEdges(t, organizationId, flowId);
     const e = schema.automationEdge;
     await t.delete(e).where(scoped(e.organizationId, organizationId, eq(e.flowId, flowId)));
@@ -72,6 +85,8 @@ export async function syncEdges(organizationId: string, flowId: string, tx?: Tx)
 export async function ensureEdges(organizationId: string, flowId: string): Promise<number> {
   const db = getDb();
   const e = schema.automationEdge;
+  // En `canvas` las aristas guardadas son la verdad, incluso si no hay ninguna.
+  if ((await flowEditorMode(db, organizationId, flowId)) === "canvas") return 0;
   const [any] = await db
     .select({ id: e.id })
     .from(e)
@@ -115,6 +130,8 @@ export async function resolveNextStep(
     .select({ source: e.sourceStepId, target: e.targetStepId, handle: e.sourceHandle })
     .from(e)
     .where(scoped(e.organizationId, organizationId, eq(e.flowId, flowId)));
+  // Sin aristas guardadas: un flujo anterior a las aristas cae a la compilación; uno de lienzo, sin aristas, termina.
+  if (stored.length === 0 && (await flowEditorMode(tx, organizationId, flowId)) === "canvas") return null;
   const edges: { source: string; target: string; handle: string }[] =
     stored.length > 0
       ? stored
@@ -126,8 +143,18 @@ export async function resolveNextStep(
   return edges.find((x) => x.source === sourceStepId && x.handle === handle)?.target ?? null;
 }
 
-/** El paso por el que arranca el flujo: el primero en el orden del lienzo. */
+/**
+ * El paso por el que arranca el flujo. `simple`: el primero en el orden de la lista. `canvas`: el que marcó la
+ * salida del nodo disparador (`entry_step_id`); sin él, el flujo no arranca nada.
+ */
 export async function entryStepId(tx: Tx, organizationId: string, flowId: string): Promise<string | null> {
+  const f = schema.automationFlow;
+  const [flow] = await tx
+    .select({ mode: f.editorMode, entry: f.entryStepId })
+    .from(f)
+    .where(scoped(f.organizationId, organizationId, eq(f.id, flowId)))
+    .limit(1);
+  if (flow?.mode === "canvas") return flow.entry ?? null;
   const s = schema.automationStep;
   const [first] = await tx
     .select({ id: s.id })
@@ -138,12 +165,21 @@ export async function entryStepId(tx: Tx, organizationId: string, flowId: string
   return first?.id ?? null;
 }
 
-/** El grafo del flujo para la pantalla: nodos (los pasos, en orden), aristas y paso de entrada. */
+/**
+ * El grafo del flujo para la pantalla: nodos (los pasos, en orden), aristas, paso de entrada, modo de edición,
+ * cámara/posición del disparador y el `updatedAt` (ms) con el que se guardará de forma optimista.
+ */
 export async function getGraph(organizationId: string, flowId: string) {
   await ensureEdges(organizationId, flowId);
   const db = getDb();
   const s = schema.automationStep;
   const e = schema.automationEdge;
+  const f = schema.automationFlow;
+  const [flow] = await db
+    .select({ mode: f.editorMode, viewport: f.viewport, entry: f.entryStepId, updatedAt: f.updatedAt })
+    .from(f)
+    .where(scoped(f.organizationId, organizationId, eq(f.id, flowId)))
+    .limit(1);
   const nodes = await db
     .select({
       id: s.id,
@@ -168,6 +204,9 @@ export async function getGraph(organizationId: string, flowId: string) {
       position: { x: n.positionX, y: n.positionY },
     })),
     edges: edges satisfies GraphEdgeDto[],
-    entryStepId: nodes[0]?.id ?? null,
+    entryStepId: flow?.mode === "canvas" ? (flow.entry ?? null) : (nodes[0]?.id ?? null),
+    editorMode: (flow?.mode ?? "simple") as "simple" | "canvas",
+    viewport: (flow?.viewport ?? null) as Record<string, unknown> | null,
+    updatedAt: flow?.updatedAt.getTime() ?? Date.now(),
   };
 }

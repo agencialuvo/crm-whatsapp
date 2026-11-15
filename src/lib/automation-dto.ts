@@ -31,6 +31,8 @@ export type FlowDto = {
   triggerType: string;
   triggerConfig: Record<string, unknown> | null;
   active: boolean;
+  /** Cómo se edita: lista lineal (`simple`) o lienzo (`canvas`). Los flujos anteriores al lienzo no lo traen: `simple`. */
+  editorMode?: "simple" | "canvas";
   createdAt: string;
   updatedAt: string;
 };
@@ -295,11 +297,14 @@ export function describeStep(
   if (step.stepType === "add_tag" || step.stepType === "remove_tag") {
     const n = refs.tags?.find((t) => t.id === c.tagId)?.name;
     const verb = step.stepType === "add_tag" ? "Agregar" : "Quitar";
-    return { title: `${verb} etiqueta ${n ? `«${n}»` : "(ya no existe)"}`, detail: null };
+    // Sin etiqueta elegida (un bloque recién creado) no es «ya no existe»: falta elegirla.
+    const missing = typeof c.tagId === "string" && c.tagId ? "(ya no existe)" : "(sin elegir)";
+    return { title: `${verb} etiqueta ${n ? `«${n}»` : missing}`, detail: null };
   }
   if (step.stepType === "set_stage") {
     const n = refs.stages?.find((st) => st.id === c.stageId)?.name;
-    return { title: `Mover a la etapa ${n ? `«${n}»` : "(ya no existe)"}`, detail: "No dispara otros flujos de cambio de etapa." };
+    const missing = typeof c.stageId === "string" && c.stageId ? "(ya no existe)" : "(sin elegir)";
+    return { title: `Mover a la etapa ${n ? `«${n}»` : missing}`, detail: "No dispara otros flujos de cambio de etapa." };
   }
   if (step.stepType === "wait_reply") {
     const minutes = typeof c.timeoutMinutes === "number" ? c.timeoutMinutes : 7 * 24 * 60;

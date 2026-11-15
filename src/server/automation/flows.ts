@@ -39,6 +39,7 @@ export function serializeFlow(f: FlowRow) {
     triggerType: f.triggerType,
     triggerConfig: (f.triggerConfig ?? null) as Record<string, unknown> | null,
     active: f.active,
+    editorMode: f.editorMode,
     createdAt: f.createdAt,
     updatedAt: f.updatedAt,
   };
@@ -57,7 +58,21 @@ export function serializeStep(s: StepRow, order?: number) {
   };
 }
 
-async function loadFlow(organizationId: string, id: string): Promise<FlowRow> {
+/**
+ * Mientras un flujo se edita en el lienzo, la API de pasos de la lista no puede tocarlo: crear o borrar un paso
+ * dejaría uno huérfano o desfasado de las aristas dibujadas (spec 036, D6).
+ */
+function assertSimpleMode(flow: FlowRow) {
+  if (flow.editorMode === "canvas") {
+    throw new AutomationError(
+      "canvas_mode",
+      409,
+      "Este flujo se edita en el Modo Visual. Cambia al Modo Simple para editar sus pasos como lista."
+    );
+  }
+}
+
+export async function loadFlow(organizationId: string, id: string): Promise<FlowRow> {
   const f = schema.automationFlow;
   const [row] = await getDb()
     .select()
@@ -85,7 +100,7 @@ async function countSteps(organizationId: string, flowId: string): Promise<numbe
 }
 
 /** `stage_changed` con etapa: la etapa debe ser de esta organización (no se guarda una referencia ajena). */
-async function assertStageOwned(organizationId: string, config: Record<string, unknown> | null) {
+export async function assertStageOwned(organizationId: string, config: Record<string, unknown> | null) {
   const stageId = config?.toStageId;
   if (typeof stageId !== "string") return;
   const st = schema.pipelineStage;
@@ -98,7 +113,7 @@ async function assertStageOwned(organizationId: string, config: Record<string, u
 }
 
 /** Las etiquetas y etapas que referencia un paso deben ser de esta organización (nunca una referencia ajena). */
-async function assertRefsOwned(organizationId: string, config: Record<string, unknown>) {
+export async function assertRefsOwned(organizationId: string, config: Record<string, unknown>) {
   const rule = (config.rule ?? null) as { type?: string; tagId?: string; stageId?: string } | null;
   const tagId = typeof config.tagId === "string" ? config.tagId : typeof rule?.tagId === "string" ? rule.tagId : null;
   const stageId = typeof config.stageId === "string" ? config.stageId : typeof rule?.stageId === "string" ? rule.stageId : null;
@@ -121,7 +136,7 @@ function assertConditionFitsFlow(triggerType: string, config: Record<string, unk
 }
 
 /** Una plantilla de un paso debe existir en esta organización (que esté aprobada se exige al enviar). */
-async function assertTemplateOwned(organizationId: string, config: Record<string, unknown>) {
+export async function assertTemplateOwned(organizationId: string, config: Record<string, unknown>) {
   const templateId = config.templateId;
   if (typeof templateId !== "string") return;
   const t = schema.template;
@@ -134,7 +149,7 @@ async function assertTemplateOwned(organizationId: string, config: Record<string
 }
 
 /** Valida los ajustes contra el tipo del flujo y, si procede, contra las etapas de la organización. */
-async function resolveTriggerConfig(
+export async function resolveTriggerConfig(
   organizationId: string,
   triggerType: string,
   raw: unknown
@@ -199,7 +214,10 @@ export async function getFlow(organizationId: string, id: string) {
 
 export async function updateFlow(organizationId: string, id: string, patch: FlowPatchInput) {
   const flow = await loadFlow(organizationId, id);
-  const set: Partial<typeof schema.automationFlow.$inferInsert> = { updatedAt: new Date() };
+  // `updated_at` es la revisión de la DEFINICIÓN del flujo (el control optimista del lienzo la compara): encender o
+  // apagar no la edita y no debe dejar «vieja» una copia abierta del lienzo.
+  const set: Partial<typeof schema.automationFlow.$inferInsert> =
+    patch.name !== undefined || patch.triggerConfig !== undefined ? { updatedAt: new Date() } : {};
 
   if (patch.name !== undefined) set.name = patch.name;
   if (patch.triggerConfig !== undefined) {
@@ -237,6 +255,7 @@ export async function deleteFlow(organizationId: string, id: string): Promise<vo
 
 export async function createStep(organizationId: string, flowId: string, input: StepCreateInput) {
   const flow = await loadFlow(organizationId, flowId);
+  assertSimpleMode(flow);
   if ((await countSteps(organizationId, flowId)) >= MAX_STEPS_PER_FLOW) {
     throw new AutomationError("too_many_steps", 409, `Un flujo admite hasta ${MAX_STEPS_PER_FLOW} pasos`);
   }
@@ -270,6 +289,7 @@ export async function updateStep(
   patch: StepPatchInput
 ) {
   const flow = await loadFlow(organizationId, flowId);
+  assertSimpleMode(flow);
   const s = schema.automationStep;
   const [step] = await getDb()
     .select()
@@ -313,6 +333,7 @@ export async function updateStep(
  */
 export async function deleteStep(organizationId: string, flowId: string, stepId: string): Promise<void> {
   const flow = await loadFlow(organizationId, flowId);
+  assertSimpleMode(flow);
   const s = schema.automationStep;
   const gone = await getDb().transaction(async (tx) => {
     // Las ejecuciones que estaban en este paso se cancelan: sin su tarea (se va con el paso) quedarían

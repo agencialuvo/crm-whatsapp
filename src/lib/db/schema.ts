@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   boolean,
   check,
   index,
@@ -2011,6 +2012,16 @@ export const automationFlow = pgTable(
      */
     triggerConfig: jsonb("trigger_config"),
     active: boolean("active").notNull().default(true),
+    /**
+     * Cómo se edita el flujo. `simple`: lista lineal; las aristas se derivan de ella y la posición `y` de los pasos
+     * ES el orden de ejecución. `canvas`: grafo dibujado; las aristas son las que el usuario trazó y las posiciones
+     * son solo visuales (el motor entra por `entry_step_id` y sigue las aristas).
+     */
+    editorMode: text("editor_mode", { enum: ["simple", "canvas"] }).notNull().default("simple"),
+    /** La cámara del lienzo y la posición del nodo disparador: `{ x, y, zoom, trigger: { x, y } }`. */
+    viewport: jsonb("viewport"),
+    /** El paso por el que arranca el flujo en modo `canvas` (la salida del nodo disparador). NULL = no arranca nada. */
+    entryStepId: text("entry_step_id").references((): AnyPgColumn => automationStep.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
