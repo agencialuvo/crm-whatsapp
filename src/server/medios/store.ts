@@ -1,12 +1,12 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { getEnv } from "@/lib/env";
-import { nombreLegible, validarMedio, type MedioDto, type MedioTipo } from "@/lib/medios";
-import { detectarFormato, revisarSvg } from "@/server/medios/sniff";
+import { formatBytes, nombreLegible, validarMedio, type MedioDto, type MedioTipo } from "@/lib/medios";
+import { BYTES_PARA_RECONOCER, detectarFormato, revisarSvg } from "@/server/medios/sniff";
 
 /**
  * Módulo Medios — la biblioteca de imágenes y videos del negocio.
@@ -124,6 +124,160 @@ export async function crearMedio(input: {
     // Sin fila, el archivo sería un huérfano que nadie podría borrar.
     await rm(archivo, { force: true }).catch(() => {});
     throw err;
+  }
+}
+
+/** Hasta este peso un medio se arma en memoria (las imágenes); lo mayor se escribe a disco en flujo. */
+const MAX_EN_MEMORIA = 8 * 1024 * 1024;
+
+function unir(trozos: Uint8Array[], total: number): Buffer {
+  const out = Buffer.allocUnsafe(total);
+  let pos = 0;
+  for (const t of trozos) {
+    out.set(t, pos);
+    pos += t.byteLength;
+  }
+  return out;
+}
+
+/**
+ * Guarda un medio que llega como FLUJO de bytes (cuerpo directo de la subida).
+ * Reconoce el formato con los primeros bytes y a partir de ahí corta en cuanto
+ * se pasa del límite de ESE formato, sin esperar a que termine. Las imágenes
+ * (chicas) se arman en memoria y siguen el camino de `crearMedio`; el video se
+ * escribe a disco trozo a trozo, así 5 GB no pasan por la memoria del servidor.
+ */
+export async function crearMedioDesdeFlujo(input: {
+  organizationId: string;
+  userId: string;
+  flujo: ReadableStream<Uint8Array>;
+  nombre: string;
+  soloTipo?: MedioTipo;
+  permitirSvg?: boolean;
+}): Promise<MedioDto> {
+  const opts = { svg: input.permitirSvg === true };
+  const reader = input.flujo.getReader();
+  const trozos: Uint8Array[] = [];
+  let total = 0;
+  let terminado = false;
+  try {
+    // 1) Lo mínimo para reconocer el formato.
+    while (total < BYTES_PARA_RECONOCER && !terminado) {
+      const r = await reader.read();
+      if (r.done) terminado = true;
+      else if (r.value.byteLength > 0) {
+        trozos.push(r.value);
+        total += r.value.byteLength;
+      }
+    }
+    const cabeza = unir(trozos, total);
+    const formato = detectarFormato(cabeza, opts);
+    const grande = formato !== null && formato.maxBytes > MAX_EN_MEMORIA;
+
+    if (!grande) {
+      // Imagen (o algo que no es un formato válido): el límite es chico, se arma entero y valida `crearMedio`.
+      const tope = formato?.maxBytes ?? MAX_EN_MEMORIA;
+      while (!terminado) {
+        const r = await reader.read();
+        if (r.done) {
+          terminado = true;
+          break;
+        }
+        trozos.push(r.value);
+        total += r.value.byteLength;
+        if (total > tope) {
+          throw new MedioError(
+            "too_large",
+            `«${input.nombre}» pesa más de ${formatBytes(tope)}, el máximo para ${formato?.etiqueta ?? "este formato"}.`
+          );
+        }
+      }
+      return await crearMedio({
+        organizationId: input.organizationId,
+        userId: input.userId,
+        data: unir(trozos, total),
+        nombre: input.nombre,
+        source: "upload",
+        soloTipo: input.soloTipo,
+        permitirSvg: input.permitirSvg,
+      });
+    }
+
+    // 2) Video: a disco en flujo.
+    if (input.soloTipo && formato.tipo !== input.soloTipo) {
+      throw new MedioError("unsupported_type", `«${input.nombre}» es un video. Aquí solo se aceptan imágenes (JPG, PNG, WEBP o AVIF).`);
+    }
+    const id = newId("mediaLibraryItem");
+    const archivo = rutaDeMedio(input.organizationId, id);
+    const parcial = `${archivo}.parcial`;
+    await mkdir(path.dirname(archivo), { recursive: true });
+    const fh = await open(parcial, "w");
+    let escritos = 0;
+    try {
+      const escribir = async (t: Uint8Array) => {
+        escritos += t.byteLength;
+        if (escritos > formato.maxBytes) {
+          throw new MedioError(
+            "too_large",
+            `«${input.nombre}» pesa más de ${formatBytes(formato.maxBytes)}, el máximo para ${formato.etiqueta}.`
+          );
+        }
+        await fh.write(t);
+      };
+      for (const t of trozos) await escribir(t);
+      while (!terminado) {
+        const r = await reader.read();
+        if (r.done) terminado = true;
+        else await escribir(r.value);
+      }
+    } catch (err) {
+      await fh.close().catch(() => {});
+      await rm(parcial, { force: true }).catch(() => {});
+      throw err;
+    }
+    await fh.close();
+    const valido = validarMedio(input.nombre, formato.mime, escritos, opts);
+    if (!valido.ok) {
+      await rm(parcial, { force: true }).catch(() => {});
+      throw new MedioError(valido.code, valido.message);
+    }
+    await rename(parcial, archivo);
+    try {
+      const [fila] = await getDb()
+        .insert(schema.mediaLibraryItem)
+        .values({
+          id,
+          organizationId: input.organizationId,
+          name: nombreLegible(input.nombre),
+          kind: formato.tipo,
+          mimeType: formato.mime,
+          sizeBytes: escritos,
+          source: "upload",
+          sourceUrl: null,
+          createdBy: input.userId,
+        })
+        .returning();
+      return medioToDto(fila!);
+    } catch (err) {
+      await rm(archivo, { force: true }).catch(() => {});
+      throw err;
+    }
+  } finally {
+    // Si se rechazó antes de leerlo todo, se descarta (sin guardar) lo poco que falte: cortar la conexión a media
+    // subida hace que el cliente no vea la respuesta. Lo mucho se corta: no se reciben GB solo para decir que no.
+    if (!terminado) {
+      try {
+        let descartado = 0;
+        while (descartado < 16 * 1024 * 1024) {
+          const r = await reader.read();
+          if (r.done) break;
+          descartado += r.value.byteLength;
+        }
+      } catch {
+        // El cliente ya cortó: nada que descartar.
+      }
+    }
+    await reader.cancel().catch(() => {});
   }
 }
 

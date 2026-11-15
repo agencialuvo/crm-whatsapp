@@ -34,8 +34,9 @@ export function subirArchivo(
       reject(new Error(body?.error?.message ?? "No se pudo subir el archivo. Inténtalo de nuevo."));
     };
     xhr.onerror = () => reject(new Error("No se pudo conectar. Revisa tu conexión e inténtalo de nuevo."));
-    const form = new FormData();
-    form.append("file", file);
-    xhr.send(form);
+    // Cuerpo directo (no multipart): el servidor lo procesa en flujo y no carga el archivo entero.
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-Nombre", encodeURIComponent(file.name));
+    xhr.send(file);
   });
 }

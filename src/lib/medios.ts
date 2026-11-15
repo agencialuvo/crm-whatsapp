@@ -10,6 +10,7 @@
  */
 
 const MB = 1024 * 1024;
+const GB = 1024 * MB;
 
 export type MedioTipo = "image" | "video";
 
@@ -28,13 +29,13 @@ export type FormatoMedio = {
 /** Opciones de subida: `svg` admite SVG (solo el selector de iconos lo pide). */
 export type OpcionesFormato = { svg?: boolean };
 
-/** Imágenes estándar: hasta 3 MB. Modernas (webp/avif): hasta 1,5 MB. Video mp4: hasta 50 MB. */
+/** Imágenes estándar: hasta 3 MB. Modernas (webp/avif): hasta 1,5 MB. Video mp4: hasta 5 GB. */
 export const FORMATOS_MEDIO: readonly FormatoMedio[] = [
   { ext: "jpg", mime: "image/jpeg", tipo: "image", maxBytes: 3 * MB, etiqueta: "JPG" },
   { ext: "png", mime: "image/png", tipo: "image", maxBytes: 3 * MB, etiqueta: "PNG" },
   { ext: "webp", mime: "image/webp", tipo: "image", maxBytes: 1.5 * MB, etiqueta: "WEBP" },
   { ext: "avif", mime: "image/avif", tipo: "image", maxBytes: 1.5 * MB, etiqueta: "AVIF" },
-  { ext: "mp4", mime: "video/mp4", tipo: "video", maxBytes: 50 * MB, etiqueta: "MP4" },
+  { ext: "mp4", mime: "video/mp4", tipo: "video", maxBytes: 5 * GB, etiqueta: "MP4" },
   { ext: "svg", mime: "image/svg+xml", tipo: "image", maxBytes: 256 * 1024, etiqueta: "SVG", soloIcono: true },
 ];
 
@@ -48,11 +49,18 @@ export const ACCEPT_IMAGENES = ".jpg,.jpeg,.png,.webp,.avif,image/jpeg,image/png
 export const ACCEPT_ICONOS = `${ACCEPT_IMAGENES},.svg,image/svg+xml`;
 
 /** Tope del cuerpo de una subida: el mayor de los límites más el sobre del multipart. */
-export const MAX_SUBIDA_BYTES = 50 * MB + 64 * 1024;
+export const MAX_SUBIDA_BYTES = 5 * GB + 64 * 1024;
+
+/**
+ * Tope de una subida `multipart/form-data`, que el servidor tiene que cargar
+ * entera en memoria. Lo más grande va por cuerpo directo (en flujo, a disco).
+ */
+export const MAX_SUBIDA_MULTIPART_BYTES = 50 * MB + 64 * 1024;
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < MB) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes >= GB) return `${(bytes / GB).toFixed(bytes < 10 * GB ? 1 : 0).replace(".", ",")} GB`;
   return `${(bytes / MB).toFixed(bytes < 10 * MB ? 1 : 0).replace(".", ",")} MB`;
 }
 
@@ -68,7 +76,7 @@ export function resumenDeLimitesIcono(): string {
 
 /** Texto de ayuda con los límites, para la zona de subida. */
 export function resumenDeLimites(): string {
-  return "JPG y PNG hasta 3 MB · WEBP y AVIF hasta 1,5 MB · MP4 hasta 50 MB";
+  return "JPG y PNG hasta 3 MB · WEBP y AVIF hasta 1,5 MB · MP4 hasta 5 GB";
 }
 
 function extensionDe(nombre: string): string {

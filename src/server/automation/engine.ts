@@ -96,7 +96,7 @@ export type LogInput = {
 /** El archivo de un `send_media` ya leído de la biblioteca, o por qué no se pudo. */
 export type MediaFile =
   | { ok: true; data: Buffer; mimeType: string; fileName: string }
-  | { ok: false; reason: "not_found" | "file_missing" };
+  | { ok: false; reason: "not_found" | "file_missing" | "too_large" };
 
 export type Deps = {
   now(): Date;
@@ -481,7 +481,10 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       }
       const mediaId = (cfgResult.data as { mediaId: string }).mediaId;
       const loaded = await deps.loadMedia(row.organizationId, mediaId);
-      if (!loaded.ok) return await fail(loaded.reason === "not_found" ? "media_not_found" : "media_file_missing", { mediaId });
+      if (!loaded.ok) {
+        const error = loaded.reason === "not_found" ? "media_not_found" : loaded.reason === "too_large" ? "media_too_large" : "media_file_missing";
+        return await fail(error, { mediaId });
+      }
       mediaFile = loaded;
     } else {
       const wa = cfgResult.data as { content?: string; templateId?: string };

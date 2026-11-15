@@ -35,9 +35,11 @@ describe("límites de peso por formato", () => {
     expect(validarMedio("a.avif", "image/avif", 1.5 * MB + 1)).toMatchObject({ ok: false, code: "too_large" });
   });
 
-  it("MP4 llega hasta 50 MB", () => {
-    expect(validarMedio("v.mp4", "video/mp4", 50 * MB).ok).toBe(true);
-    expect(validarMedio("v.mp4", "video/mp4", 50 * MB + 1)).toMatchObject({ ok: false, code: "too_large" });
+  it("MP4 llega hasta 5 GB", () => {
+    const GB = 1024 * MB;
+    expect(validarMedio("v.mp4", "video/mp4", 5 * GB).ok).toBe(true);
+    expect(validarMedio("v.mp4", "video/mp4", 5 * GB + 1)).toMatchObject({ ok: false, code: "too_large" });
+    expect(validarMedio("v.mp4", "video/mp4", 5 * GB + 1)).toMatchObject({ message: expect.stringContaining("5,0 GB") });
   });
 
   it("el aviso dice el archivo, su peso y el máximo de ESE formato", () => {

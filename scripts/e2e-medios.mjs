@@ -3,7 +3,7 @@
  * videos).
  *
  * Cubre, contra la app real: la subida desde el dispositivo, los límites de
- * peso y formato (JPG/PNG 3 MB, WEBP/AVIF 1,5 MB, MP4 50 MB), el archivo
+ * peso y formato (JPG/PNG 3 MB, WEBP/AVIF 1,5 MB, MP4 5 GB, subido en flujo), el archivo
  * disfrazado, la inserción por URL (y el bloqueo de direcciones internas), la
  * URL pública con Range y, en el navegador, la cuadrícula, el lightbox y
  * «Copiar URL».
@@ -94,8 +94,32 @@ ok("MP4 de 20 MB → 201", v1.status() === 201, `status ${v1.status()}`);
 const medioMp4 = v1.ok() ? (await v1.json()).medio : null;
 if (medioMp4) creados.push(medioMp4.id);
 ok("el MP4 queda como video", medioMp4?.tipo === "video");
-const v2 = await subir("enorme.mp4", "video/mp4", mp4(50 * MB + 1));
-ok("MP4 de 50 MB + 1 byte → 413", v2.status() === 413, `status ${v2.status()}`);
+const v2 = await subir("enorme.mp4", "video/mp4", mp4(51 * MB));
+ok("MP4 de 51 MB por multipart → 413 (ese camino carga en memoria y topa en 50 MB)", v2.status() === 413, `status ${v2.status()}`);
+
+console.log("\n== Cuerpo directo en flujo (videos de hasta 5 GB) ==");
+const subirDirecto = (nombre, mimeType, buffer, query = "") =>
+  req.post(`${BASE}/api/medios${query}`, {
+    headers: { "Content-Type": mimeType, "X-Nombre": encodeURIComponent(nombre) },
+    data: buffer,
+  });
+const d1 = await subirDirecto("clip grande ñ.mp4", "video/mp4", mp4(60 * MB));
+ok("MP4 de 60 MB por cuerpo directo → 201 (supera el tope del multipart)", d1.status() === 201, `status ${d1.status()}`);
+const medioGrande = d1.ok() ? (await d1.json()).medio : null;
+if (medioGrande) creados.push(medioGrande.id);
+ok("conserva el peso exacto y el nombre con tilde", medioGrande?.bytes === 60 * MB && medioGrande?.nombre === "clip grande ñ", JSON.stringify(medioGrande));
+if (medioGrande) {
+  const rango = await req.get(`${BASE}${medioGrande.ruta}`, { headers: { Range: "bytes=0-15" } });
+  ok("el archivo en disco se sirve con Range (206, 16 bytes)", rango.status() === 206 && (await rango.body()).length === 16, `status ${rango.status()}`);
+}
+const d2 = await subirDirecto("grande.jpg", "image/jpeg", jpg(3 * MB + 1));
+ok("JPG de 3 MB + 1 byte por cuerpo directo → 413", d2.status() === 413, `status ${d2.status()}`);
+const d3 = await subirDirecto("disfraz.mp4", "video/mp4", Buffer.from("<html>".padEnd(200, " ")));
+ok("HTML con nombre .mp4 por cuerpo directo → 422", d3.status() === 422, `status ${d3.status()}`);
+const d4 = await subirDirecto("clip.mp4", "video/mp4", mp4(1 * MB), "?tipo=image");
+ok("un video donde solo se aceptan imágenes → 422", d4.status() === 422, `status ${d4.status()}`);
+const d5 = await subirDirecto("vacio.mp4", "video/mp4", Buffer.alloc(0));
+ok("cuerpo vacío → 422", d5.status() === 422, `status ${d5.status()}`);
 
 console.log("\n== Formatos y archivos disfrazados ==");
 const f1 = await subir("dibujo.svg", "image/svg+xml", Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"));
