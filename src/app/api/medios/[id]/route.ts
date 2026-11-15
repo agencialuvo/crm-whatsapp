@@ -28,7 +28,7 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
     return Response.json({ medio });
   } catch (err) {
     if (err instanceof MedioError) {
-      const status = err.code === "forbidden" ? 403 : err.code === "empty" ? 422 : 404;
+      const status = err.code === "forbidden" ? 403 : err.code === "empty" ? 422 : err.code === "in_use" ? 409 : 404;
       return apiError(status, err.code, err.message);
     }
     throw err;
@@ -49,7 +49,7 @@ export const DELETE = withAuth(async (session, _req: Request, ctx: Params) => {
     return Response.json({ ok: true });
   } catch (err) {
     if (err instanceof MedioError) {
-      return apiError(err.code === "forbidden" ? 403 : 404, err.code, err.message);
+      return apiError(err.code === "forbidden" ? 403 : err.code === "in_use" ? 409 : 404, err.code, err.message);
     }
     throw err;
   }

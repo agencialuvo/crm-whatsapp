@@ -5,6 +5,7 @@ import {
   daysOffsetSchema,
   delayConfigSchema,
   removeTagConfigSchema,
+  sendMediaConfigSchema,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
   waitReplyConfigSchema,
@@ -34,6 +35,7 @@ export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number];
 
 export const STEP_TYPES = [
   "send_whatsapp",
+  "send_media",
   "delay",
   "wait_until",
   "wait_reply",
@@ -117,6 +119,7 @@ export const stepCreateSchema = z
     "stepType",
     [
       z.object({ stepType: z.literal("send_whatsapp"), config: sendWhatsappConfigSchema }),
+      z.object({ stepType: z.literal("send_media"), config: sendMediaConfigSchema }),
       z.object({ stepType: z.literal("delay"), config: delayConfigSchema }),
       z.object({ stepType: z.literal("wait_until"), config: waitUntilConfigSchema }),
       z.object({ stepType: z.literal("wait_reply"), config: waitReplyConfigSchema }),
@@ -153,6 +156,7 @@ export type StepPatchInput = z.infer<typeof stepPatchSchema>;
 
 const STEP_CONFIG_SCHEMAS = {
   send_whatsapp: sendWhatsappConfigSchema,
+  send_media: sendMediaConfigSchema,
   delay: delayConfigSchema,
   wait_until: waitUntilConfigSchema,
   wait_reply: waitReplyConfigSchema,

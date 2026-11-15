@@ -184,6 +184,11 @@ function setup(
     flowTriggerType: vi.fn(async () => over.trigger ?? "lead_created"),
     timezone: vi.fn(async () => "UTC"),
     contactFacts: vi.fn(async () => over.facts ?? { tagIds: [], stageId: null }),
+    sendMedia: vi.fn(async () => ({ messageId: "msg_media" })),
+    loadMedia: vi.fn(async () => ({ ok: true as const, data: Buffer.from("x"), mimeType: "image/png", fileName: "a.png" })),
+    isOptedOut: vi.fn(async () => false),
+    recentAutomaticSends: vi.fn(async () => [] as Date[]),
+    defer: vi.fn(async () => {}),
     applyTag: vi.fn(over.applyTag ?? (async () => "added" as const)),
     moveContactToStage: vi.fn(
       over.moveContactToStage ??

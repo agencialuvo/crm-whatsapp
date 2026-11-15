@@ -1,5 +1,6 @@
 import {
   OUT_OF_WINDOW_ERROR,
+  OUT_OF_WINDOW_MEDIA_ERROR,
   addTagConfigSchema,
   applySendWindow,
   backoffMs,
@@ -14,6 +15,7 @@ import {
   isReplyTimeoutKey,
   removeTagConfigSchema,
   renderVars,
+  sendMediaConfigSchema,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
   stepLabel,
@@ -23,6 +25,7 @@ import {
   type NodeResult,
   type SendDecision,
 } from "@/lib/automation";
+import { AUTOMATION_RATE_LIMIT, decideRateLimit, rateLimitHoldExpired } from "@/lib/automation-compliance";
 import { dayLabelInTz, timeInTz } from "@/lib/time/slots";
 import { isWindowOpen } from "@/server/inbox/window";
 
@@ -52,6 +55,8 @@ export type Row = {
   runId?: string | null;
   /** La llave de la tarea: la de «venció el tiempo» de un `wait_reply` empieza con `reply_timeout:`. */
   dedupeKey?: string | null;
+  /** Cuándo nació la tarea: el límite de frecuencia descarta lo que lleva demasiado retenido. */
+  createdAt?: Date;
 };
 
 /** Lo que el motor necesita de la cita de una tarea: si sigue vigente, a qué hora es y si ya se confirmó. */
@@ -84,9 +89,14 @@ export type LogInput = {
   stepId: string;
   contactId: string;
   queueId: string;
-  status: "success" | "failed";
+  status: "success" | "failed" | "skipped_opt_out" | "skipped_rate_limit";
   metadata: Record<string, unknown>;
 };
+
+/** El archivo de un `send_media` ya leído de la biblioteca, o por qué no se pudo. */
+export type MediaFile =
+  | { ok: true; data: Buffer; mimeType: string; fileName: string }
+  | { ok: false; reason: "not_found" | "file_missing" };
 
 export type Deps = {
   now(): Date;
@@ -105,6 +115,20 @@ export type Deps = {
     templateId: string;
     variables?: string[];
   }): Promise<{ messageId: string }>;
+  sendMedia(input: {
+    organizationId: string;
+    conversationId: string;
+    file: { data: Buffer; mimeType: string; fileName: string };
+    caption?: string;
+  }): Promise<{ messageId: string }>;
+  /** El archivo de un medio de la biblioteca. */
+  loadMedia(organizationId: string, mediaId: string): Promise<MediaFile>;
+  /** Cumplimiento (037): ¿el contacto pidió no recibir mensajes automáticos? */
+  isOptedOut(organizationId: string, contactId: string): Promise<boolean>;
+  /** Cumplimiento (037): cuándo salieron los envíos automáticos exitosos del contacto desde `since` (todos los flujos). */
+  recentAutomaticSends(organizationId: string, contactId: string, since: Date): Promise<Date[]>;
+  /** Cumplimiento (037): devuelve la tarea a `pending` para `at` SIN gastar un intento (el límite no es un fallo). */
+  defer(row: Row, at: Date, reason: string): Promise<void>;
   waMessageIdOf(organizationId: string, messageId: string): Promise<string | null>;
   hasSuccessLog(organizationId: string, queueId: string): Promise<boolean>;
   writeLog(entry: LogInput): Promise<void>;
@@ -415,14 +439,30 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       return "completed";
     }
 
-    if (step.stepType !== "send_whatsapp") {
+    const isMedia = step.stepType === "send_media";
+    if (step.stepType !== "send_whatsapp" && !isMedia) {
       // Un tipo sin ejecutor se falla a la vista en vez de dar el paso por hecho en silencio.
       return await fail("step_type_not_supported", { stepType: step.stepType });
     }
 
-    const cfg = sendWhatsappConfigSchema.safeParse(step.config);
-    if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
-    const config = cfg.data;
+    const cfgResult = isMedia ? sendMediaConfigSchema.safeParse(step.config) : sendWhatsappConfigSchema.safeParse(step.config);
+    if (!cfgResult.success) return await fail("invalid_step_config", { detail: cfgResult.error.issues[0]?.message });
+
+    // Cumplimiento (037, D5): un contacto dado de baja NO recibe mensajes automáticos. Se mira antes que todo lo demás
+    // (ventana, plantilla, límite): es la regla que manda. La ejecución termina aquí, no salta al paso siguiente.
+    if (await deps.isOptedOut(row.organizationId, row.contactId)) {
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "skipped_opt_out",
+        metadata: { ...snapshot, reason: "opted_out" },
+      });
+      await deps.markCancelled(row, "skipped_opt_out");
+      return "cancelled";
+    }
 
     const target = await deps.loadTarget(row.organizationId, row.contactId);
     if (!target) return await fail("no_conversation");
@@ -432,17 +472,60 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
 
     // Regla de la ventana de 24 h de Meta.
     const windowOpen = isWindowOpen(target.lastInboundAt, now);
-    const templateStatus = config.templateId
-      ? await deps.templateStatus(row.organizationId, config.templateId)
-      : null;
-    const decision: SendDecision = decideSend({ windowOpen, config, templateStatus });
-    if (decision.kind === "fail") {
-      return await fail(decision.error, {
-        windowOpen,
-        lastInboundAt: target.lastInboundAt?.toISOString() ?? null,
-        templateId: config.templateId ?? null,
-        templateStatus,
+    let decision: SendDecision = { kind: "text" };
+    let mediaFile: Extract<MediaFile, { ok: true }> | null = null;
+    if (isMedia) {
+      // Un adjunto no tiene plantilla: fuera de la ventana no hay forma de enviarlo.
+      if (!windowOpen) {
+        return await fail(OUT_OF_WINDOW_MEDIA_ERROR, { windowOpen, lastInboundAt: target.lastInboundAt?.toISOString() ?? null });
+      }
+      const mediaId = (cfgResult.data as { mediaId: string }).mediaId;
+      const loaded = await deps.loadMedia(row.organizationId, mediaId);
+      if (!loaded.ok) return await fail(loaded.reason === "not_found" ? "media_not_found" : "media_file_missing", { mediaId });
+      mediaFile = loaded;
+    } else {
+      const wa = cfgResult.data as { content?: string; templateId?: string };
+      const templateStatus = wa.templateId ? await deps.templateStatus(row.organizationId, wa.templateId) : null;
+      decision = decideSend({ windowOpen, config: wa, templateStatus });
+      if (decision.kind === "fail") {
+        return await fail(decision.error, {
+          windowOpen,
+          lastInboundAt: target.lastInboundAt?.toISOString() ?? null,
+          templateId: wa.templateId ?? null,
+          templateStatus,
+        });
+      }
+    }
+
+    // Cumplimiento (037, D6): tope de mensajes automáticos por contacto en una ventana móvil, sumando los flujos. Se mira
+    // DESPUÉS de lo que haría fallar al paso: no se retiene lo que de todos modos no iba a salir.
+    const windowMs = AUTOMATION_RATE_LIMIT.windowHours * 3_600_000;
+    const sentAt = await deps.recentAutomaticSends(row.organizationId, row.contactId, new Date(now.getTime() - windowMs));
+    const limit = decideRateLimit({ sentAt, now });
+    if (!limit.allowed) {
+      const discard = !!row.createdAt && rateLimitHoldExpired(row.createdAt, now);
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "skipped_rate_limit",
+        metadata: {
+          ...snapshot,
+          used: limit.used,
+          max: AUTOMATION_RATE_LIMIT.maxMessages,
+          windowHours: AUTOMATION_RATE_LIMIT.windowHours,
+          action: discard ? "discarded" : "deferred",
+          ...(discard ? {} : { retryAt: limit.retryAt.toISOString() }),
+        },
       });
+      if (discard) {
+        await deps.markCancelled(row, "skipped_rate_limit");
+        return "cancelled";
+      }
+      await deps.defer(row, limit.retryAt, "skipped_rate_limit");
+      return "retry";
     }
 
     // En un flujo de cita, el mensaje puede decir cuándo es: {{fecha}} y {{hora}} en la zona del negocio.
@@ -460,7 +543,25 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
     };
     let payload: Record<string, unknown>;
     let sent: { messageId: string };
-    if (decision.kind === "text") {
+    if (isMedia && mediaFile) {
+      const mc = cfgResult.data as { mediaId: string; caption?: string };
+      const caption = mc.caption ? renderVars(mc.caption, vars) : undefined;
+      payload = {
+        mode: "media",
+        conversationId: target.conversationId,
+        mediaId: mc.mediaId,
+        mimeType: mediaFile.mimeType,
+        bytes: mediaFile.data.byteLength,
+        caption: caption ?? null,
+      };
+      sent = await deps.sendMedia({
+        organizationId: row.organizationId,
+        conversationId: target.conversationId,
+        file: { data: mediaFile.data, mimeType: mediaFile.mimeType, fileName: mediaFile.fileName },
+        ...(caption ? { caption } : {}),
+      });
+    } else if (decision.kind === "text") {
+      const config = cfgResult.data as { content?: string };
       const text = renderVars(config.content!, vars);
       payload = { mode: "text", conversationId: target.conversationId, text };
       sent = await deps.sendText({
@@ -469,6 +570,7 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         text,
       });
     } else {
+      const config = cfgResult.data as { templateId?: string; variables?: string[] };
       const variables = (config.variables ?? []).map((v) => renderVars(v, vars));
       payload = {
         mode: "template",

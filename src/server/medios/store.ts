@@ -1,6 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -18,7 +18,7 @@ import { detectarFormato, revisarSvg } from "@/server/medios/sniff";
 
 export class MedioError extends Error {
   constructor(
-    readonly code: "empty" | "unsupported_type" | "too_large" | "not_found" | "forbidden",
+    readonly code: "empty" | "unsupported_type" | "too_large" | "not_found" | "forbidden" | "in_use",
     message: string
   ) {
     super(message);
@@ -188,6 +188,16 @@ export async function borrarMedio(input: {
   if (!input.puedeAdministrar && fila.createdBy !== input.userId) {
     throw new MedioError("forbidden", "Solo quien lo subió, el dueño o un administrador puede borrarlo.");
   }
+  // 037: un flujo de automatización que lo envía dejaría de funcionar en silencio.
+  const flujos = await flujosQueUsanMedio(input.organizationId, input.id);
+  if (flujos.length > 0) {
+    throw new MedioError(
+      "in_use",
+      `«${fila.name}» lo envía ${flujos.length === 1 ? "la automatización" : "las automatizaciones"} ${flujos
+        .map((f) => `«${f.name}»`)
+        .join(", ")}. Cambia ese paso antes de borrarlo.`
+    );
+  }
   await db
     .delete(schema.mediaLibraryItem)
     .where(
@@ -197,6 +207,17 @@ export async function borrarMedio(input: {
       )
     );
   await rm(rutaDeMedio(input.organizationId, input.id), { force: true }).catch(() => {});
+}
+
+/** Los flujos de automatización que envían un medio (por el `mediaId` de sus pasos `send_media`). */
+export async function flujosQueUsanMedio(organizationId: string, id: string): Promise<{ id: string; name: string }[]> {
+  const s = schema.automationStep;
+  const f = schema.automationFlow;
+  return getDb()
+    .selectDistinct({ id: f.id, name: f.name })
+    .from(s)
+    .innerJoin(f, eq(f.id, s.flowId))
+    .where(scoped(s.organizationId, organizationId, eq(s.stepType, "send_media"), sql`${s.config}->>'mediaId' = ${id}`));
 }
 
 /** El nombre de un archivo en la biblioteca: sin saltos ni caracteres de control, de 1 a 120. */

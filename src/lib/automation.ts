@@ -46,6 +46,20 @@ export const sendWhatsappConfigSchema = z
   });
 export type SendWhatsappConfig = z.infer<typeof sendWhatsappConfigSchema>;
 
+/**
+ * `send_media`: una imagen o video de la biblioteca de Medios. La leyenda admite `{{name}}`, `{{fecha}}`, `{{hora}}` y
+ * `{{servicio}}`; 1024 es el tope de Meta. Solo sale dentro de la ventana de 24 h (un adjunto no tiene plantilla).
+ */
+export const sendMediaConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  mediaId: z.string().trim().min(1, "Elige un archivo de la biblioteca").max(64),
+  caption: z.string().trim().max(1024).optional(),
+});
+export type SendMediaConfig = z.infer<typeof sendMediaConfigSchema>;
+
+/** Con la ventana de 24 h cerrada un adjunto no puede salir: no hay plantilla de imagen o video. */
+export const OUT_OF_WINDOW_MEDIA_ERROR = "out_of_window_media_requires_open_window";
+
 export const DELAY_UNITS = ["minutes", "hours", "days"] as const;
 const UNIT_MS = { minutes: 60_000, hours: 3_600_000, days: 86_400_000 } as const;
 

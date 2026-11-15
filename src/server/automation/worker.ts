@@ -1,10 +1,12 @@
-import { sendText } from "@/server/inbox/send";
+import { sendMediaMessage, sendText } from "@/server/inbox/send";
 import { sendTemplate } from "@/server/whatsapp/templates";
 import { businessTimezone } from "@/server/analytics/period";
 import { processRow, type Deps, type Row } from "@/server/automation/engine";
 import * as queue from "@/server/automation/queue";
 import { applyTag, contactFacts, moveContactToStage } from "@/server/automation/actions";
 import { runBirthdayTrigger } from "@/server/automation/triggers";
+import { loadMediaFile } from "@/server/automation/media";
+import { isOptedOut } from "@/server/automation/opt-out";
 
 /**
  * Automatizaciones — el worker: cada cierto tiempo toma las tareas vencidas de `automation_queue` y
@@ -38,6 +40,11 @@ export function defaultDeps(): Deps {
     // Nunca de IA (`aiGenerated`): lo escribió el dueño del negocio, no el agente.
     sendText: (input) => sendText(input),
     sendTemplate: (input) => sendTemplate(input),
+    sendMedia: (input) => sendMediaMessage(input),
+    loadMedia: loadMediaFile,
+    isOptedOut,
+    recentAutomaticSends: queue.recentAutomaticSends,
+    defer: (row, at, reason) => queue.defer(row as queue.QueueRow, at, reason),
     contactFacts,
     applyTag,
     moveContactToStage,

@@ -11,6 +11,7 @@ import {
 import { tagsOfContact } from "@/server/tags/store";
 import { upsertFicha } from "@/server/bot/ficha";
 import { pauseConversations } from "@/server/contacts-import";
+import { applyOptOut, clearOptOut } from "@/server/automation/opt-out";
 import { cuentaComoAnuncio } from "@/lib/anuncios";
 import {
   anuncioDelContacto,
@@ -68,6 +69,8 @@ const patchSchema = z.object({
   notes: z.string().max(4000).nullable().optional(),
   /** 027 — El agente no le responde a esta persona; se lleva a su conversación. */
   aiPaused: z.boolean().optional(),
+  /** 037 — Baja de mensajes automáticos: `true` la marca (y cancela sus ejecuciones vivas), `false` la levanta. */
+  optedOut: z.boolean().optional(),
   archived: z.boolean().optional(),
   /**
    * Parche de la ficha: solo las claves que cambian. `null` borra una clave.
@@ -125,8 +128,15 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   if (body.data.aiPaused !== undefined) {
     await pauseConversations(session.organizationId, [id], body.data.aiPaused);
   }
+  // 037: la baja manual usa el MISMO camino que la palabra clave (marca + cancela las ejecuciones vivas).
+  let contactRow = updated[0];
+  if (body.data.optedOut !== undefined) {
+    if (body.data.optedOut) await applyOptOut({ organizationId: session.organizationId, contactId: id, source: "manual" });
+    else await clearOptOut(session.organizationId, id);
+    contactRow = (await getContactById(session.organizationId, id)) ?? contactRow;
+  }
   const anuncio = await anuncioDelContacto(session.organizationId, id);
   return Response.json({
-    contact: serializeContact(updated[0], null, null, cuentaComoAnuncio(anuncio)),
+    contact: serializeContact(contactRow, null, null, cuentaComoAnuncio(anuncio)),
   });
 });

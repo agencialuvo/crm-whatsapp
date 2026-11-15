@@ -154,6 +154,11 @@ function setup(over: {
     flowTriggerType: vi.fn(async () => over.trigger ?? "birthday"),
     timezone: vi.fn(async () => over.timezone ?? "UTC"),
     contactFacts: vi.fn(async () => ({ tagIds: [] as string[], stageId: null as string | null })),
+    sendMedia: vi.fn(async () => ({ messageId: "msg_media" })),
+    loadMedia: vi.fn(async () => ({ ok: true as const, data: Buffer.from("x"), mimeType: "image/png", fileName: "a.png" })),
+    isOptedOut: vi.fn(async () => false),
+    recentAutomaticSends: vi.fn(async () => [] as Date[]),
+    defer: vi.fn(async () => {}),
     applyTag: vi.fn(async () => "added" as const),
     moveContactToStage: vi.fn(async (_o: string, _c: string, stageId: string) => ({
       status: "moved" as const,

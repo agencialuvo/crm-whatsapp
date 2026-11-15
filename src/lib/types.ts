@@ -134,6 +134,9 @@ export type ContactDto = {
   ficha?: FichaDto;
   /** 027 — El agente no le responde a esta persona: la atiende el dueño. */
   aiPaused?: boolean;
+  /** 037 — Pidió no recibir mensajes automáticos (baja); el motor de automatizaciones no le envía. */
+  optedOut?: boolean;
+  optedOutAt?: string | null;
 };
 
 /* ============================================================

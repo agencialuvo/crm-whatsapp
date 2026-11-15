@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -515,3 +515,40 @@ export const markCancelled = (row: QueueRow, reason: string) => endRow(row, "can
 /** Vuelve a `pending` para `at`, con el motivo del último fallo. */
 export const reschedule = (row: QueueRow, at: Date, error: string) =>
   setStatus(row, { status: "pending", lockedAt: null, scheduledFor: at, error });
+
+/**
+ * Cumplimiento (037, D6): cuándo salieron los envíos automáticos exitosos de un contacto desde `since`, sumando todos
+ * los flujos. Sale del historial —lo que de verdad se envió—: las omisiones y los fallos no cuentan. El tipo del paso se
+ * lee de la foto guardada en el log, así sigue contando aunque el paso se borre.
+ */
+export async function recentAutomaticSends(organizationId: string, contactId: string, since: Date): Promise<Date[]> {
+  const l = schema.automationExecutionLog;
+  const rows = await getDb()
+    .select({ at: l.executedAt })
+    .from(l)
+    .where(
+      scoped(
+        l.organizationId,
+        organizationId,
+        eq(l.contactId, contactId),
+        eq(l.status, "success"),
+        gte(l.executedAt, since),
+        sql`${l.metadata}->'step'->>'stepType' in ('send_whatsapp', 'send_media')`
+      )
+    );
+  return rows.map((r) => r.at);
+}
+
+/**
+ * Vuelve a `pending` para `at` SIN gastar un intento: retener un mensaje por el límite de frecuencia no es un fallo, y
+ * `claimDue` ya sumó uno al tomarla (si no se devolviera, `failExhausted` la mataría por «reintentos»).
+ */
+export async function defer(row: QueueRow, at: Date, reason: string): Promise<void> {
+  await setStatus(row, {
+    status: "pending",
+    lockedAt: null,
+    scheduledFor: at,
+    error: reason,
+    attempts: sql`greatest(${schema.automationQueue.attempts} - 1, 0)` as unknown as number,
+  });
+}

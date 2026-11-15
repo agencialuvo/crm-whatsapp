@@ -77,7 +77,7 @@ export function logStatusTone(status: string): LogTone {
 
 /** Por qué se omitió, en una frase. */
 export const SKIP_REASONS: Record<string, string> = {
-  skipped_rate_limit: "Se omitió por la regla de frecuencia: ese contacto ya recibió un mensaje hace poco.",
+  skipped_rate_limit: "Se retuvo por el límite de frecuencia: ese contacto ya recibió el máximo de mensajes automáticos de las últimas 24 h. Sale solo cuando haya hueco; si se pasa de un día retenido, se descarta.",
   skipped_opt_out: "Se omitió porque el contacto pidió no recibir más mensajes.",
 };
 
@@ -88,6 +88,12 @@ const ERROR_EXPLANATIONS: [RegExp, string][] = [
     /out_of_window_requires_template/,
     "Pasaron más de 24 h desde el último mensaje del cliente, y fuera de esa ventana WhatsApp solo permite plantillas aprobadas. Usa una plantilla en este paso.",
   ],
+  [
+    /out_of_window_media_requires_open_window/,
+    "Pasaron más de 24 h desde el último mensaje del cliente y una imagen o un video no tiene plantilla: solo se pueden enviar con la ventana abierta. Antes, usa un paso de plantilla para que conteste.",
+  ],
+  [/media_not_found/, "El archivo de este paso ya no está en la biblioteca de Medios: elige otro."],
+  [/media_file_missing/, "El archivo existe en la biblioteca pero no se pudo leer del servidor: vuelve a subirlo."],
   [/max_attempts_exceeded/, "Se agotaron los reintentos: el envío falló todas las veces que se intentó."],
   [/no_conversation/, "El contacto no tiene una conversación de WhatsApp a la que enviar."],
   [/sandbox_conversation/, "Es una conversación de prueba del Laboratorio: nunca se le envía por la API real."],

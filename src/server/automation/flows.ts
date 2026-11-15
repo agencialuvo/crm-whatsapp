@@ -121,6 +121,16 @@ export async function assertRefsOwned(organizationId: string, config: Record<str
     throw new AutomationError("tag_not_found", 422, "La etiqueta elegida no existe");
   }
   if (stageId) await assertStageOwned(organizationId, { toStageId: stageId });
+  // `send_media`: el archivo elegido debe ser de la biblioteca de ESTA organización.
+  if (typeof config.mediaId === "string") {
+    const m = schema.mediaLibraryItem;
+    const [row] = await getDb()
+      .select({ id: m.id })
+      .from(m)
+      .where(scoped(m.organizationId, organizationId, eq(m.id, config.mediaId)))
+      .limit(1);
+    if (!row) throw new AutomationError("media_not_found", 422, "El archivo elegido ya no está en la biblioteca");
+  }
 }
 
 /** `booking_confirmed` lee la cita del flujo: solo tiene sentido si el disparador es de cita. */

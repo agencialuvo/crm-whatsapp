@@ -24,6 +24,7 @@ import {
 import { registrarAnuncioDeOrigen } from "@/server/attribution/store";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
+import { onInboundOptOut } from "@/server/automation/opt-out";
 import { onInboundReply } from "@/server/automation/reply";
 
 /** Tipos de contenido soportados; el resto se ignora sin error. */
@@ -528,6 +529,10 @@ export async function ingestInboundMessage(input: {
     type: "conversation.updated",
     data: { conversation: { id: conversation.id } },
   });
+
+  // Automatizaciones (037): «STOP», «baja»… da de baja de los mensajes automáticos y cancela sus ejecuciones. Va ANTES de
+  // la respuesta a un `wait_reply`: una baja no cuenta como «otra cosa». Nunca lanza.
+  await onInboundOptOut({ organizationId, contactId: contact.id, text: input.text });
 
   // Automatizaciones: si un flujo esperaba la respuesta de este contacto (`wait_reply`), la reanuda. Nunca
   // lanza ni toca al agente: el mensaje ya entró y el agente contesta como siempre.

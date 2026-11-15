@@ -17,6 +17,9 @@ export function serializeContact(
     phone: c.phone,
     notes: c.notes,
     aiPaused: c.aiPaused,
+    // 037: no recibe mensajes automáticos (baja). La fecha, para mostrar desde cuándo.
+    optedOut: c.optedOutAt !== null,
+    optedOutAt: c.optedOutAt?.toISOString() ?? null,
     stageName,
     archivedAt: c.archivedAt?.toISOString() ?? null,
     source: effectiveSource(c.source, llegoPorAnuncio),

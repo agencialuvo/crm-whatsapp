@@ -945,6 +945,13 @@ export const contact = pgTable(
      * contacto y sus ventas quedan).
      */
     salonClient: boolean("salon_client").notNull().default(false),
+    /**
+     * 037 — Baja de mensajes automáticos: desde cuándo el contacto pidió no recibirlos (NULL = los recibe). El
+     * motor de automatizaciones no envía a quien la tiene; no afecta lo que escribe una persona del CRM.
+     */
+    optedOutAt: timestamp("opted_out_at"),
+    /** Cómo se dio de baja: la palabra clave de su mensaje o la marca manual del operador. */
+    optOutSource: text("opt_out_source", { enum: ["keyword", "manual"] }),
     archivedAt: timestamp("archived_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -2042,7 +2049,7 @@ export const automationStep = pgTable(
       // `wait_until`: espera hasta una hora anclada a la cita (p. ej. «un día antes»).
       // `add_tag`/`remove_tag`/`set_stage`: acciones sobre el CRM; `condition`: decide si el flujo sigue.
       // `wait_reply`: pausa la ejecución hasta que el cliente responda (o venza el tiempo límite).
-      enum: ["delay", "send_whatsapp", "condition", "add_tag", "remove_tag", "set_stage", "wait_until", "wait_reply"],
+      enum: ["delay", "send_whatsapp", "send_media", "condition", "add_tag", "remove_tag", "set_stage", "wait_until", "wait_reply"],
     }).notNull(),
     /** 
      * Configuración interna del nodo (JSON):
