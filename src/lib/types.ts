@@ -52,6 +52,13 @@ export type AnuncioDto = {
   /** Si Meta mandó identificador de clic. El valor no sale del servidor. */
   hasCtwaClid: boolean;
   capturedAt: string;
+  /**
+   * 038 — La jerarquía del anuncio según la Marketing API. Ausente (o null)
+   * sin la bandera, sin credenciales o mientras el anuncio no se sincroniza.
+   */
+  adName?: string | null;
+  adsetName?: string | null;
+  campaignName?: string | null;
 };
 
 /** 008 — Adjunto de un mensaje, para previsualización en el hilo. */

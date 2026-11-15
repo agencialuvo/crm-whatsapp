@@ -42,6 +42,12 @@ export async function graphRequest<T>(
     method?: "GET" | "POST" | "DELETE";
     token: string;
     body?: unknown;
+    /**
+     * Recibe las cabeceras de la respuesta, éxito o error (038: los
+     * indicadores de uso de la Marketing API). Opcional: el resto de los
+     * llamadores no cambia.
+     */
+    onHeaders?: (headers: Headers) => void;
   }
 ): Promise<T> {
   const env = getEnv();
@@ -63,6 +69,12 @@ export async function graphRequest<T>(
       status: 0,
       details: cause,
     });
+  }
+
+  try {
+    opts.onHeaders?.(res.headers);
+  } catch {
+    // un observador de cabeceras nunca rompe la llamada
   }
 
   const text = await res.text();

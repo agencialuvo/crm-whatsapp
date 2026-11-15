@@ -36,6 +36,10 @@ const prefixes = {
   adAttribution: "att",
   conversionEvent: "cve",
   capiSettings: "capi",
+  // 038 — Marketing API de Meta
+  metaAdsSettings: "mas",
+  metaAd: "mad",
+  metaAdSpend: "msp",
   // Ajustes → IA (issue #85)
   aiCredentials: "aicred",
   // 021 — despacho al cerebro

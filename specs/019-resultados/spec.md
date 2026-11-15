@@ -27,7 +27,7 @@ gente que compra? ¿qué se está enfriando ahora mismo?
 
 ## Decisiones del dueño (2026-09-21)
 
-- **D1 — Sin gasto publicitario.** No entran la tabla de gasto, la carga
+- **D1 — Sin gasto publicitario.** *(Superada el 2026-11-14 por la [038](../038-meta-marketing-api/spec.md): con la Marketing API conectada, y detrás de `ATRIBUCION`, Resultados suma jerarquía, gasto y costos. Sin credenciales sigue valiendo tal cual.)* No entran la tabla de gasto, la carga
   manual, el costo por prospecto/cliente ni el retorno. Con carga manual el
   número depende de que alguien capture; con conector, de la API de Marketing
   de Meta. Contar no depende de nadie.

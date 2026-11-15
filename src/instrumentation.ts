@@ -11,6 +11,7 @@ export async function register(): Promise<void> {
       encryptLegacySecrets,
       resumeAutomations,
       resumeDispatch,
+      resumeMetaAds,
       seedPlatformData,
     } =
       await import("./instrumentation-node");
@@ -20,5 +21,6 @@ export async function register(): Promise<void> {
     await seedPlatformData();
     resumeDispatch();
     resumeAutomations();
+    resumeMetaAds();
   }
 }

@@ -145,12 +145,126 @@ function normalizePath(path: string[]): string[] {
   return path[0] && /^v\d+/.test(path[0]) ? path.slice(1) : path;
 }
 
+
+/**
+ * 038 — Marketing API. El mock reproduce lo que importa del contrato real:
+ *  - `act_X?fields=name,currency` valida la cuenta;
+ *  - `act_X/ads?filtering=[{field:"id",operator:"IN",value:[…]}]` devuelve SOLO los anuncios
+ *    que existen (los `gone-*` no vuelven, como uno borrado o de otra cuenta);
+ *  - `act_X/insights?level=ad&time_increment=1` devuelve una fila por anuncio y día.
+ * Modos de fallo por sufijo del token: `-sinads` (permiso, código 200), `-ratelimit` (código 17),
+ * `-fail500` (5xx transitorio) y `-uso-alto` (200 con el uso de la API al 95 %); `-invalid` ya existe.
+ */
+function marketingFailure(token: string): Response | null {
+  if (token.endsWith("-sinads")) {
+    return Response.json(
+      { error: { message: "(#200) Requires ads_read permission to access this account", type: "OAuthException", code: 200, fbtrace_id: "mock" } },
+      { status: 403 }
+    );
+  }
+  if (token.endsWith("-ratelimit")) {
+    return Response.json(
+      { error: { message: "(#17) User request limit reached", type: "OAuthException", code: 17, fbtrace_id: "mock" } },
+      {
+        status: 400,
+        headers: { "x-business-use-case-usage": JSON.stringify({ "1": [{ type: "ads_insights", call_count: 100, total_cputime: 80, total_time: 90, estimated_time_to_regain_access: 7 }] }) },
+      }
+    );
+  }
+  if (token.endsWith("-fail500")) {
+    return Response.json(
+      { error: { message: "An unexpected error has occurred. Please retry your request later.", type: "OAuthException", code: 2, fbtrace_id: "mock" } },
+      { status: 500 }
+    );
+  }
+  return null;
+}
+
+function marketingHeaders(token: string): Record<string, string> {
+  return token.endsWith("-uso-alto")
+    ? { "x-business-use-case-usage": JSON.stringify({ "1": [{ type: "ads_insights", call_count: 95, total_cputime: 10, total_time: 10, estimated_time_to_regain_access: 0 }] }) }
+    : {};
+}
+
+function idsDelFiltro(url: URL): string[] {
+  try {
+    const f = JSON.parse(url.searchParams.get("filtering") ?? "[]") as { value?: unknown }[];
+    const v = f[0]?.value;
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Un anuncio de prueba determinista: su jerarquía sale del número con el que termina su id. */
+function mockAd(id: string) {
+  const k = Number(id.match(/(\d+)$/)?.[1] ?? 0);
+  const c = k % 2;
+  return {
+    id,
+    name: `Anuncio ${id}`,
+    adset: { id: `adset-${c}${k % 3}`, name: `Conjunto ${c}${k % 3}` },
+    campaign: { id: `camp-${c}`, name: `Campaña ${c}` },
+  };
+}
+
+function diasEntre(since: string, until: string): string[] {
+  const out: string[] = [];
+  const fin = Date.parse(`${until}T00:00:00Z`);
+  for (let t = Date.parse(`${since}T00:00:00Z`); t <= fin && out.length < 400; t += 86_400_000) {
+    out.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+function handleMarketing(path: string[], req: Request, token: string): Response | null {
+  if (!path[0]?.startsWith("act_")) return null;
+  const fail = marketingFailure(token);
+  if (fail) return fail;
+  const headers = marketingHeaders(token);
+  const url = new URL(req.url);
+
+  if (path.length === 1) {
+    return Response.json({ id: path[0], name: "Cuenta publicitaria de prueba", currency: "MXN", account_status: 1 }, { headers });
+  }
+  if (path[1] === "ads") {
+    const data = idsDelFiltro(url).filter((id) => !id.startsWith("gone-")).map(mockAd);
+    return Response.json({ data }, { headers });
+  }
+  if (path[1] === "insights") {
+    const ids = idsDelFiltro(url).filter((id) => !id.startsWith("gone-"));
+    let range: { since?: string; until?: string } = {};
+    try {
+      range = JSON.parse(url.searchParams.get("time_range") ?? "{}") as typeof range;
+    } catch {
+      // sin rango: no hay filas
+    }
+    const days = range.since && range.until ? diasEntre(range.since, range.until) : [];
+    const data = ids.flatMap((id) => {
+      const k = Number(id.match(/(\d+)$/)?.[1] ?? 0);
+      return days.map((d) => ({
+        ad_id: id,
+        spend: (10 + (k % 5) + 0.5).toFixed(2),
+        account_currency: "MXN",
+        date_start: d,
+        date_stop: d,
+      }));
+    });
+    return Response.json({ data }, { headers });
+  }
+  return Response.json({ data: [] }, { headers });
+}
+
 export async function GET(req: Request, ctx: Params) {
   const guard = mockGuard();
   if (guard) return guard;
   const path = normalizePath((await ctx.params).path);
   const token = bearerToken(req);
   if (token.endsWith("-invalid")) return invalidTokenResponse();
+
+  // 038 — Marketing API (cuenta publicitaria, anuncios, gasto).
+  const marketing = handleMarketing(path, req, token);
+  if (marketing) return marketing;
 
   // GET {wabaId}/message_templates → lista para el sync
   if (path.length === 2 && path[1] === "message_templates") {

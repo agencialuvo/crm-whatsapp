@@ -128,6 +128,22 @@ export function resumeAutomations(): void {
 }
 
 /**
+ * 038 — Marketing API de Meta: arranca el temporizador de sincronización solo con la bandera `ATRIBUCION`.
+ * Import dinámico: apagado, ni se cargan los módulos. Un fallo aquí nunca tumba el arranque.
+ */
+export function resumeMetaAds(): void {
+  void import("@/server/attribution/flag")
+    .then(async ({ atribucionEnabled }) => {
+      if (!atribucionEnabled()) return;
+      const { startMetaAdsWorker, tickMetaAds } = await import("@/server/attribution/meta-ads/worker");
+      startMetaAdsWorker();
+      void tickMetaAds();
+      console.log("[boot] sincronización de campañas de Meta activa");
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar la sincronización de campañas:", err));
+}
+
+/**
  * Catálogo base de la plataforma (categorías de sector y plan por defecto).
  * Idempotente y nunca tumba el arranque: si la BD aún no está lista o la tabla
  * no existe, se reintenta en el próximo arranque.

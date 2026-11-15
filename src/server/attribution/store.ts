@@ -8,6 +8,7 @@ import { scoped } from "@/lib/db/tenant";
 import type { AnuncioDto } from "@/lib/types";
 import { descargaEnCurso, guardarCreativo } from "@/server/attribution/creativo";
 import { atribucionEnabled } from "@/server/attribution/flag";
+import { enqueueAdLookup } from "@/server/attribution/meta-ads/catalog";
 import {
   anuncioDeWhatsapp,
   sinIdentificadorDeClic,
@@ -72,6 +73,16 @@ export async function registrarAnuncioDeOrigen(input: {
       ],
     })
     .returning({ id: schema.adAttribution.id });
+
+  // 038 — Deja el anuncio en la cola de la Marketing API (jerarquía y gasto). Solo con la bandera y con
+  // credenciales; una consulta local, jamás una llamada a Meta; nunca lanza. También en la reentrega: es idempotente.
+  if (a.sourceId && atribucionEnabled()) {
+    await enqueueAdLookup({
+      organizationId: input.organizationId,
+      sourceId: a.sourceId,
+      sourceType: a.sourceType,
+    });
+  }
 
   // Ya había un anuncio en esta conversación: el primero gana, SALVO que no tuviera flujo de enrutamiento y
   // este sí. Así el agente no pierde el flujo por haber entrado antes por un anuncio sin configurar.
@@ -206,7 +217,42 @@ export async function anuncioDelContacto(
   contactId: string
 ): Promise<AnuncioDto | null> {
   const fila = await primeraFilaDelContacto(organizationId, contactId);
-  return fila ? serializarAnuncio(fila) : null;
+  if (!fila) return null;
+  return serializarAnuncio(fila, undefined, await jerarquiaDelAnuncio(organizationId, fila.sourceId));
+}
+
+export type JerarquiaDeAnuncio = {
+  adName: string | null;
+  adsetName: string | null;
+  campaignName: string | null;
+};
+
+/**
+ * 038 — Campaña › conjunto › anuncio del catálogo de la Marketing API. Solo con la bandera, y `null` si el
+ * anuncio no está sincronizado: la tarjeta sigue diciendo lo que Meta mandó en el `referral`.
+ */
+export async function jerarquiaDelAnuncio(
+  organizationId: string,
+  sourceId: string | null
+): Promise<JerarquiaDeAnuncio | null> {
+  if (!sourceId || !atribucionEnabled()) return null;
+  const filas = await getDb()
+    .select({
+      adName: schema.metaAd.adName,
+      adsetName: schema.metaAd.adsetName,
+      campaignName: schema.metaAd.campaignName,
+    })
+    .from(schema.metaAd)
+    .where(
+      scoped(
+        schema.metaAd.organizationId,
+        organizationId,
+        eq(schema.metaAd.adId, sourceId),
+        eq(schema.metaAd.status, "synced")
+      )
+    )
+    .limit(1);
+  return filas[0] ?? null;
 }
 
 /** Como mucho un intento de reparación por anuncio en esta ventana. */
@@ -283,9 +329,11 @@ export function repararImagenSiFalta(organizationId: string, contactId: string):
  */
 export function serializarAnuncio(
   fila: typeof schema.adAttribution.$inferSelect,
-  atribuye: boolean = atribucionEnabled()
+  atribuye: boolean = atribucionEnabled(),
+  jerarquia: JerarquiaDeAnuncio | null = null
 ): AnuncioDto {
   return {
+    ...(jerarquia && atribuye ? jerarquia : {}),
     sourceId: fila.sourceId,
     sourceType: fila.sourceType,
     // El enlace va a un `href`: solo https, aunque la ingesta ya filtró.

@@ -105,6 +105,42 @@ imagen aparece sola al abrir el contacto.
 En pruebas, con los mocks habilitados (nunca en producción), se acepta además el
 origen de `META_GRAPH_BASE_URL`, donde el wa-mock sirve creativos de mentira.
 
+## Campaña, conjunto de anuncios y gasto (Marketing API, opcional)
+
+El webhook de WhatsApp solo dice **de qué anuncio** vino la conversación (`source_id`). No trae el nombre del
+anuncio, ni su conjunto, ni su campaña, ni cuánto costó. Para eso hay un conector opcional con la Marketing API de
+Meta (spec [038](../specs/038-meta-marketing-api/spec.md)), detrás de la misma bandera `ATRIBUCION`.
+
+**Cómo conectarlo** — Ajustes → Anuncios → *Datos de campañas y gasto*:
+
+1. **ID de la cuenta publicitaria**: Administrador de anuncios → Configuración de la cuenta. Sirve con o sin `act_`.
+2. **Token con el permiso `ads_read`**: se crea con un *usuario del sistema* en el Business Manager (Configuración del
+   negocio → Usuarios → Usuarios del sistema → Generar token, con la app y el permiso `ads_read`, y asignándole la
+   cuenta publicitaria). **No sirve el token de WhatsApp.** Se guarda cifrado y no vuelve a mostrarse.
+3. **Conectar** guarda *y prueba*: un token que Meta rechaza no se guarda, y el mensaje dice si es el token, el permiso
+   o la cuenta.
+
+**Qué hace después**, siempre en segundo plano (la ingesta del mensaje jamás espera a Meta):
+
+- Cada anuncio nuevo entra a una cola y se consulta su jerarquía (campaña › conjunto › anuncio) en el siguiente minuto.
+  Al conectar, se recuperan también los anuncios que ya habían traído gente.
+- El gasto diario se sincroniza cada 3 horas (90 días de historia la primera vez, y 7 días hacia atrás después porque Meta
+  revisa las cifras recientes).
+- Los nombres se refrescan cada 12 horas mientras el anuncio siga trayendo gente.
+
+**Dónde se ve**: la tarjeta de origen del contacto muestra «Campaña › Conjunto › Anuncio», y **Resultados → Origen y
+anuncios** agrupa por campaña, conjunto o anuncio (con filtros) y suma gasto, costo por conversación, por prospecto y
+por cita (esta última solo con la agenda encendida). Un costo en «—» significa que falta el gasto o no hubo resultados:
+nunca es un cero que parezca dato. Un anuncio con gasto y sin conversaciones **sí aparece**: es el dinero tirado.
+
+**Si algo falla**: nada de lo core se afecta. El conector lo dice en Ajustes (token vencido, falta `ads_read`) y
+Resultados muestra el aviso; con el límite de uso de Meta espera y reintenta solo; si un anuncio no se puede leer lo
+reintenta con espera creciente. **Desconectar** conserva lo ya traído y solo detiene la sincronización.
+
+Cosas que conviene saber: el gasto es el de la zona horaria de la cuenta publicitaria (si difiere de la del negocio, el
+día de borde puede correrse); los costos por prospecto y por cita son gasto ÷ resultados del periodo, una aproximación
+coherente con el resto de Resultados, no una atribución causal; y Instagram y Messenger siguen sin esta jerarquía.
+
 ## Cómo saber si está funcionando
 
 Ajustes → Anuncios → **Actividad**. Ahí está lo último que se reportó, con su

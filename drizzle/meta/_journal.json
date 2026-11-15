@@ -512,6 +512,13 @@
       "when": 1794702369611,
       "tag": "0072_short_rafael_vega",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1794716622593,
+      "tag": "0073_bumpy_william_stryker",
+      "breakpoints": true
     }
   ]
 }

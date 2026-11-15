@@ -2,9 +2,11 @@ import {
   type AnyPgColumn,
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   smallint,
@@ -2292,6 +2294,100 @@ export const capiSettings = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [uniqueIndex("capi_settings_org_uq").on(t.organizationId)]
+);
+
+/* ============================================================
+ * 038 — Conector de la Marketing API de Meta (detrás de ATRIBUCION)
+ * ============================================================ */
+
+/** Credenciales de la cuenta publicitaria del negocio (token cifrado en reposo). */
+export const metaAdsSettings = pgTable(
+  "meta_ads_settings",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** Siempre `act_<dígitos>`. */
+    adAccountId: text("ad_account_id").notNull(),
+    tokenCipher: text("token_cipher").notNull(),
+    tokenIv: text("token_iv").notNull(),
+    tokenTag: text("token_tag").notNull(),
+    status: text("status", { enum: ["connected", "error"] })
+      .notNull()
+      .default("connected"),
+    /** Último problema legible (sin secretos). */
+    lastError: text("last_error"),
+    accountName: text("account_name"),
+    currency: text("currency"),
+    /** Hasta cuándo no se llama a Meta (límite de uso). */
+    pausedUntil: timestamp("paused_until"),
+    /** Golpes de límite seguidos: alimenta el backoff. */
+    rateHits: integer("rate_hits").notNull().default(0),
+    lastSpendSyncAt: timestamp("last_spend_sync_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("meta_ads_settings_org_uq").on(t.organizationId)]
+);
+
+/**
+ * Catálogo de anuncios de Meta y, a la vez, su cola de sincronización: una fila
+ * `pending` vencida es una tarea. Sin FK a `ad_attribution`: el `source_id` es
+ * texto de Meta y el anuncio puede existir sin conversación.
+ */
+export const metaAd = pgTable(
+  "meta_ad",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    adId: text("ad_id").notNull(),
+    adName: text("ad_name"),
+    adsetId: text("adset_id"),
+    adsetName: text("adset_name"),
+    campaignId: text("campaign_id"),
+    campaignName: text("campaign_name"),
+    status: text("status", {
+      enum: ["pending", "synced", "not_found", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at").notNull().defaultNow(),
+    lockedAt: timestamp("locked_at"),
+    lastError: text("last_error"),
+    syncedAt: timestamp("synced_at"),
+    spendSyncedAt: timestamp("spend_synced_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("meta_ad_org_ad_uq").on(t.organizationId, t.adId),
+    index("meta_ad_org_status_due_idx").on(t.organizationId, t.status, t.nextAttemptAt),
+    index("meta_ad_org_campaign_idx").on(t.organizationId, t.campaignId),
+  ]
+);
+
+/** Gasto de un anuncio en un día (la fecha de la cuenta publicitaria). */
+export const metaAdSpend = pgTable(
+  "meta_ad_spend",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    adId: text("ad_id").notNull(),
+    day: date("day", { mode: "string" }).notNull(),
+    spend: numeric("spend", { precision: 14, scale: 2 }).notNull(),
+    currency: text("currency").notNull(),
+    syncedAt: timestamp("synced_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("meta_ad_spend_org_ad_day_uq").on(t.organizationId, t.adId, t.day),
+    index("meta_ad_spend_org_day_idx").on(t.organizationId, t.day),
+  ]
 );
 
 /* ============================================================
