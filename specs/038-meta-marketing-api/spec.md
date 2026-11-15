@@ -1,5 +1,7 @@
 # 038 — Conector de la Marketing API de Meta: Campaña → Conjunto → Anuncio y gasto
 
+Nota 2026-11-15: la decisión «solo los anuncios que ya trajeron gente» quedó superada por la [039](../039-meta-catalogo-completo-y-drilldown/spec.md): ahora se lee la cuenta entera.
+
 Estado: **implementado** (la verificación está en la sección Pruebas). Conector OPCIONAL detrás de la bandera `ATRIBUCION` (ADR-001, constitución II/1.4.0).
 Reemplaza la decisión **D1/D2 de [019](../019-resultados/spec.md)** («sin gasto publicitario, solo conteos»): el dueño la revierte el 2026-11-14. Sin token configurado, Resultados se comporta exactamente como en 019.
 

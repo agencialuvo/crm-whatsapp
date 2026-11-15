@@ -9,6 +9,7 @@ import {
   RECHECK_NOT_FOUND_MS,
   STALE_MS,
   transientBackoffMs,
+  type AccountSpendRow,
   type AdNode,
   type SpendRow,
 } from "@/lib/meta/ads";
@@ -374,4 +375,150 @@ export async function countsByStatus(organizationId: string): Promise<{ pending:
     pending: rows.find((r) => r.status === "pending")?.n ?? 0,
     failed: rows.find((r) => r.status === "failed")?.n ?? 0,
   };
+}
+
+/* ── 039 — la cuenta como fuente ────────────────────────────────── */
+
+/**
+ * Upsert de lo que devolvió el listado de la CUENTA (o la jerarquía que trae el gasto). Un anuncio que ya
+ * estaba se actualiza SIN pisar un nombre con `null`; uno nuevo entra ya como `synced`. El listado de la cuenta
+ * (`listed: true`) además marca `listed_at` y trae el estado efectivo.
+ */
+export async function upsertAccountAds(
+  organizationId: string,
+  nodes: AdNode[],
+  now: Date,
+  opts: { listed: boolean }
+): Promise<number> {
+  const db = getDb();
+  let n = 0;
+  for (const lote of chunk(nodes, 200)) {
+    if (lote.length === 0) continue;
+    const res = await db
+      .insert(schema.metaAd)
+      .values(
+        lote.map((a) => ({
+          id: newId("metaAd"),
+          organizationId,
+          adId: a.adId,
+          adName: a.adName,
+          adsetId: a.adsetId,
+          adsetName: a.adsetName,
+          campaignId: a.campaignId,
+          campaignName: a.campaignName,
+          effectiveStatus: a.effectiveStatus ?? null,
+          status: "synced" as const,
+          syncedAt: now,
+          listedAt: opts.listed ? now : null,
+          nextAttemptAt: now,
+        }))
+      )
+      .onConflictDoUpdate({
+        target: [schema.metaAd.organizationId, schema.metaAd.adId],
+        set: {
+          adName: sql`coalesce(excluded.ad_name, ${schema.metaAd.adName})`,
+          adsetId: sql`coalesce(excluded.adset_id, ${schema.metaAd.adsetId})`,
+          adsetName: sql`coalesce(excluded.adset_name, ${schema.metaAd.adsetName})`,
+          campaignId: sql`coalesce(excluded.campaign_id, ${schema.metaAd.campaignId})`,
+          campaignName: sql`coalesce(excluded.campaign_name, ${schema.metaAd.campaignName})`,
+          effectiveStatus: opts.listed
+            ? sql`excluded.effective_status`
+            : sql`coalesce(${schema.metaAd.effectiveStatus}, excluded.effective_status)`,
+          status: "synced",
+          attempts: 0,
+          lockedAt: null,
+          lastError: null,
+          syncedAt: now,
+          ...(opts.listed ? { listedAt: now } : {}),
+          updatedAt: now,
+        },
+      })
+      .returning({ id: schema.metaAd.id });
+    n += res.length;
+  }
+  return n;
+}
+
+/**
+ * Sustituye TODO el gasto de la organización en `[since, until]` por lo que Meta dice ahora, sin lista de ids:
+ * lo que Meta ya no devuelve para un día se va (un anuncio borrado, un ajuste). Quien llama garantiza que
+ * `rows` es la ventana COMPLETA: una paginación cortada no debe llegar aquí (dinero parcial es peor que viejo).
+ */
+export async function replaceSpendWindow(input: {
+  organizationId: string;
+  since: string;
+  until: string;
+  rows: SpendRow[];
+  now: Date;
+}): Promise<void> {
+  const { organizationId, since, until, rows, now } = input;
+  await getDb().transaction(async (tx) => {
+    await tx
+      .delete(schema.metaAdSpend)
+      .where(scoped(schema.metaAdSpend.organizationId, organizationId, between(schema.metaAdSpend.day, since, until)));
+    for (const lote of chunk(rows, 500)) {
+      if (lote.length === 0) continue;
+      await tx
+        .insert(schema.metaAdSpend)
+        .values(
+          lote.map((r) => ({
+            id: newId("metaAdSpend"),
+            organizationId,
+            adId: r.adId,
+            day: r.day,
+            spend: r.spend,
+            currency: r.currency,
+            syncedAt: now,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [schema.metaAdSpend.organizationId, schema.metaAdSpend.adId, schema.metaAdSpend.day],
+          set: { spend: sql`excluded.spend`, currency: sql`excluded.currency`, syncedAt: now },
+        });
+    }
+    const ids = [...new Set(rows.map((r) => r.adId))];
+    if (ids.length > 0) {
+      await tx
+        .update(schema.metaAd)
+        .set({ spendSyncedAt: now })
+        .where(scoped(schema.metaAd.organizationId, organizationId, inArray(schema.metaAd.adId, ids)));
+    }
+  });
+}
+
+/** Lo mismo para el gasto diario de la cuenta entera (con lo que se cuadra lo desglosado). */
+export async function replaceAccountSpend(input: {
+  organizationId: string;
+  since: string;
+  until: string;
+  rows: AccountSpendRow[];
+  now: Date;
+}): Promise<void> {
+  const { organizationId, since, until, rows, now } = input;
+  await getDb().transaction(async (tx) => {
+    await tx
+      .delete(schema.metaAccountSpend)
+      .where(
+        scoped(schema.metaAccountSpend.organizationId, organizationId, between(schema.metaAccountSpend.day, since, until))
+      );
+    for (const lote of chunk(rows, 500)) {
+      if (lote.length === 0) continue;
+      await tx
+        .insert(schema.metaAccountSpend)
+        .values(
+          lote.map((r) => ({
+            id: newId("metaAccountSpend"),
+            organizationId,
+            day: r.day,
+            spend: r.spend,
+            currency: r.currency,
+            syncedAt: now,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [schema.metaAccountSpend.organizationId, schema.metaAccountSpend.day],
+          set: { spend: sql`excluded.spend`, currency: sql`excluded.currency`, syncedAt: now },
+        });
+    }
+  });
 }

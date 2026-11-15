@@ -153,7 +153,7 @@ const enc = encodeURIComponent;
 
 /** `GET act_X?fields=…`: valida la cuenta y trae su nombre y moneda. */
 export function buildAccountPath(accountId: string): string {
-  return `${accountId}?fields=${enc("name,currency,account_status")}`;
+  return `${accountId}?fields=${enc("name,currency,account_status,timezone_name")}`;
 }
 
 /** Jerarquía de hasta 50 anuncios de la cuenta (un id ajeno o borrado simplemente no vuelve). */
@@ -161,6 +161,42 @@ export function buildAdsPath(accountId: string, adIds: readonly string[]): strin
   const filtering = JSON.stringify([{ field: "id", operator: "IN", value: adIds }]);
   const fields = "id,name,adset{id,name},campaign{id,name}";
   return `${accountId}/ads?fields=${enc(fields)}&filtering=${enc(filtering)}&limit=${ADS_BATCH}`;
+}
+
+/** 039 — Listado de TODA la cuenta (no solo de los anuncios que ya escribieron), 200 por página. */
+export const ADS_LIST_PAGE = 200;
+export function buildAdsListPath(accountId: string, after?: string | null): string {
+  const fields = "id,name,effective_status,adset{id,name},campaign{id,name}";
+  const base = `${accountId}/ads?fields=${enc(fields)}&limit=${ADS_LIST_PAGE}`;
+  return after ? `${base}&after=${enc(after)}` : base;
+}
+
+/**
+ * 039 — Gasto diario de TODA la cuenta en `[since, until]`, sin filtrar por ids, con la jerarquía de
+ * cada fila (así un anuncio ya borrado que gastó también queda con nombre). `level=account` da el total
+ * de la cuenta, que es contra lo que se cuadra lo desglosado.
+ */
+export function buildSpendPath(
+  accountId: string,
+  level: "ad" | "account",
+  since: string,
+  until: string,
+  after?: string | null
+): string {
+  const fields =
+    level === "ad"
+      ? "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,account_currency"
+      : "spend,account_currency";
+  const range = JSON.stringify({ since, until });
+  const base =
+    `${accountId}/insights?level=${level}&fields=${enc(fields)}` +
+    `&time_increment=1&time_range=${enc(range)}&limit=${INSIGHTS_PAGE}`;
+  return after ? `${base}&after=${enc(after)}` : base;
+}
+
+/** 039 — Datasets (píxeles) de la cuenta. */
+export function buildPixelsPath(accountId: string): string {
+  return `${accountId}/adspixels?fields=${enc("id,name")}&limit=100`;
 }
 
 /** Gasto diario por anuncio en `[since, until]` (fechas `YYYY-MM-DD`), paginado con `after`. */
@@ -182,6 +218,8 @@ export function buildInsightsPath(
 /* ── Respuestas ─────────────────────────────────────────────────── */
 
 export type AdNode = {
+  /** 039 — `effective_status` de Meta; solo lo trae el listado de la cuenta. */
+  effectiveStatus?: string | null;
   adId: string;
   adName: string | null;
   adsetId: string | null;
@@ -190,7 +228,17 @@ export type AdNode = {
   campaignName: string | null;
 };
 
-export type SpendRow = { adId: string; day: string; spend: string; currency: string };
+/** Un día de gasto de un anuncio; en 039 trae además la jerarquía que Meta devuelve con el gasto. */
+export type SpendRow = {
+  adId: string;
+  day: string;
+  spend: string;
+  currency: string;
+  node?: AdNode;
+};
+
+/** Un día de gasto de toda la cuenta (039). */
+export type AccountSpendRow = { day: string; spend: string; currency: string };
 
 function esObjeto(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -221,6 +269,7 @@ export function parseAdsPage(json: unknown): { ads: AdNode[]; after: string | nu
     const campaign = esObjeto(raw.campaign) ? raw.campaign : {};
     ads.push({
       adId,
+      effectiveStatus: cadena(raw.effective_status, 40),
       adName: cadena(raw.name),
       adsetId: cadena(adset.id, 128),
       adsetName: cadena(adset.name),
@@ -251,7 +300,46 @@ export function parseInsightsPage(json: unknown): { rows: SpendRow[]; after: str
     const spend = normalizeSpend(raw.spend);
     const currency = cadena(raw.account_currency, 8);
     if (!adId || !day || !/^\d{4}-\d{2}-\d{2}$/.test(day) || spend === null || !currency) continue;
-    rows.push({ adId, day, spend, currency });
+    const node: AdNode = {
+      adId,
+      adName: cadena(raw.ad_name),
+      adsetId: cadena(raw.adset_id, 128),
+      adsetName: cadena(raw.adset_name),
+      campaignId: cadena(raw.campaign_id, 128),
+      campaignName: cadena(raw.campaign_name),
+    };
+    const traeJerarquia = node.adName || node.adsetId || node.campaignId;
+    rows.push(traeJerarquia ? { adId, day, spend, currency, node } : { adId, day, spend, currency });
   }
   return { rows, after: nextCursor(json) };
+}
+
+/** 039 — Gasto diario de la cuenta (`level=account`). */
+export function parseAccountInsights(json: unknown): { rows: AccountSpendRow[]; after: string | null } {
+  const data = esObjeto(json) && Array.isArray(json.data) ? json.data : [];
+  const rows: AccountSpendRow[] = [];
+  for (const raw of data) {
+    if (!esObjeto(raw)) continue;
+    const day = cadena(raw.date_start, 10);
+    const spend = normalizeSpend(raw.spend);
+    const currency = cadena(raw.account_currency, 8);
+    if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day) || spend === null || !currency) continue;
+    rows.push({ day, spend, currency });
+  }
+  return { rows, after: nextCursor(json) };
+}
+
+export type PixelOption = { id: string; name: string };
+
+/** 039 — Los datasets (píxeles) de la cuenta, para elegir uno en vez de teclear su ID. */
+export function parsePixels(json: unknown): PixelOption[] {
+  const data = esObjeto(json) && Array.isArray(json.data) ? json.data : [];
+  const out: PixelOption[] = [];
+  for (const raw of data) {
+    if (!esObjeto(raw)) continue;
+    const id = cadena(raw.id, 64);
+    if (!id || !/^\d+$/.test(id)) continue;
+    out.push({ id, name: cadena(raw.name) ?? id });
+  }
+  return out;
 }

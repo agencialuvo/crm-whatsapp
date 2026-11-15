@@ -102,6 +102,20 @@ export type AdFlowRowDto = {
   lastSeenAt: string | null;
   /** null = detectado pero sin configurar. */
   flow: AdFlowDto | null;
+  /* 039 — Lo que el dueño ve en el Administrador de Anuncios; solo con la cuenta conectada y el anuncio en su catálogo. */
+  adName?: string | null;
+  adsetName?: string | null;
+  campaignName?: string | null;
+  /** `effective_status` de Meta en bruto (ACTIVE, PAUSED…). */
+  effectiveStatus?: string | null;
+};
+
+/** 039 — Un anuncio del catálogo de la cuenta, para elegirlo en vez de teclear su ID. */
+export type CatalogAdOption = {
+  adId: string;
+  /** «Campaña › Conjunto › Anuncio», con lo que se conozca. */
+  label: string;
+  effectiveStatus: string | null;
 };
 
 export type AdFlowListDto = { items: AdFlowRowDto[]; truncated: boolean };

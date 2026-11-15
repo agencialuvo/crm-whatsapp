@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
@@ -24,6 +24,11 @@ export type MetaAdsSettings = {
   pausedUntil: Date | null;
   rateHits: number;
   lastSpendSyncAt: Date | null;
+  /** 039 */
+  catalogSyncedAt: Date | null;
+  spendCoveredSince: string | null;
+  spendBackfillFrom: string | null;
+  accountTimezone: string | null;
 };
 
 export type MetaAdsSettingsView = {
@@ -35,6 +40,10 @@ export type MetaAdsSettingsView = {
   currency: string | null;
   pausedUntil: string | null;
   lastSpendSyncAt: string | null;
+  /** 039 — Último listado completo de la cuenta y desde qué día hay gasto. */
+  catalogSyncedAt: string | null;
+  spendCoveredSince: string | null;
+  accountTimezone: string | null;
   /** Anuncios por consultar y anuncios que no se pudieron leer. */
   pending: number;
   failed: number;
@@ -53,6 +62,10 @@ function fromRow(row: Row): MetaAdsSettings {
     pausedUntil: row.pausedUntil,
     rateHits: row.rateHits,
     lastSpendSyncAt: row.lastSpendSyncAt,
+    catalogSyncedAt: row.catalogSyncedAt,
+    spendCoveredSince: row.spendCoveredSince,
+    spendBackfillFrom: row.spendBackfillFrom,
+    accountTimezone: row.accountTimezone,
   };
 }
 
@@ -90,6 +103,9 @@ export async function getMetaAdsView(
     currency: s.currency,
     pausedUntil: s.pausedUntil?.toISOString() ?? null,
     lastSpendSyncAt: s.lastSpendSyncAt?.toISOString() ?? null,
+    catalogSyncedAt: s.catalogSyncedAt?.toISOString() ?? null,
+    spendCoveredSince: s.spendCoveredSince,
+    accountTimezone: s.accountTimezone,
     pending: counts.pending,
     failed: counts.failed,
   };
@@ -99,11 +115,15 @@ export async function getMetaAdsView(
 export async function fetchAccountInfo(
   adAccountId: string,
   token: string
-): Promise<{ name: string | null; currency: string | null }> {
-  const res = await graphRequest<{ name?: string; currency?: string }>(buildAccountPath(adAccountId), { token });
+): Promise<{ name: string | null; currency: string | null; timezone: string | null }> {
+  const res = await graphRequest<{ name?: string; currency?: string; timezone_name?: string }>(
+    buildAccountPath(adAccountId),
+    { token }
+  );
   return {
     name: typeof res?.name === "string" ? res.name : null,
     currency: typeof res?.currency === "string" ? res.currency : null,
+    timezone: typeof res?.timezone_name === "string" ? res.timezone_name : null,
   };
 }
 
@@ -113,6 +133,7 @@ export async function saveMetaAdsSettings(input: {
   token: string;
   accountName: string | null;
   currency: string | null;
+  timezone?: string | null;
 }): Promise<void> {
   const enc = encryptSecret(input.token);
   await getDb()
@@ -126,6 +147,7 @@ export async function saveMetaAdsSettings(input: {
       tokenTag: enc.tag,
       accountName: input.accountName,
       currency: input.currency,
+      accountTimezone: input.timezone ?? null,
     })
     .onConflictDoUpdate({
       target: [schema.metaAdsSettings.organizationId],
@@ -136,6 +158,7 @@ export async function saveMetaAdsSettings(input: {
         tokenTag: enc.tag,
         accountName: input.accountName,
         currency: input.currency,
+        accountTimezone: input.timezone ?? null,
         status: "connected",
         lastError: null,
         pausedUntil: null,
@@ -221,4 +244,43 @@ export async function connectedOrganizations(): Promise<string[]> {
     .from(schema.metaAdsSettings)
     .where(eq(schema.metaAdsSettings.status, "connected"));
   return rows.map((r) => r.id);
+}
+
+/** 039 — Terminó un listado completo de la cuenta. */
+export async function touchCatalogSync(organizationId: string, at: Date, timezone: string | null): Promise<void> {
+  await getDb()
+    .update(schema.metaAdsSettings)
+    .set({ catalogSyncedAt: at, ...(timezone ? { accountTimezone: timezone } : {}) })
+    .where(scoped(schema.metaAdsSettings.organizationId, organizationId));
+}
+
+/**
+ * 039 — Resultados pide un rango que empieza antes de lo cubierto: se anota hasta qué día hay que rellenar.
+ * Un `UPDATE` local de una columna; la ruta de lectura NUNCA llama a Meta. Solo adelanta (nunca borra un pedido
+ * más antiguo que ya estaba).
+ */
+export async function requestSpendBackfill(organizationId: string, fromDay: string): Promise<void> {
+  await getDb()
+    .update(schema.metaAdsSettings)
+    .set({ spendBackfillFrom: sql`least(coalesce(${schema.metaAdsSettings.spendBackfillFrom}, ${fromDay}::date), ${fromDay}::date)` })
+    .where(scoped(schema.metaAdsSettings.organizationId, organizationId));
+}
+
+/** 039 — Una pasada de gasto terminó completa: hasta dónde hay datos y, si el pedido quedó cubierto, se limpia. */
+export async function setSpendCoverage(organizationId: string, coveredSince: string): Promise<void> {
+  await getDb()
+    .update(schema.metaAdsSettings)
+    .set({
+      spendCoveredSince: sql`least(coalesce(${schema.metaAdsSettings.spendCoveredSince}, ${coveredSince}::date), ${coveredSince}::date)`,
+      spendBackfillFrom: sql`case when ${schema.metaAdsSettings.spendBackfillFrom} is not null and ${schema.metaAdsSettings.spendBackfillFrom} >= ${coveredSince}::date then null else ${schema.metaAdsSettings.spendBackfillFrom} end`,
+    })
+    .where(scoped(schema.metaAdsSettings.organizationId, organizationId));
+}
+
+/** 039 — Un aviso (no un error): lo traído se guardó, pero algo quedó sin completarse. */
+export async function setSyncWarning(organizationId: string, message: string): Promise<void> {
+  await getDb()
+    .update(schema.metaAdsSettings)
+    .set({ lastError: message.slice(0, 300) })
+    .where(scoped(schema.metaAdsSettings.organizationId, organizationId));
 }

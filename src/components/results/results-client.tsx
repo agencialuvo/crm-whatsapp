@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AdsBlockDto,
   BotBlockDto,
   HygieneBlockDto,
   SalesBlockDto,
 } from "@/lib/analytics";
-import { AdsSection, VISTA_INICIAL, type AdsView } from "./ads-section";
+import { VISTA_INICIAL, VISTA_POR_CAMPANA, type AdsView } from "@/lib/ads-nav";
+import { AdsSection } from "./ads-section";
 import { BotSection } from "./bot-section";
 import { HygieneSection } from "./hygiene-section";
 import { defaultRange, RangePicker, type Range } from "./range-picker";
@@ -73,7 +74,15 @@ export function ResultsClient({
   const [range, setRange] = useState<Range>(() => defaultRange(today));
   const [sales, setSales] = useState<Block<SalesBlockDto>>(inicial);
   const [ads, setAds] = useState<Block<AdsBlockDto>>(inicial);
-  const [adsView, setAdsView] = useState<AdsView>(VISTA_INICIAL);
+  const [adsView, setAdsViewRaw] = useState<AdsView>(VISTA_INICIAL);
+  // 039 — Mientras Meta trae el gasto del rango se vuelve a preguntar cada pocos segundos (con tope).
+  const [tick, setTick] = useState(0);
+  // La vista arranca por campaña si hay conector, salvo que la persona ya haya elegido otra.
+  const tocoLaVista = useRef(false);
+  const setAdsView = (v: AdsView) => {
+    tocoLaVista.current = true;
+    setAdsViewRaw(v);
+  };
   const [bot, setBot] = useState<Block<BotBlockDto>>(inicial);
   const [hygiene, setHygiene] = useState<Block<HygieneBlockDto>>(inicial);
 
@@ -94,7 +103,24 @@ export function ResultsClient({
     if (adsView.adsetId) p.set("adsetId", adsView.adsetId);
     void cargar(`/api/analytics/ads?${p.toString()}`, setAds, ctl.signal);
     return () => ctl.abort();
-  }, [range, adsView]);
+  }, [range, adsView, tick]);
+
+  useEffect(() => setTick(0), [range]);
+
+  const hier = ads.data?.hierarchy ?? null;
+  useEffect(() => {
+    if (!tocoLaVista.current && hier && (hier.connected || hier.hasData)) {
+      setAdsViewRaw(VISTA_POR_CAMPANA);
+      tocoLaVista.current = true;
+    }
+  }, [hier]);
+
+  const sincronizando = hier?.syncing === true;
+  useEffect(() => {
+    if (!sincronizando || tick >= 12) return;
+    const t = setTimeout(() => setTick((n) => n + 1), 8000);
+    return () => clearTimeout(t);
+  }, [sincronizando, tick, ads.data]);
 
   // La higiene describe el AHORA: no depende del rango elegido.
   useEffect(() => {

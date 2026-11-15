@@ -3,11 +3,16 @@ import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import {
   costOf,
+  cuadrarCuenta,
+  estadoDeAnuncio,
+  estadoDeGrupo,
   rate,
   type AdGroupBy,
   type AdGroupRowDto,
   type AdRowDto,
+  type AdStatus,
   type AdsHierarchyDto,
+  type AdTotalDto,
   type SpendDto,
 } from "@/lib/analytics";
 import { countsByStatus } from "@/server/attribution/meta-ads/catalog";
@@ -49,6 +54,8 @@ export type CatalogEntry = {
   adsetName: string | null;
   campaignId: string | null;
   campaignName: string | null;
+  /** 039 — `effective_status` de Meta, tal cual. */
+  effectiveStatus?: string | null;
 };
 
 export type SpendEntry = { amount: number; currencies: string[] };
@@ -71,6 +78,8 @@ export type HierarchyOutput = {
   campaigns: { id: string; name: string }[];
   adsets: { id: string; name: string; campaignId: string | null }[];
   mixedCurrency: boolean;
+  /** 039 — Total de TODAS las filas del filtro (la lista de anuncios muestra solo las primeras). */
+  total: AdTotalDto;
 };
 
 const SIN_COSTOS: SpendDto = {
@@ -135,6 +144,7 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
       adsetName: cat?.adsetName ?? null,
       campaignId: cat?.campaignId ?? null,
       campaignName: cat?.campaignName ?? null,
+      status: estadoDeAnuncio(cat?.effectiveStatus),
       bookings,
       ...costos(spend, { conversations: r.conversations, leads: r.leads, bookings }),
     };
@@ -164,6 +174,7 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
   );
 
   const ads: AdRowDto[] = ordenadas.slice(0, i.maxAds).map(({ lastAt: _lastAt, ...fila }) => fila);
+  const total = totalDeFilas(filtradas, i.bookings !== null);
 
   // 5. Agrupar por conjunto o campaña.
   let groups: AdGroupRowDto[] = [];
@@ -173,6 +184,8 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
       key: string;
       name: string;
       campaignName: string | null;
+      campaignId: string | null;
+      estados: AdStatus[];
       ads: number;
       conversations: number;
       leads: number;
@@ -196,6 +209,8 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
           key,
           name,
           campaignName: nivel === "adset" ? r.campaignName : null,
+          campaignId: nivel === "adset" ? r.campaignId : null,
+          estados: [],
           ads: 0,
           conversations: 0,
           leads: 0,
@@ -207,6 +222,7 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
           cBook: i.bookings ? 0 : null,
         } satisfies Acum);
       g.ads += 1;
+      g.estados.push(r.status ?? null);
       g.conversations += r.conversations;
       g.leads += r.leads;
       g.won += r.won;
@@ -225,6 +241,8 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
         level: nivel,
         name: g.name,
         campaignName: g.campaignName,
+        campaignId: g.campaignId,
+        status: estadoDeGrupo(g.estados),
         ads: g.ads,
         conversations: g.conversations,
         leads: g.leads,
@@ -250,6 +268,45 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
       .map(([id, v]) => ({ id, name: v.name, campaignId: v.campaignId }))
       .sort((a, b) => a.name.localeCompare(b.name, "es")),
     mixedCurrency,
+    total,
+  };
+}
+
+/**
+ * 039 — El total de las filas que se ven: conteos sumados y costos con las MISMAS reglas que cada fila
+ * (solo cuentan, como denominador, las filas con gasto conocido; sin gasto o sin resultados, «—»).
+ */
+export function totalDeFilas(
+  filas: readonly { conversations: number; leads: number; won: number; bookings: number | null; spend?: number | null }[],
+  conCitas: boolean
+): AdTotalDto {
+  let conversations = 0;
+  let leads = 0;
+  let won = 0;
+  let bookings = 0;
+  let spend: number | null = null;
+  let cConv = 0;
+  let cLeads = 0;
+  let cBook = 0;
+  for (const r of filas) {
+    conversations += r.conversations;
+    leads += r.leads;
+    won += r.won;
+    bookings += r.bookings ?? 0;
+    if (r.spend !== null && r.spend !== undefined) {
+      spend = (spend ?? 0) + r.spend;
+      cConv += r.conversations;
+      cLeads += r.leads;
+      cBook += r.bookings ?? 0;
+    }
+  }
+  return {
+    ads: filas.length,
+    conversations,
+    leads,
+    won,
+    bookings: conCitas ? bookings : null,
+    ...costos(spend, { conversations: cConv, leads: cLeads, bookings: conCitas ? cBook : null }),
   };
 }
 
@@ -264,6 +321,7 @@ export async function cargarCatalogo(organizationId: string): Promise<Map<string
       adsetName: schema.metaAd.adsetName,
       campaignId: schema.metaAd.campaignId,
       campaignName: schema.metaAd.campaignName,
+      effectiveStatus: schema.metaAd.effectiveStatus,
     })
     .from(schema.metaAd)
     .where(scoped(schema.metaAd.organizationId, organizationId, eq(schema.metaAd.status, "synced")));
@@ -329,12 +387,74 @@ export async function cargarCitasPorAnuncio(
   return new Map(filas.map((f) => [f.key, f.n]));
 }
 
+/** ¿Dos zonas horarias dan la misma hora en ese instante? (México y Monterrey sí; Madrid no). */
+export function mismoHuso(a: string, b: string, at: Date): boolean {
+  if (a === b) return true;
+  try {
+    const f = (tz: string) =>
+      new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" })
+        .formatToParts(at)
+        .find((p) => p.type === "timeZoneName")?.value;
+    return f(a) === f(b);
+  } catch {
+    return true;
+  }
+}
+
+/** Gasto total de la cuenta en el periodo (lo que Meta dice), o null si no se ha traído. */
+export async function cargarGastoCuenta(
+  organizationId: string,
+  period: ResolvedPeriod
+): Promise<{ amount: number; currencies: string[] } | null> {
+  const [fila] = await getDb()
+    .select({
+      amount: sql<string | null>`sum(${schema.metaAccountSpend.spend})::text`,
+      currencies: sql<string[]>`coalesce(array_agg(distinct ${schema.metaAccountSpend.currency}), '{}')`,
+      dias: sql<number>`count(*)::int`,
+    })
+    .from(schema.metaAccountSpend)
+    .where(
+      scoped(
+        schema.metaAccountSpend.organizationId,
+        organizationId,
+        between(schema.metaAccountSpend.day, period.dto.from, period.dto.to)
+      )
+    );
+  if (!fila || fila.dias === 0 || fila.amount === null) return null;
+  return { amount: Number(fila.amount), currencies: fila.currencies };
+}
+
+/**
+ * 039 — ¿Resultados pide un rango que empieza antes de lo que ya se trajo de Meta? Una consulta local; la ruta
+ * NUNCA llama a Meta. Devuelve el estado de cobertura para pintar «trayendo…» y para encargar el relleno.
+ */
+export async function leerCobertura(
+  organizationId: string,
+  period: ResolvedPeriod
+): Promise<{ connected: boolean; syncing: boolean; needsRequest: boolean }> {
+  const [s] = await getDb()
+    .select({
+      status: schema.metaAdsSettings.status,
+      covered: schema.metaAdsSettings.spendCoveredSince,
+      requested: schema.metaAdsSettings.spendBackfillFrom,
+    })
+    .from(schema.metaAdsSettings)
+    .where(scoped(schema.metaAdsSettings.organizationId, organizationId))
+    .limit(1);
+  if (!s) return { connected: false, syncing: false, needsRequest: false };
+  if (s.status === "error") return { connected: true, syncing: false, needsRequest: false };
+  const faltaCubrir = s.covered === null || period.dto.from < s.covered;
+  const yaPedido = s.requested !== null && s.requested <= period.dto.from;
+  return { connected: true, syncing: faltaCubrir, needsRequest: faltaCubrir && !yaPedido };
+}
+
 /** El estado del conector para la pantalla: sin descifrar nada. */
 export async function cargarEstado(
   organizationId: string,
   catalog: Map<string, CatalogEntry>,
   mixedCurrency: boolean,
-  monedaDelGasto: string | null
+  monedaDelGasto: string | null,
+  contexto?: { period: ResolvedPeriod; listedSpend: number; syncing: boolean }
 ): Promise<AdsHierarchyDto> {
   const filas = await getDb()
     .select({
@@ -342,12 +462,26 @@ export async function cargarEstado(
       lastError: schema.metaAdsSettings.lastError,
       currency: schema.metaAdsSettings.currency,
       lastSpendSyncAt: schema.metaAdsSettings.lastSpendSyncAt,
+      timezone: schema.metaAdsSettings.accountTimezone,
     })
     .from(schema.metaAdsSettings)
     .where(scoped(schema.metaAdsSettings.organizationId, organizationId))
     .limit(1);
   const s = filas[0];
   const counts = s ? await countsByStatus(organizationId) : { pending: 0, failed: 0 };
+
+  let account: AdsHierarchyDto["account"] = null;
+  let timezoneNote: string | null = null;
+  if (s && contexto) {
+    const cuenta = await cargarGastoCuenta(organizationId, contexto.period);
+    if (cuenta && cuenta.currencies.length <= 1 && !mixedCurrency) {
+      account = cuadrarCuenta(cuenta.amount, contexto.listedSpend);
+    }
+    if (s.timezone && !mismoHuso(s.timezone, contexto.period.timezone, contexto.period.start)) {
+      timezoneNote = `Meta corta los días en ${s.timezone} y tu negocio en ${contexto.period.timezone}: el gasto de un día puede no coincidir al centavo con el de tu Administrador de Anuncios.`;
+    }
+  }
+
   return {
     connected: !!s,
     problem: s?.status === "error" ? (s.lastError ?? "El conector tiene un problema") : null,
@@ -356,5 +490,8 @@ export async function cargarEstado(
     pending: counts.pending,
     mixedCurrency,
     hasData: catalog.size > 0,
+    syncing: contexto?.syncing ?? false,
+    account,
+    timezoneNote,
   };
 }

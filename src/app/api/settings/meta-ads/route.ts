@@ -55,7 +55,7 @@ export const PUT = withAuth(async (session, req: Request) => {
   }
 
   // Guardar = probar: un token que Meta rechaza no se guarda.
-  let info: { name: string | null; currency: string | null };
+  let info: { name: string | null; currency: string | null; timezone: string | null };
   try {
     info = await fetchAccountInfo(adAccountId, token);
   } catch (err) {
@@ -80,6 +80,7 @@ export const PUT = withAuth(async (session, req: Request) => {
     token,
     accountName: info.name,
     currency: info.currency,
+    timezone: info.timezone,
   });
   // Se recupera la historia: los anuncios que ya trajeron gente entran a la cola. Fuera de la respuesta.
   await enqueueAllFromAttributions(session.organizationId);

@@ -1,22 +1,25 @@
 import { graphRequest } from "@/lib/meta/client";
 import {
   ADS_BATCH,
+  buildAccountPath,
+  buildAdsListPath,
   buildAdsPath,
-  buildInsightsPath,
-  chunk,
+  buildSpendPath,
   classifyGraphError,
+  parseAccountInsights,
   parseAdsPage,
   parseInsightsPage,
   parseUsageHeaders,
   rateLimitBackoffMs,
   sanitizeError,
   USAGE_THROTTLE_PCT,
+  type AccountSpendRow,
+  type AdNode,
   type GraphProblem,
   type SpendRow,
 } from "@/lib/meta/ads";
 import { addDaysISO, todayInTz } from "@/lib/time/slots";
 import {
-  adsForSpend,
   claimDue,
   markFailed,
   markNotFound,
@@ -24,7 +27,9 @@ import {
   markSynced,
   refreshStale,
   releaseLocks,
-  replaceSpend,
+  replaceAccountSpend,
+  replaceSpendWindow,
+  upsertAccountAds,
 } from "@/server/attribution/meta-ads/catalog";
 import {
   clearRateLimit,
@@ -32,6 +37,9 @@ import {
   markSettingsError,
   setCurrencyIfMissing,
   setPausedUntil,
+  setSpendCoverage,
+  setSyncWarning,
+  touchCatalogSync,
   touchSpendSync,
   type MetaAdsSettings,
 } from "@/server/attribution/meta-ads/settings";
@@ -65,17 +73,28 @@ export type SyncSummary = {
   notFound: number;
   /** Anuncios cuyo gasto se actualizó. */
   spendAds: number;
+  /** 039 — Anuncios que devolvió el listado de la cuenta y ventanas de gasto reemplazadas. */
+  catalogAds: number;
+  windows: number;
   /** Por qué se detuvo la pasada antes de terminar, si lo hizo. */
-  stopped: null | GraphProblem["kind"] | "uso_alto";
+  stopped: null | GraphProblem["kind"] | "uso_alto" | "ventana_incompleta";
 };
 
 /** Tandas de consulta de jerarquía por pasada (50 anuncios cada una). */
 const MAX_LOOKUP_BATCHES = 4;
 /** Cada cuánto se sincroniza el gasto de una organización. */
 export const SPEND_EVERY_MS = 3 * 60 * 60_000;
-const BACKFILL_DAYS = 90;
+/** Historial que se trae la primera vez, y más atrás solo si Resultados lo pide (039, D5). */
+export const BACKFILL_DAYS = 90;
 const REFRESH_DAYS = 7;
-const MAX_PAGES = 20;
+/** Páginas por ventana de gasto y por listado de la cuenta (039). */
+const MAX_PAGES = 40;
+const MAX_LIST_PAGES = 50;
+/** Ventanas de gasto por pasada: la de refresco y las que rellenan hacia atrás (039). */
+export const MAX_WINDOWS_PER_PASS = 4;
+const WINDOW_DAYS = 7;
+/** Cada cuánto se vuelve a listar la cuenta entera. */
+export const CATALOG_EVERY_MS = 12 * 60 * 60_000;
 /** Si Meta no dice cuánto esperar al pasar del 90 % de uso. */
 const DEFAULT_USAGE_PAUSE_MS = 10 * 60_000;
 
@@ -187,54 +206,181 @@ async function syncLookups(ctx: Ctx): Promise<void> {
   }
 }
 
-async function fetchSpend(
+type Pagina<T> = { rows: T[]; after: string | null };
+
+/**
+ * Todas las páginas de una consulta. `complete` es false si se cortó por el tope: quien llama decide qué hacer
+ * con un resultado parcial (el gasto NO se reemplaza con él; el catálogo sí se escribe).
+ */
+async function fetchAllPages<T>(
   ctx: Ctx,
-  adIds: string[],
-  since: string,
-  until: string
-): Promise<{ rows: SpendRow[] } | { stop: true } | { skip: true }> {
-  const rows: SpendRow[] = [];
+  pathOf: (after: string | null) => string,
+  parse: (json: unknown) => Pagina<T>,
+  maxPages: number
+): Promise<{ rows: T[]; complete: boolean } | { problem: GraphProblem }> {
+  const rows: T[] = [];
   let after: string | null = null;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const res = await call(ctx, buildInsightsPath(ctx.settings.adAccountId, adIds, since, until, after));
-    if (!res.ok) return (await handleProblem(ctx, res.problem, [])) ? { stop: true } : { skip: true };
-    const parsed = parseInsightsPage(res.json);
+  for (let page = 0; page < maxPages; page++) {
+    const res = await call(ctx, pathOf(after));
+    if (!res.ok) return { problem: res.problem };
+    const parsed = parse(res.json);
     rows.push(...parsed.rows);
-    if (!parsed.after) return { rows };
+    if (!parsed.after) return { rows, complete: true };
     after = parsed.after;
   }
-  // Más páginas de las razonables: se escribe lo traído; el resto llega en la pasada siguiente.
-  return { rows };
+  return { rows, complete: false };
 }
 
-async function syncSpend(ctx: Ctx): Promise<void> {
-  const today = todayInTz(ctx.now, "UTC");
-  const ads = await adsForSpend(ctx.organizationId, ctx.now);
-  const grupos: { ids: string[]; since: string }[] = [
-    { ids: ads.filter((a) => !a.spendSyncedAt).map((a) => a.adId), since: addDaysISO(today, -(BACKFILL_DAYS - 1)) },
-    { ids: ads.filter((a) => a.spendSyncedAt).map((a) => a.adId), since: addDaysISO(today, -(REFRESH_DAYS - 1)) },
-  ];
+function dedupe(nodes: AdNode[]): AdNode[] {
+  const por = new Map<string, AdNode>();
+  for (const n of nodes) por.set(n.adId, { ...por.get(n.adId), ...n });
+  return [...por.values()];
+}
 
-  for (const grupo of grupos) {
-    for (const lote of chunk(grupo.ids, ADS_BATCH)) {
-      if (ctx.summary.stopped) return;
-      const out = await fetchSpend(ctx, lote, grupo.since, today);
-      if ("stop" in out) return;
-      if ("skip" in out) continue;
-      await replaceSpend({
-        organizationId: ctx.organizationId,
-        adIds: lote,
-        since: grupo.since,
-        until: today,
-        rows: out.rows,
-        now: ctx.now,
-      });
-      if (out.rows[0]) await setCurrencyIfMissing(ctx.organizationId, out.rows[0].currency);
-      ctx.summary.spendAds += lote.length;
+/** Hoy en la zona de la cuenta publicitaria (la de Meta); si no se conoce o no es válida, UTC. */
+function hoyDeLaCuenta(now: Date, timezone: string | null): string {
+  if (timezone) {
+    try {
+      return todayInTz(now, timezone);
+    } catch {
+      // zona inválida: se cae a UTC
     }
   }
+  return todayInTz(now, "UTC");
+}
+
+/**
+ * 039 — Lista TODA la cuenta publicitaria: campañas pausadas y anuncios sin una sola conversación incluidos. Un
+ * listado cortado por el tope se escribe igual (es catálogo, no dinero) y avisa. También refresca la zona
+ * horaria de la cuenta con una llamada barata.
+ */
+async function syncCatalog(ctx: Ctx): Promise<void> {
+  const cuenta = await call(ctx, buildAccountPath(ctx.settings.adAccountId));
+  if (!cuenta.ok) {
+    await handleProblem(ctx, cuenta.problem, []);
+    return;
+  }
+  const info = cuenta.json as { timezone_name?: unknown } | null;
+  const timezone = typeof info?.timezone_name === "string" ? info.timezone_name : null;
+  if (timezone) ctx.settings.accountTimezone = timezone;
+
+  const out = await fetchAllPages(
+    ctx,
+    (after) => buildAdsListPath(ctx.settings.adAccountId, after),
+    (j) => {
+      const p = parseAdsPage(j);
+      return { rows: p.ads, after: p.after };
+    },
+    MAX_LIST_PAGES
+  );
+  if ("problem" in out) {
+    await handleProblem(ctx, out.problem, []);
+    return;
+  }
+  ctx.summary.catalogAds += await upsertAccountAds(ctx.organizationId, dedupe(out.rows), ctx.now, { listed: true });
+  await touchCatalogSync(ctx.organizationId, ctx.now, timezone);
+  if (!out.complete) {
+    await setSyncWarning(
+      ctx.organizationId,
+      `La cuenta tiene más de ${MAX_LIST_PAGES * 200} anuncios: se listaron los primeros. Los demás se conocen por su gasto.`
+    );
+  }
+}
+
+/** Una ventana de gasto: por anuncio y de la cuenta, cada una reemplazada completa o no tocada. */
+async function syncSpendWindow(ctx: Ctx, since: string, until: string): Promise<"ok" | "stop" | "skip"> {
+  const porAnuncio = await fetchAllPages(
+    ctx,
+    (after) => buildSpendPath(ctx.settings.adAccountId, "ad", since, until, after),
+    parseInsightsPage,
+    MAX_PAGES
+  );
+  if ("problem" in porAnuncio) return (await handleProblem(ctx, porAnuncio.problem, [])) ? "stop" : "skip";
+  if (!porAnuncio.complete) {
+    // Dinero a medias es peor que dinero viejo: esta ventana se queda como estaba.
+    await setSyncWarning(
+      ctx.organizationId,
+      `El gasto del ${since} al ${until} trae demasiadas filas para una consulta: se conserva lo anterior.`
+    );
+    ctx.summary.stopped = "ventana_incompleta";
+    return "stop";
+  }
+  const filas: SpendRow[] = porAnuncio.rows;
+
+  const cuenta = await fetchAllPages(
+    ctx,
+    (after) => buildSpendPath(ctx.settings.adAccountId, "account", since, until, after),
+    parseAccountInsights,
+    MAX_PAGES
+  );
+  let filasCuenta: AccountSpendRow[] | null = null;
+  if ("problem" in cuenta) {
+    if (await handleProblem(ctx, cuenta.problem, [])) return "stop";
+  } else if (cuenta.complete) {
+    filasCuenta = cuenta.rows;
+  }
+
+  // Los anuncios que gastaron y no están en el catálogo (borrados, o de antes del listado) entran con su jerarquía.
+  const conNombre = filas.flatMap((r) => (r.node ? [r.node] : []));
+  if (conNombre.length > 0) await upsertAccountAds(ctx.organizationId, dedupe(conNombre), ctx.now, { listed: false });
+  await replaceSpendWindow({ organizationId: ctx.organizationId, since, until, rows: filas, now: ctx.now });
+  if (filasCuenta) {
+    await replaceAccountSpend({ organizationId: ctx.organizationId, since, until, rows: filasCuenta, now: ctx.now });
+  }
+
+  const primero = filas[0] ?? filasCuenta?.[0];
+  if (primero) await setCurrencyIfMissing(ctx.organizationId, primero.currency);
+  ctx.summary.spendAds += new Set(filas.map((r) => r.adId)).size;
+  ctx.summary.windows += 1;
+  return "ok";
+}
+
+/** Fecha objetivo del historial: 90 días por defecto, o más atrás si Resultados lo pidió. */
+function objetivoDeHistorial(settings: MetaAdsSettings, hoy: string): string {
+  const porDefecto = addDaysISO(hoy, -(BACKFILL_DAYS - 1));
+  const pedido = settings.spendBackfillFrom;
+  return pedido && pedido < porDefecto ? pedido : porDefecto;
+}
+
+/**
+ * 039 — El gasto de TODA la cuenta, por ventanas de 7 días: primero la de refresco (Meta revisa lo reciente), luego,
+ * hacia atrás, las que faltan para cubrir el historial inicial o lo que Resultados pidió. Como máximo
+ * `MAX_WINDOWS_PER_PASS` por pasada, así una cuenta enorme no agota la cuota de golpe.
+ */
+async function syncSpend(ctx: Ctx): Promise<void> {
+  const hoy = hoyDeLaCuenta(ctx.now, ctx.settings.accountTimezone);
+  const objetivo = objetivoDeHistorial(ctx.settings, hoy);
+  const desdeRefresco = addDaysISO(hoy, -(REFRESH_DAYS - 1));
+  let cubierto = ctx.settings.spendCoveredSince;
+  let hechas = 0;
+
+  const refresco = await syncSpendWindow(ctx, desdeRefresco, hoy);
+  if (refresco === "stop") return;
+  hechas += 1;
+  if (refresco === "ok") {
+    cubierto = cubierto && cubierto < desdeRefresco ? cubierto : desdeRefresco;
+    await setSpendCoverage(ctx.organizationId, cubierto);
+  }
+
+  while (cubierto && cubierto > objetivo && hechas < MAX_WINDOWS_PER_PASS && !ctx.summary.stopped) {
+    const hasta = addDaysISO(cubierto, -1);
+    const inicio = addDaysISO(hasta, -(WINDOW_DAYS - 1));
+    const desde = inicio < objetivo ? objetivo : inicio;
+    const r = await syncSpendWindow(ctx, desde, hasta);
+    if (r !== "ok") break;
+    hechas += 1;
+    cubierto = desde;
+    await setSpendCoverage(ctx.organizationId, desde);
+  }
+
   // Solo una pasada completa cuenta como «sincronizado»: si algo la cortó, se reintenta pronto.
   if (!ctx.summary.stopped) await touchSpendSync(ctx.organizationId, ctx.now);
+}
+
+/** ¿Queda historial por rellenar? (la primera vez, o lo que Resultados pidió). */
+export function hayRellenoPendiente(settings: MetaAdsSettings, now: Date): boolean {
+  const hoy = hoyDeLaCuenta(now, settings.accountTimezone);
+  return !settings.spendCoveredSince || settings.spendCoveredSince > objetivoDeHistorial(settings, hoy);
 }
 
 /**
@@ -246,7 +392,15 @@ export async function syncOrganization(
   deps: SyncDeps = defaultSyncDeps,
   opts: { forceSpend?: boolean } = {}
 ): Promise<SyncSummary> {
-  const summary: SyncSummary = { skipped: null, synced: 0, notFound: 0, spendAds: 0, stopped: null };
+  const summary: SyncSummary = {
+    skipped: null,
+    synced: 0,
+    notFound: 0,
+    spendAds: 0,
+    catalogAds: 0,
+    windows: 0,
+    stopped: null,
+  };
   try {
     const settings = await getMetaAdsSettings(organizationId);
     if (!settings) return { ...summary, skipped: "sin_credenciales" };
@@ -256,12 +410,20 @@ export async function syncOrganization(
 
     const ctx: Ctx = { organizationId, settings, deps, now, summary, regainMs: null, recovered: false };
     await refreshStale(organizationId, now);
-    await syncLookups(ctx);
+
+    // 039 — Primero la cuenta entera: lo que el listado resuelve ya no necesita consulta suelta.
+    const catalogoVencido =
+      opts.forceSpend ||
+      !settings.catalogSyncedAt ||
+      now.getTime() - settings.catalogSyncedAt.getTime() >= CATALOG_EVERY_MS;
+    if (catalogoVencido) await syncCatalog(ctx);
+    if (!summary.stopped) await syncLookups(ctx);
 
     const debe =
       opts.forceSpend ||
       !settings.lastSpendSyncAt ||
-      now.getTime() - settings.lastSpendSyncAt.getTime() >= SPEND_EVERY_MS;
+      now.getTime() - settings.lastSpendSyncAt.getTime() >= SPEND_EVERY_MS ||
+      hayRellenoPendiente(settings, now);
     if (debe && !summary.stopped) await syncSpend(ctx);
     return summary;
   } catch (err) {

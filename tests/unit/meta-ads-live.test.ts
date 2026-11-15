@@ -74,6 +74,7 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
   async function limpiar() {
     for (const o of [org, otherOrg]) {
       await db.delete(schema.metaAdSpend).where(eq(schema.metaAdSpend.organizationId, o));
+      await db.delete(schema.metaAccountSpend).where(eq(schema.metaAccountSpend.organizationId, o));
       await db.delete(schema.metaAd).where(eq(schema.metaAd.organizationId, o));
       await db.delete(schema.metaAdsSettings).where(eq(schema.metaAdsSettings.organizationId, o));
     }
@@ -94,15 +95,47 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
 
   /* ─── Constructores ─── */
 
-  async function conectar(organizationId = org, token = TOKEN) {
+  /**
+   * Conecta una cuenta. Por defecto el listado de la cuenta (039) figura como YA hecho: así las pruebas de 038 siguen
+   * mirando las consultas sueltas y el gasto sin que el listado se cruce. Las de 039 piden `catalogoAlDia: false`.
+   */
+  async function conectar(organizationId = org, token = TOKEN, opts: { catalogoAlDia?: boolean } = {}) {
     await settings.saveMetaAdsSettings({ organizationId, adAccountId: "act_1234567890", token, accountName: "Cuenta test", currency: "MXN" });
+    if (opts.catalogoAlDia !== false) {
+      await db.update(schema.metaAdsSettings).set({ catalogSyncedAt: T0 }).where(eq(schema.metaAdsSettings.organizationId, organizationId));
+    }
   }
 
   const T0 = new Date("2026-11-14T12:00:00Z");
   const hoy = () => T0.toISOString().slice(0, 10);
 
-  /** Un doble de la Graph API: jerarquía por convención de nombres y gasto configurable. */
-  function fakeGraph(opts: { spend?: Record<string, number>; skipDay?: string; fail?: (path: string) => unknown; calls?: string[] } = {}): import("@/server/attribution/meta-ads/sync").GraphCall {
+  type AnuncioFalso = { id: string; name?: string; status?: string; adset?: [string, string]; campaign?: [string, string] };
+
+  /**
+   * Un doble de la Graph API: consultas sueltas por ids (038), listado de la cuenta, gasto por anuncio y gasto de la
+   * cuenta (039). `spend` es el gasto diario por id; `account` los anuncios que lista la cuenta.
+   */
+  function fakeGraph(
+    opts: {
+      spend?: Record<string, number>;
+      skipDay?: string;
+      fail?: (path: string) => unknown;
+      calls?: string[];
+      account?: AnuncioFalso[];
+      /** Gasto de la cuenta que ningún anuncio explica, por día. */
+      extraAccount?: number;
+      timezone?: string;
+      /** Páginas del gasto por anuncio: si se da, cada página trae este número de filas y siempre dice que hay otra. */
+      endlessSpendPages?: number;
+    } = {}
+  ): import("@/server/attribution/meta-ads/sync").GraphCall {
+    const nodoDe = (a: AnuncioFalso) => ({
+      id: a.id,
+      name: a.name ?? `Nombre ${a.id}`,
+      effective_status: a.status ?? "ACTIVE",
+      adset: { id: a.adset?.[0] ?? `as-${a.id}`, name: a.adset?.[1] ?? `Conjunto ${a.id}` },
+      campaign: { id: a.campaign?.[0] ?? "camp-1", name: a.campaign?.[1] ?? "Campaña uno" },
+    });
     return async (path, _token, onHeaders) => {
       opts.calls?.push(path);
       const failure = opts.fail?.(path);
@@ -110,24 +143,58 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       onHeaders(new Headers());
       const q = new URL(`http://x/${path}`).searchParams;
       const filtro = (JSON.parse(q.get("filtering") ?? "[]") as { value: string[] }[])[0]?.value ?? [];
+      if (!path.includes("/ads?") && !path.includes("/insights?")) {
+        return { name: "Cuenta test", currency: "MXN", timezone_name: opts.timezone ?? "America/Mexico_City" };
+      }
       if (path.includes("/ads?")) {
+        if (filtro.length === 0) return { data: (opts.account ?? []).map(nodoDe) };
         return {
           data: filtro
             .filter((id) => !id.includes("gone"))
             .map((id) => ({ id, name: `Nombre ${id}`, adset: { id: `as-${id}`, name: `Conjunto ${id}` }, campaign: { id: "camp-1", name: "Campaña uno" } })),
         };
       }
-      if (path.includes("/insights?")) {
-        const range = JSON.parse(q.get("time_range")!) as { since: string; until: string };
-        const rows: unknown[] = [];
-        for (let d = range.since; d <= range.until; d = addDaysISO(d, 1)) {
-          if (d === opts.skipDay) continue;
-          for (const id of filtro) rows.push({ ad_id: id, spend: String(opts.spend?.[id] ?? 10), account_currency: "MXN", date_start: d, date_stop: d });
-        }
-        return { data: rows };
+      const range = JSON.parse(q.get("time_range")!) as { since: string; until: string };
+      const ids = Object.keys(opts.spend ?? {});
+      const dias: string[] = [];
+      for (let d = range.since; d <= range.until; d = addDaysISO(d, 1)) if (d !== opts.skipDay) dias.push(d);
+      if (q.get("level") === "account") {
+        const total = ids.reduce((t, id) => t + (opts.spend![id] ?? 0), 0) + (opts.extraAccount ?? 0);
+        return { data: dias.map((d) => ({ spend: total.toFixed(2), account_currency: "MXN", date_start: d, date_stop: d })) };
       }
-      return { data: [] };
+      const rows: unknown[] = [];
+      for (const d of dias) {
+        for (const id of ids) {
+          const conocido = (opts.account ?? []).find((a) => a.id === id);
+          const n = conocido ? nodoDe(conocido) : null;
+          rows.push({
+            ad_id: id,
+            ...(n ? { ad_name: n.name, adset_id: n.adset.id, adset_name: n.adset.name, campaign_id: n.campaign.id, campaign_name: n.campaign.name } : {}),
+            spend: String(opts.spend![id]),
+            account_currency: "MXN",
+            date_start: d,
+            date_stop: d,
+          });
+        }
+      }
+      if (opts.endlessSpendPages) {
+        // Una paginación que nunca termina: cada página dice que hay otra.
+        return { data: rows.slice(0, opts.endlessSpendPages), paging: { cursors: { after: "SIGUE" }, next: "https://graph/next" } };
+      }
+      return { data: rows };
     };
+  }
+
+  /** Corre pasadas, una por minuto, hasta que no quede historial por rellenar. Devuelve cuántas hicieron falta. */
+  async function completar(graph: () => import("@/server/attribution/meta-ads/sync").GraphCall, inicio = T0, maximo = 20) {
+    let now = inicio;
+    for (let pasadas = 1; pasadas <= maximo; pasadas++) {
+      await sync.syncOrganization(org, deps(graph(), now));
+      const cfg = (await settings.getMetaAdsSettings(org))!;
+      if (!sync.hayRellenoPendiente(cfg, now)) return { pasadas, now };
+      now = new Date(now.getTime() + 60_000);
+    }
+    throw new Error("el relleno no terminó");
   }
 
   const deps = (graph: import("@/server/attribution/meta-ads/sync").GraphCall, now = T0): import("@/server/attribution/meta-ads/sync").SyncDeps => ({ now: () => now, graph });
@@ -316,27 +383,34 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       await mkContactWithAd(ad("b"));
 
       const r = await sync.syncOrganization(org, deps(fakeGraph({ spend: { [ad("a")]: 20 } })));
-      expect(r).toMatchObject({ skipped: null, synced: 2, notFound: 1, stopped: null });
+      expect(r).toMatchObject({ skipped: null, synced: 2, notFound: 1, stopped: null, windows: 4 });
       expect(await metaRow(org, ad("a"))).toMatchObject({ status: "synced", adName: `Nombre ${ad("a")}`, campaignName: "Campaña uno", adsetName: `Conjunto ${ad("a")}`, attempts: 0 });
       expect(await metaRow(org, ad("gone"))).toMatchObject({ status: "not_found" });
 
-      const gasto = await db.select().from(schema.metaAdSpend).where(eq(schema.metaAdSpend.adId, ad("a")));
-      // Primera vez: 90 días de historia, a 20 por día.
-      expect(gasto).toHaveLength(90);
-      expect(gasto.every((g) => g.spend === "20.00" && g.currency === "MXN")).toBe(true);
+      const gasto = async () => db.select().from(schema.metaAdSpend).where(eq(schema.metaAdSpend.adId, ad("a")));
+      // Una pasada trae a lo más 4 ventanas de 7 días (28 días): el historial entero llega en varias pasadas.
+      expect(await gasto()).toHaveLength(28);
       expect((await settings.getMetaAdsSettings(org))!.lastSpendSyncAt).toEqual(T0);
+
+      const fin = await completar(() => fakeGraph({ spend: { [ad("a")]: 20 } }), new Date(T0.getTime() + 60_000));
+      expect(fin.pasadas).toBeLessThanOrEqual(4);
+      const todo = await gasto();
+      // Primera vez: 90 días de historia, a 20 por día.
+      expect(todo).toHaveLength(90);
+      expect(todo.every((g) => g.spend === "20.00" && g.currency === "MXN")).toBe(true);
     });
 
     it("el gasto es idempotente y Meta lo REVISA: se reemplaza la ventana, sin duplicar ni dejar días que ya no existen", async () => {
       await conectar();
       await catalog.enqueueAdLookup({ organizationId: org, sourceId: ad("r"), sourceType: "ad", now: T0 });
       await mkContactWithAd(ad("r"));
-      await sync.syncOrganization(org, deps(fakeGraph({ spend: { [ad("r")]: 10 } })));
+      await completar(() => fakeGraph({ spend: { [ad("r")]: 10 } }));
       const cuenta = async () => (await db.select().from(schema.metaAdSpend).where(eq(schema.metaAdSpend.adId, ad("r")))).length;
       expect(await cuenta()).toBe(90);
 
       // 4 h después: ventana de 7 días, el gasto cambia y un día desaparece de la respuesta.
       const later = new Date(T0.getTime() + 4 * 3_600_000);
+      expect(await cuenta()).toBe(90);
       const ayer = addDaysISO(later.toISOString().slice(0, 10), -1);
       await sync.syncOrganization(org, deps(fakeGraph({ spend: { [ad("r")]: 15 }, skipDay: ayer }), later));
       expect(await cuenta()).toBe(90 - 1);
@@ -351,12 +425,14 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       await conectar();
       await catalog.enqueueAdLookup({ organizationId: org, sourceId: ad("p"), sourceType: "ad", now: T0 });
       await mkContactWithAd(ad("p"));
-      await sync.syncOrganization(org, deps(fakeGraph()));
+      const fin = await completar(() => fakeGraph({ spend: { [ad("p")]: 10 } }));
       const calls: string[] = [];
-      await sync.syncOrganization(org, deps(fakeGraph({ calls }), new Date(T0.getTime() + 3_600_000)));
+      const luego = new Date(fin.now.getTime() + 3_600_000);
+      await sync.syncOrganization(org, deps(fakeGraph({ calls }), luego));
       expect(calls.filter((c) => c.includes("/insights"))).toHaveLength(0);
-      await sync.syncOrganization(org, deps(fakeGraph({ calls }), new Date(T0.getTime() + 3_600_000)), { forceSpend: true });
-      expect(calls.filter((c) => c.includes("/insights"))).toHaveLength(1);
+      await sync.syncOrganization(org, deps(fakeGraph({ calls }), luego), { forceSpend: true });
+      // A mano: la ventana de refresco, por anuncio y de la cuenta.
+      expect(calls.filter((c) => c.includes("/insights"))).toHaveLength(2);
     });
 
     it("sin credenciales no llama a nadie", async () => {
@@ -371,7 +447,7 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       const calls: string[] = [];
       const r = await sync.syncOrganization(org, deps(fakeGraph({ calls })));
       expect(r.synced).toBe(120);
-      expect(calls.filter((c) => c.includes("/ads?"))).toHaveLength(3);
+      expect(calls.filter((c) => c.includes("/ads?") && c.includes("filtering"))).toHaveLength(3);
     });
 
     it("LÍMITE DE USO: pausa, no gasta intentos y las filas siguen pendientes; luego se recupera", async () => {
@@ -714,6 +790,205 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       } finally {
         process.env.ATRIBUCION = "on";
       }
+    });
+  });
+
+  /* ─── 039: la cuenta entera, no solo lo que ya escribió ─── */
+
+  describe("039 — catálogo completo de la cuenta", () => {
+    const CUENTA: AnuncioFalso[] = [
+      { id: "c-1", name: "Anuncio Alfa 1", adset: ["s-1", "Conjunto Alfa"], campaign: ["k-a", "Campaña Alfa"] },
+      { id: "c-2", name: "Anuncio Beta 1", status: "CAMPAIGN_PAUSED", adset: ["s-2", "Conjunto Beta"], campaign: ["k-b", "Campaña Beta (pausada)"] },
+      { id: "c-3", name: "Anuncio sin gasto", status: "PAUSED", adset: ["s-2", "Conjunto Beta"], campaign: ["k-b", "Campaña Beta (pausada)"] },
+    ];
+    const id = (n: string) => `${n}-${uid}`;
+    const cuenta = () => CUENTA.map((a) => ({ ...a, id: id(a.id) }));
+    const gasto = () => ({ [id("c-1")]: 20, [id("c-2")]: 30, [id("gone")]: 7 });
+    const rangoHoy = () => period.resolvePeriod({ from: addDaysISO(hoy(), -1), to: hoy(), timezone: "UTC", now: T0 });
+    const consulta = { group: "campaign" as const, campaignId: null, adsetId: null };
+
+    it("trae anuncios SIN conversaciones (también pausados) y el que gastó y ya no está en el listado", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      // Nadie escribió desde ningún anuncio: antes de 039 esto no traía NADA.
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      expect(r).toMatchObject({ skipped: null, stopped: null, catalogAds: 3 });
+
+      expect(await metaRow(org, id("c-1"))).toMatchObject({ status: "synced", adName: "Anuncio Alfa 1", campaignName: "Campaña Alfa", effectiveStatus: "ACTIVE" });
+      expect(await metaRow(org, id("c-2"))).toMatchObject({ effectiveStatus: "CAMPAIGN_PAUSED", campaignName: "Campaña Beta (pausada)" });
+      expect((await metaRow(org, id("c-3")))!.listedAt).not.toBeNull();
+      // El borrado no está en el listado pero gastó: entra por su gasto. Nombre y campaña vienen del gasto cuando los trae.
+      expect(await metaRow(org, id("gone"))).toBeUndefined();
+
+      const filas = await db.select().from(schema.metaAdSpend).where(and(eq(schema.metaAdSpend.organizationId, org), inArray(schema.metaAdSpend.adId, [id("c-1"), id("c-2"), id("gone")])));
+      expect(new Set(filas.map((f) => f.adId))).toEqual(new Set([id("c-1"), id("c-2"), id("gone")]));
+      const cfg = (await settings.getMetaAdsSettings(org))!;
+      expect(cfg.catalogSyncedAt).toEqual(T0);
+      expect(cfg.accountTimezone).toBe("America/Mexico_City");
+    });
+
+    it("un anuncio que gastó y ya no se lista entra al catálogo con la jerarquía que trae su gasto", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      // `account` lo conoce solo para armar la fila de gasto con nombres; el listado de la cuenta no lo devuelve.
+      const borrado: AnuncioFalso = { id: id("gone"), name: "Anuncio borrado", adset: ["s-1", "Conjunto Alfa"], campaign: ["k-a", "Campaña Alfa"] };
+      const g = fakeGraph({ account: cuenta(), spend: gasto() });
+      const sinListarlo: typeof g = async (path, token, h) => {
+        const out = (await g(path, token, h)) as { data?: { id?: string }[] };
+        return path.includes("/ads?") && !path.includes("filtering") ? { data: (out.data ?? []).filter((a) => a.id !== borrado.id) } : out;
+      };
+      // El gasto no sabe nombres del borrado en el doble (no está en `account`): se agrega con el mismo doble.
+      const conBorrado = fakeGraph({ account: [...cuenta(), borrado], spend: gasto() });
+      const mezcla: typeof g = async (path, token, h) => (path.includes("/insights?") ? conBorrado(path, token, h) : sinListarlo(path, token, h));
+      await sync.syncOrganization(org, deps(mezcla));
+      expect(await metaRow(org, id("gone"))).toMatchObject({ status: "synced", adName: "Anuncio borrado", campaignName: "Campaña Alfa", listedAt: null });
+    });
+
+    it("Resultados lista la campaña pausada con gasto y 0 conversaciones, y el total cuadra con la cuenta al centavo", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+      const beta = b.groups!.find((g) => g.name === "Campaña Beta (pausada)")!;
+      // 30/día en 2 días (ayer y hoy).
+      expect(beta).toMatchObject({ conversations: 0, leads: 0, spend: 60, status: "paused", costPerConversation: null });
+      expect(b.groups!.find((g) => g.name === "Campaña Alfa")).toMatchObject({ status: "active" });
+      // Alfa: 20 + 7 (el borrado, sin jerarquía en este doble) por día; el total es la suma de TODO lo traído.
+      expect(b.total!.spend).toBe(2 * (20 + 30 + 7));
+      expect(b.hierarchy!.account).toEqual({ spend: 2 * (20 + 30 + 7), unattributed: null });
+      expect(b.empty).toBe(false);
+    });
+
+    it("lo que la cuenta gastó y ningún anuncio explica sale como «sin desglosar», no se maquilla", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto(), extraAccount: 3.25 })));
+      const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+      expect(b.hierarchy!.account).toEqual({ spend: 2 * (57 + 3.25), unattributed: 6.5 });
+    });
+
+    it("el listado se vuelve a leer cada 12 h y actualiza el estado; no pisa un nombre con null", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      const calls: string[] = [];
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto(), calls }), new Date(T0.getTime() + 3_600_000)));
+      expect(calls.filter((c) => c.includes("/ads?"))).toHaveLength(0);
+
+      // 13 h después el listado vuelve, ahora con el anuncio pausado y sin nombre.
+      const luego = new Date(T0.getTime() + 13 * 3_600_000);
+      const pausado = cuenta().map((a) => (a.id === id("c-1") ? { ...a, status: "PAUSED" } : a));
+      const g = fakeGraph({ account: pausado, spend: gasto() });
+      const sinNombre: typeof g = async (path, token, h) => {
+        const out = (await g(path, token, h)) as { data?: Record<string, unknown>[] };
+        if (path.includes("/ads?") && !path.includes("filtering")) {
+          return { data: (out.data ?? []).map((a) => (a.id === id("c-1") ? { ...a, name: undefined } : a)) };
+        }
+        return out;
+      };
+      await sync.syncOrganization(org, deps(sinNombre, luego));
+      expect(await metaRow(org, id("c-1"))).toMatchObject({ effectiveStatus: "PAUSED", adName: "Anuncio Alfa 1" });
+    });
+
+    it("una ventana de gasto TRUNCADA no se reemplaza: dinero a medias es peor que dinero viejo", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await db.insert(schema.metaAdSpend).values({ id: newId("metaAdSpend"), organizationId: org, adId: id("c-1"), day: hoy(), spend: "99.00", currency: "MXN" });
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto(), endlessSpendPages: 2 })));
+      expect(r.stopped).toBe("ventana_incompleta");
+      const fila = (await db.select().from(schema.metaAdSpend).where(and(eq(schema.metaAdSpend.organizationId, org), eq(schema.metaAdSpend.adId, id("c-1")))))[0]!;
+      expect(fila.spend).toBe("99.00");
+      expect((await settings.getMetaAdsSettings(org))!.lastError).toContain("demasiadas filas");
+      // Y no se da por sincronizada ni cubierta: se reintenta pronto.
+      const cfg = (await settings.getMetaAdsSettings(org))!;
+      expect(cfg.lastSpendSyncAt).toBeNull();
+      expect(cfg.spendCoveredSince).toBeNull();
+    });
+
+    it("un límite de uso a mitad del gasto detiene la pasada sin reemplazar nada ni cubrir el rango", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      const limite = new MetaApiError("(#17) User request limit reached", { status: 400, code: 17 });
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto(), fail: (p) => (p.includes("/insights?") ? limite : null) })));
+      expect(r.stopped).toBe("rate_limit");
+      expect(await db.select().from(schema.metaAdSpend).where(eq(schema.metaAdSpend.organizationId, org))).toHaveLength(0);
+      expect((await settings.getMetaAdsSettings(org))!.spendCoveredSince).toBeNull();
+      // El listado, que ya había llegado, SÍ se conserva (es catálogo, no dinero).
+      expect(await metaRow(org, id("c-1"))).toBeDefined();
+    });
+
+    it("un rango más viejo que lo cubierto ENCARGA el relleno (sin llamar a Meta) y se cubre en varias pasadas", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      const fin0 = await completar(() => fakeGraph({ account: cuenta(), spend: gasto() }));
+      expect((await settings.getMetaAdsSettings(org))!.spendCoveredSince).toBe(addDaysISO(hoy(), -89));
+
+      const desde = addDaysISO(hoy(), -200);
+      const rango = period.resolvePeriod({ from: desde, to: hoy(), timezone: "UTC", now: T0 });
+      const calls: string[] = [];
+      const antes = await analytics.adsBlock(org, rango, consulta);
+      expect(calls).toEqual([]);
+      expect(antes.hierarchy!.syncing).toBe(true);
+      expect((await settings.getMetaAdsSettings(org))!.spendBackfillFrom).toBe(desde);
+
+      // Pedirlo otra vez no cambia nada (solo adelanta, nunca borra un pedido más antiguo).
+      await analytics.adsBlock(org, period.resolvePeriod({ from: addDaysISO(hoy(), -100), to: hoy(), timezone: "UTC", now: T0 }), consulta);
+      expect((await settings.getMetaAdsSettings(org))!.spendBackfillFrom).toBe(desde);
+
+      const fin = await completar(() => fakeGraph({ account: cuenta(), spend: gasto() }), new Date(fin0.now.getTime() + 60_000), 30);
+      // 110 días más a 28 por pasada.
+      expect(fin.pasadas).toBeGreaterThan(1);
+      const cfg = (await settings.getMetaAdsSettings(org))!;
+      expect(cfg.spendCoveredSince).toBe(desde);
+      expect(cfg.spendBackfillFrom).toBeNull();
+      expect((await analytics.adsBlock(org, rango, consulta)).hierarchy!.syncing).toBe(false);
+    });
+
+    it("el rango reciente (ya cubierto) no encarga nada", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await completar(() => fakeGraph({ account: cuenta(), spend: gasto() }));
+      const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+      expect(b.hierarchy!.syncing).toBe(false);
+      expect((await settings.getMetaAdsSettings(org))!.spendBackfillFrom).toBeNull();
+    });
+
+    it("aislamiento: el gasto de la cuenta de una organización nunca se mezcla con el de otra", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await conectar(otherOrg, TOKEN + "otra", { catalogoAlDia: false });
+      await db.insert(schema.metaAccountSpend).values({ id: newId("metaAccountSpend"), organizationId: otherOrg, day: hoy(), spend: "1000.00", currency: "MXN" });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      const ajeno = await db.select().from(schema.metaAccountSpend).where(eq(schema.metaAccountSpend.organizationId, otherOrg));
+      expect(ajeno).toHaveLength(1);
+      expect(ajeno[0]!.spend).toBe("1000.00");
+      const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+      expect(b.hierarchy!.account!.spend).toBe(2 * 57);
+    });
+
+    it("sin la bandera el bloque es exactamente el de 019: ni una llave de 038 ni de 039", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      process.env.ATRIBUCION = "off";
+      try {
+        const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+        for (const k of ["hierarchy", "total", "groups", "groupBy", "campaigns", "adsets"]) expect(b).not.toHaveProperty(k);
+      } finally {
+        process.env.ATRIBUCION = "on";
+      }
+    });
+
+    it("Ajustes → Anuncios: el enrutamiento muestra los nombres reales y el catálogo ofrece los anuncios de la cuenta", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      await mkContactWithAd(id("c-1"));
+      const adFlow = await import("@/server/attribution/ad-flow");
+      const lista = await adFlow.listAdFlows(org);
+      const item = lista.items.find((i) => i.sourceId === id("c-1"))!;
+      expect(item).toMatchObject({ adName: "Anuncio Alfa 1", adsetName: "Conjunto Alfa", campaignName: "Campaña Alfa", effectiveStatus: "ACTIVE" });
+
+      const cat = await adFlow.listCatalogAds(org);
+      const propios = cat.ads.filter((a) => a.adId.endsWith(`-${uid}`));
+      // Los activos primero; la etiqueta es «Campaña › Conjunto › Anuncio».
+      expect(propios[0]).toMatchObject({ adId: id("c-1"), label: "Campaña Alfa › Conjunto Alfa › Anuncio Alfa 1" });
+      expect(propios.map((a) => a.adId)).toContain(id("c-3"));
+    });
+
+    it("el catálogo de otra organización no aparece en el enrutamiento", async () => {
+      await conectar(org, TOKEN, { catalogoAlDia: false });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
+      const adFlow = await import("@/server/attribution/ad-flow");
+      expect((await adFlow.listCatalogAds(otherOrg)).ads.filter((a) => a.adId.endsWith(`-${uid}`))).toEqual([]);
     });
   });
 });

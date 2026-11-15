@@ -204,7 +204,14 @@ export type AdRowDto = {
   campaignName?: string | null;
   /** Citas agendadas en el periodo por quienes llegaron de este anuncio (solo con la agenda encendida). */
   bookings?: number | null;
+  /** 039 — Estado del anuncio en Meta (activo, pausado, archivado); `null` si no se conoce. */
+  status?: AdStatus;
 } & Partial<SpendDto>;
+
+/** 039 — Estado simplificado de un anuncio, de su `effective_status` en Meta. */
+export type AdStatus = "active" | "paused" | "archived" | null;
+/** 039 — De una campaña o conjunto: el de todos sus anuncios si coinciden; `mixed` si no. */
+export type GroupStatus = AdStatus | "mixed";
 
 /** 038 — Gasto del periodo y lo que cuesta cada resultado. `null` = sin dato, nunca un 0 que lo parezca. */
 export type SpendDto = {
@@ -224,6 +231,10 @@ export type AdGroupRowDto = {
   name: string;
   /** Campaña a la que pertenece (solo en filas de conjunto). */
   campaignName: string | null;
+  /** 039 — Id de esa campaña: con él un clic en el conjunto sabe de cuál viene. */
+  campaignId?: string | null;
+  /** 039 */
+  status?: GroupStatus;
   ads: number;
   conversations: number;
   leads: number;
@@ -245,7 +256,22 @@ export type AdsHierarchyDto = {
   mixedCurrency: boolean;
   /** Hay catálogo o gasto que enseñar (aunque se haya desconectado). */
   hasData: boolean;
+  /** 039 — Se está trayendo de Meta el gasto de este periodo: lo que se ve puede estar incompleto. */
+  syncing?: boolean;
+  /** 039 — Gasto de TODA la cuenta en el periodo, y lo que no se pudo desglosar por anuncio (`null` si cuadra). */
+  account?: { spend: number; unattributed: number | null } | null;
+  /** 039 — La cuenta publicitaria corta los días en otra zona horaria que el negocio. */
+  timezoneNote?: string | null;
 };
+
+/** 039 — Totales de lo que se ve (todas las filas del filtro, no solo las mostradas). */
+export type AdTotalDto = {
+  ads: number;
+  conversations: number;
+  leads: number;
+  won: number;
+  bookings: number | null;
+} & SpendDto;
 
 export type AdsBlockDto = {
   period: PeriodDto;
@@ -261,10 +287,50 @@ export type AdsBlockDto = {
   groupBy?: AdGroupBy;
   /** Filas por campaña o conjunto cuando `groupBy` no es `ad`. */
   groups?: AdGroupRowDto[];
+  /** 039 — Total de lo filtrado y cuántas filas hay en total (la lista muestra las primeras). */
+  total?: AdTotalDto;
   /** Opciones de los filtros. */
   campaigns?: { id: string; name: string }[];
   adsets?: { id: string; name: string; campaignId: string | null }[];
 };
+
+/** 039 — `effective_status` de Meta a lo que el dueño necesita saber. */
+export function estadoDeAnuncio(effective: string | null | undefined): AdStatus {
+  switch ((effective ?? "").toUpperCase()) {
+    case "ACTIVE":
+      return "active";
+    case "PAUSED":
+    case "CAMPAIGN_PAUSED":
+    case "ADSET_PAUSED":
+      return "paused";
+    case "ARCHIVED":
+    case "DELETED":
+      return "archived";
+    default:
+      return null;
+  }
+}
+
+/** 039 — Estado de un grupo a partir del de sus anuncios (los que no se conocen no cuentan). */
+export function estadoDeGrupo(estados: readonly AdStatus[]): GroupStatus {
+  const conocidos = new Set(estados.filter((e): e is "active" | "paused" | "archived" => e !== null));
+  if (conocidos.size === 0) return null;
+  if (conocidos.size === 1) return [...conocidos][0]!;
+  return "mixed";
+}
+
+/**
+ * 039 — Cuadra el gasto de la cuenta contra lo desglosado por anuncio. `unattributed` es lo que la cuenta
+ * gastó y ningún anuncio devuelto explica (anuncios eliminados, redondeos); `null` si cuadra al centavo.
+ */
+export function cuadrarCuenta(
+  accountSpend: number | null,
+  listedSpend: number
+): { spend: number; unattributed: number | null } | null {
+  if (accountSpend === null || !Number.isFinite(accountSpend)) return null;
+  const diff = Math.round((accountSpend - listedSpend) * 100) / 100;
+  return { spend: Math.round(accountSpend * 100) / 100, unattributed: Math.abs(diff) >= 0.01 ? diff : null };
+}
 
 /** Gasto ÷ resultados, a dos decimales. `null` sin gasto o sin resultados (no hay costo que decir). */
 export function costOf(spend: number | null | undefined, results: number | null | undefined): number | null {

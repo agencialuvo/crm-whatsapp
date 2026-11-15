@@ -1,8 +1,8 @@
-import { and, desc, eq, isNotNull, max, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, max, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import type { AdFlowDto, AdFlowListDto, AdFlowParsed, AdFlowRowDto } from "@/lib/ad-flow";
+import type { AdFlowDto, AdFlowListDto, AdFlowParsed, AdFlowRowDto, CatalogAdOption } from "@/lib/ad-flow";
 
 /**
  * Enrutamiento por anuncio — los flujos de cada organización (detrás de la bandera `ATRIBUCION`; la
@@ -120,7 +120,85 @@ export async function listAdFlows(organizationId: string): Promise<AdFlowListDto
       flow: f,
     });
   }
+  await enriquecerConCatalogo(organizationId, items);
   return { items, truncated };
+}
+
+/**
+ * 039 — Pone a cada fila el nombre real del anuncio, conjunto y campaña si la cuenta publicitaria está
+ * conectada y el anuncio está en el catálogo. Nunca lanza: si el catálogo no se puede leer, la lista sale
+ * como antes (con el titular del creativo).
+ */
+async function enriquecerConCatalogo(organizationId: string, items: AdFlowRowDto[]): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    const m = schema.metaAd;
+    const filas = await getDb()
+      .select({
+        adId: m.adId,
+        adName: m.adName,
+        adsetName: m.adsetName,
+        campaignName: m.campaignName,
+        effectiveStatus: m.effectiveStatus,
+      })
+      .from(m)
+      .where(
+        scoped(
+          m.organizationId,
+          organizationId,
+          eq(m.status, "synced"),
+          inArray(m.adId, items.map((i) => i.sourceId))
+        )
+      );
+    const porId = new Map(filas.map((f) => [f.adId, f]));
+    for (const item of items) {
+      const f = porId.get(item.sourceId);
+      if (!f) continue;
+      item.adName = f.adName;
+      item.adsetName = f.adsetName;
+      item.campaignName = f.campaignName;
+      item.effectiveStatus = f.effectiveStatus;
+    }
+  } catch (err) {
+    console.warn("[ad-flow] no se pudo leer el catálogo de Meta:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Cuántos anuncios del catálogo se ofrecen al vincular: más no se elige bien en una lista. */
+export const MAX_CATALOG_ADS = 300;
+
+/**
+ * 039 — Los anuncios de la cuenta publicitaria para elegir uno al vincular: los activos primero, luego por
+ * campaña y nombre. Sin cuenta conectada la lista queda vacía y el diálogo sigue pidiendo el ID a mano.
+ */
+export async function listCatalogAds(organizationId: string): Promise<{ ads: CatalogAdOption[]; truncated: boolean }> {
+  const m = schema.metaAd;
+  const filas = await getDb()
+    .select({
+      adId: m.adId,
+      adName: m.adName,
+      adsetName: m.adsetName,
+      campaignName: m.campaignName,
+      effectiveStatus: m.effectiveStatus,
+    })
+    .from(m)
+    // Solo los que la cuenta todavía lista: vincular un flujo a un anuncio borrado no serviría de nada.
+    .where(scoped(m.organizationId, organizationId, eq(m.status, "synced"), isNotNull(m.listedAt)))
+    .orderBy(
+      sql`(case when ${m.effectiveStatus} = 'ACTIVE' then 0 else 1 end)`,
+      asc(m.campaignName),
+      asc(m.adsetName),
+      asc(m.adName)
+    )
+    .limit(MAX_CATALOG_ADS + 1);
+  return {
+    ads: filas.slice(0, MAX_CATALOG_ADS).map((f) => ({
+      adId: f.adId,
+      label: [f.campaignName, f.adsetName, f.adName ?? f.adId].filter(Boolean).join(" › "),
+      effectiveStatus: f.effectiveStatus,
+    })),
+    truncated: filas.length > MAX_CATALOG_ADS,
+  };
 }
 
 /** El servicio u oferta deben ser de ESTA organización; devuelve su nombre. «Otro» no cuenta: no es del catálogo. */

@@ -1,3 +1,5 @@
+import { sql } from "drizzle-orm";
+import { getDb } from "@/lib/db";
 import { mockGuard } from "@/lib/dev-guard";
 import { getEnv } from "@/lib/env";
 import {
@@ -217,7 +219,63 @@ function diasEntre(since: string, until: string): string[] {
   return out;
 }
 
-function handleMarketing(path: string[], req: Request, token: string): Response | null {
+/**
+ * 039 — La cuenta publicitaria de prueba. Además de los anuncios que ya trajeron gente (los de `ad_attribution`,
+ * que en Meta existen en la cuenta), tiene los suyos, con campañas pausadas y anuncios sin una sola conversación:
+ *  - acct-ad-1/2/3: «Campaña Alfa» (activa), con gasto
+ *  - acct-ad-4: «Campaña Beta» (PAUSADA), con gasto y sin conversaciones
+ *  - acct-ad-5: «Campaña Beta» (PAUSADA), sin gasto
+ *  - gone-acct-9: gastó pero ya no está en el listado (borrado)
+ * Token con sufijo `-descuadre`: el total de la cuenta trae 3,25 al día que ningún anuncio explica.
+ */
+type AnuncioDeCuenta = {
+  id: string;
+  name: string;
+  status: string;
+  adset: { id: string; name: string };
+  campaign: { id: string; name: string };
+  gasto: number | null;
+  listado: boolean;
+};
+
+const ANUNCIOS_DE_LA_CUENTA: AnuncioDeCuenta[] = [
+  { id: "acct-ad-1", name: "Anuncio Alfa 1", status: "ACTIVE", adset: { id: "acct-set-1", name: "Conjunto Alfa 1" }, campaign: { id: "acct-camp-a", name: "Campaña Alfa" }, gasto: 20, listado: true },
+  { id: "acct-ad-2", name: "Anuncio Alfa 2", status: "ACTIVE", adset: { id: "acct-set-1", name: "Conjunto Alfa 1" }, campaign: { id: "acct-camp-a", name: "Campaña Alfa" }, gasto: 15, listado: true },
+  { id: "acct-ad-3", name: "Anuncio Alfa 3", status: "ACTIVE", adset: { id: "acct-set-2", name: "Conjunto Alfa 2" }, campaign: { id: "acct-camp-a", name: "Campaña Alfa" }, gasto: 12.5, listado: true },
+  { id: "acct-ad-4", name: "Anuncio Beta 1", status: "CAMPAIGN_PAUSED", adset: { id: "acct-set-3", name: "Conjunto Beta 1" }, campaign: { id: "acct-camp-b", name: "Campaña Beta (pausada)" }, gasto: 30, listado: true },
+  { id: "acct-ad-5", name: "Anuncio Beta 2", status: "CAMPAIGN_PAUSED", adset: { id: "acct-set-3", name: "Conjunto Beta 1" }, campaign: { id: "acct-camp-b", name: "Campaña Beta (pausada)" }, gasto: null, listado: true },
+  { id: "gone-acct-9", name: "Anuncio borrado", status: "DELETED", adset: { id: "acct-set-1", name: "Conjunto Alfa 1" }, campaign: { id: "acct-camp-a", name: "Campaña Alfa" }, gasto: 7, listado: false },
+];
+
+/** Los anuncios que ya trajeron gente existen en la cuenta (salvo los `gone-*`, que simulan borrados). */
+async function anunciosAtribuidos(): Promise<AnuncioDeCuenta[]> {
+  try {
+    const filas = await getDb().execute(
+      sql`select distinct source_id from ad_attribution where source_id is not null and source_id not like 'gone-%' limit 300`
+    );
+    return (filas as unknown as { source_id: string }[]).map((r) => {
+      const m = mockAd(r.source_id);
+      const k = Number(r.source_id.match(/(\d+)$/)?.[1] ?? 0);
+      return {
+        id: r.source_id,
+        name: m.name,
+        status: "ACTIVE",
+        adset: m.adset,
+        campaign: m.campaign,
+        gasto: 10 + (k % 5) + 0.5,
+        listado: true,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function universoDeLaCuenta(): Promise<AnuncioDeCuenta[]> {
+  return [...ANUNCIOS_DE_LA_CUENTA, ...(await anunciosAtribuidos())];
+}
+
+async function handleMarketing(path: string[], req: Request, token: string): Promise<Response | null> {
   if (!path[0]?.startsWith("act_")) return null;
   const fail = marketingFailure(token);
   if (fail) return fail;
@@ -225,14 +283,31 @@ function handleMarketing(path: string[], req: Request, token: string): Response 
   const url = new URL(req.url);
 
   if (path.length === 1) {
-    return Response.json({ id: path[0], name: "Cuenta publicitaria de prueba", currency: "MXN", account_status: 1 }, { headers });
+    return Response.json(
+      { id: path[0], name: "Cuenta publicitaria de prueba", currency: "MXN", account_status: 1, timezone_name: "America/Mexico_City" },
+      { headers }
+    );
+  }
+  if (path[1] === "adspixels") {
+    return Response.json(
+      { data: [{ id: "1708105527110154", name: "Dataset de prueba" }, { id: "2200000000000001", name: "Píxel de la tienda" }] },
+      { headers }
+    );
   }
   if (path[1] === "ads") {
-    const data = idsDelFiltro(url).filter((id) => !id.startsWith("gone-")).map(mockAd);
+    const filtrados = idsDelFiltro(url);
+    if (filtrados.length > 0) {
+      // Consulta suelta por ids (038): solo existen los que no son `gone-*`.
+      const data = filtrados.filter((id) => !id.startsWith("gone-")).map(mockAd);
+      return Response.json({ data }, { headers });
+    }
+    // Listado de TODA la cuenta (039).
+    const data = (await universoDeLaCuenta())
+      .filter((a) => a.listado)
+      .map((a) => ({ id: a.id, name: a.name, effective_status: a.status, adset: a.adset, campaign: a.campaign }));
     return Response.json({ data }, { headers });
   }
   if (path[1] === "insights") {
-    const ids = idsDelFiltro(url).filter((id) => !id.startsWith("gone-"));
     let range: { since?: string; until?: string } = {};
     try {
       range = JSON.parse(url.searchParams.get("time_range") ?? "{}") as typeof range;
@@ -240,16 +315,39 @@ function handleMarketing(path: string[], req: Request, token: string): Response 
       // sin rango: no hay filas
     }
     const days = range.since && range.until ? diasEntre(range.since, range.until) : [];
-    const data = ids.flatMap((id) => {
-      const k = Number(id.match(/(\d+)$/)?.[1] ?? 0);
-      return days.map((d) => ({
-        ad_id: id,
-        spend: (10 + (k % 5) + 0.5).toFixed(2),
+    const level = url.searchParams.get("level");
+    const ids = idsDelFiltro(url);
+
+    // Con filtro de ids (038) solo esos; sin filtro (039), la cuenta entera.
+    const universo = ids.length > 0 ? ids.filter((id) => !id.startsWith("gone-")).map((id) => mockAd(id)) : null;
+    const anuncios = universo
+      ? universo.map((m) => ({ id: m.id, name: m.name, adset: m.adset, campaign: m.campaign, gasto: 10 + (Number(m.id.match(/(\d+)$/)?.[1] ?? 0) % 5) + 0.5 }))
+      : (await universoDeLaCuenta()).filter((a) => a.gasto !== null).map((a) => ({ id: a.id, name: a.name, adset: a.adset, campaign: a.campaign, gasto: a.gasto as number }));
+
+    if (level === "account") {
+      const extra = token.endsWith("-descuadre") ? 3.25 : 0;
+      const data = days.map((d) => ({
+        spend: (anuncios.reduce((t, a) => t + a.gasto, 0) + extra).toFixed(2),
         account_currency: "MXN",
         date_start: d,
         date_stop: d,
       }));
-    });
+      return Response.json({ data }, { headers });
+    }
+    const data = anuncios.flatMap((a) =>
+      days.map((d) => ({
+        ad_id: a.id,
+        ad_name: a.name,
+        adset_id: a.adset.id,
+        adset_name: a.adset.name,
+        campaign_id: a.campaign.id,
+        campaign_name: a.campaign.name,
+        spend: a.gasto.toFixed(2),
+        account_currency: "MXN",
+        date_start: d,
+        date_stop: d,
+      }))
+    );
     return Response.json({ data }, { headers });
   }
   return Response.json({ data: [] }, { headers });
@@ -263,7 +361,7 @@ export async function GET(req: Request, ctx: Params) {
   if (token.endsWith("-invalid")) return invalidTokenResponse();
 
   // 038 — Marketing API (cuenta publicitaria, anuncios, gasto).
-  const marketing = handleMarketing(path, req, token);
+  const marketing = await handleMarketing(path, req, token);
   if (marketing) return marketing;
 
   // GET {wabaId}/message_templates → lista para el sync

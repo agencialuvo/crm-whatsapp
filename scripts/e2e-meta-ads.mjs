@@ -1,5 +1,7 @@
 /**
- * Self-test E2E de comportamiento — conector de la Marketing API de Meta (spec 038, tests/e2e/us-meta-ads.md).
+ * Self-test E2E de comportamiento — conector de la Marketing API de Meta (spec 038, tests/e2e/us-meta-ads.md) y su
+ * ampliación 039: la cuenta publicitaria ENTERA (campañas pausadas, anuncios sin conversaciones, cuadre con la cuenta,
+ * relleno por rango), la navegación Campaña › Conjunto › Anuncio por clic con migas de pan y Ajustes → Anuncios en limpio.
  *
  * Recorre lo que vería el dueño, por los caminos REALES: llegan mensajes de anuncios por el webhook (wa-mock), se
  * conecta la cuenta publicitaria (que prueba el token contra la Graph API del mock), la sincronización corre en
@@ -65,8 +67,9 @@ async function api(path, opts = {}) {
 const sql = process.env.DATABASE_URL ? postgres(process.env.DATABASE_URL, { max: 1 }) : null;
 async function limpiar(org) {
   if (!sql || !org) return;
-  await sql`delete from meta_ad_spend where organization_id = ${org} and ad_id like 'ad-e2e%'`;
-  await sql`delete from meta_ad where organization_id = ${org} and ad_id like 'ad-e2e%'`;
+  await sql`delete from meta_ad_spend where organization_id = ${org} and (ad_id like 'ad-e2e%' or ad_id like '%acct-%')`;
+  await sql`delete from meta_ad where organization_id = ${org} and (ad_id like 'ad-e2e%' or ad_id like '%acct-%')`;
+  await sql`delete from meta_account_spend where organization_id = ${org}`;
   await sql`delete from meta_ads_settings where organization_id = ${org}`;
 }
 
@@ -95,6 +98,8 @@ try {
   }
   await limpiar(org);
   await api("/api/settings/meta-ads", { method: "DELETE" });
+  // Sin un dataset de CAPI de otra corrida: así la pantalla de Ajustes parte de cero y ofrece la lista de la cuenta.
+  await api("/api/settings/capi", { method: "DELETE" });
 
   const DIG = String(Date.now()).slice(-5);
   let n = 0;
@@ -166,7 +171,8 @@ try {
   const listo = await espera(async () => {
     const f = await filas();
     const a1 = f.find((a) => a.key === AD(1));
-    return a1?.campaignName && a1?.spend ? f : null;
+    // La sincronización trae el gasto por ventanas de 7 días: se espera a tener los ~30 días del periodo.
+    return a1?.campaignName && a1?.spend >= 11.5 * 27 ? f : null;
   });
   ok("la sincronización resolvió la jerarquía y el gasto sin que nadie lo pidiera", !!listo);
   b = await bloque();
@@ -198,6 +204,32 @@ try {
   ok("«Sin identificar» deja el anuncio borrado", sinId.some((a) => a.key === GONE) && !sinId.some((a) => a.key === AD(1)));
   r = await api("/api/analytics/ads?group=nivel-raro");
   ok("una agrupación inválida se rechaza (422)", r.status === 422);
+
+  console.log("== 039: toda la cuenta, también lo que no trajo a nadie ==");
+  b = await espera(async () => {
+    const x = await bloque("group=campaign");
+    return x.groups?.some((g) => g.name === "Campaña Beta (pausada)" && g.spend > 0) ? x : null;
+  });
+  const beta = b?.groups?.find((g) => g.name === "Campaña Beta (pausada)");
+  ok("una campaña PAUSADA con gasto y sin una sola conversación aparece en Resultados", !!beta && beta.conversations === 0 && beta.spend > 0, JSON.stringify(beta));
+  ok("lleva su estado en Meta (pausada) y su costo por conversación es «—», no 0", beta?.status === "paused" && beta?.costPerConversation === null);
+  ok("la campaña activa sin leads propios también está (Alfa)", !!b?.groups?.find((g) => g.name === "Campaña Alfa" && g.status === "active" && g.spend > 0));
+  ok("el total de la cuenta en Meta cuadra con lo desglosado por anuncio", !!b?.hierarchy?.account && b.hierarchy.account.unattributed === null, JSON.stringify(b?.hierarchy?.account));
+  ok("el total del pie cuenta todas las filas", (b?.total?.ads ?? 0) >= 4 && b.total.spend > 0, JSON.stringify(b?.total));
+  ok("el catálogo trae el anuncio SIN gasto ni conversaciones, pero no lo lista (sin actividad no ocupa fila)", !(await filas()).some((a) => a.key === "acct-ad-5"));
+  const sumaGrupos = b?.groups?.reduce((t, g) => t + (g.spend ?? 0), 0) ?? 0;
+  ok("la suma de los grupos es el gasto de la cuenta, al centavo", Math.abs(sumaGrupos - (b?.hierarchy?.account?.spend ?? -1)) < 0.011, `${sumaGrupos} vs ${b?.hierarchy?.account?.spend}`);
+
+  const hoyISO = new Date().toISOString().slice(0, 10);
+  const hace = (d) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+  const listoElRango = await espera(async () => !(await bloque()).hierarchy?.syncing, 170000);
+  ok("el gasto de los 30 días se completa solo, pasada tras pasada (no bloquea la pantalla)", !!listoElRango);
+  r = await api(`/api/analytics/ads?from=${hace(200)}&to=${hoyISO}&group=campaign`);
+  ok("un rango más viejo que lo traído ENCARGA el relleno y la pantalla lo dice (syncing)", r.ok && r.json.hierarchy?.syncing === true, JSON.stringify(r.json?.hierarchy));
+  if (sql) {
+    const [cfg] = await sql`select spend_backfill_from::text as f from meta_ads_settings where organization_id = ${org}`;
+    ok("lo encargado queda anotado en la base (la lectura jamás llamó a Meta)", cfg?.f === hace(200), JSON.stringify(cfg));
+  }
 
   console.log("== La tarjeta del contacto ==");
   const lista = (await api("/api/conversations")).json.conversations;
@@ -239,6 +271,22 @@ try {
       await sleep(700);
     }
   };
+  // Abre un desplegable y comprueba su contenido MIENTRAS está abierto. La página hidrata y repinta (en desarrollo
+  // compila bajo demanda), así que un clic puede perderse o la lista cerrarse: se reintenta todo el gesto.
+  const conLista = async (p, selector, opcion, comprobar) => {
+    for (let i = 0; i < 6; i++) {
+      await p.locator(selector).click({ timeout: 8000 }).catch(() => {});
+      const abierta = await p.getByRole("option", { name: opcion }).first().waitFor({ timeout: 3000 }).then(() => true).catch(() => false);
+      if (abierta) {
+        const veredicto = comprobar ? await comprobar() : true;
+        if (veredicto) return true;
+        // Solo se cierra la lista si estaba abierta: un Escape de más cerraría también el diálogo que la contiene.
+        await p.keyboard.press("Escape");
+      }
+      await sleep(600);
+    }
+    return false;
+  };
   const quitaDev = (p) => p.addStyleTag({ content: "nextjs-portal { display: none !important; }" }).catch(() => {});
 
   let page = await ctx.newPage();
@@ -246,38 +294,75 @@ try {
   await cierraBienvenida(page);
   await page.locator("[data-controles-anuncios]").waitFor();
   ok("Resultados muestra los controles de Campaña / Conjunto / Anuncio", true);
-  const fila = page.locator(`tr[data-anuncio="${AD(1)}"]`);
-  await fila.waitFor();
-  ok("la tabla por anuncio muestra la ruta «Campaña 1 › Conjunto 11»", (await fila.locator("[data-jerarquia]").innerText()).includes("Campaña 1 › Conjunto 11"));
-  ok("y las columnas de gasto y costo", (await page.getByRole("columnheader", { name: "Gasto" }).count()) === 1 && (await page.getByRole("columnheader", { name: /Costo \/ conv/ }).count()) === 1);
-  ok("el gasto sale con moneda", /\$/.test(await fila.innerText()));
-  await quitaDev(page);
-  await page.locator("#origen").screenshot({ path: `${SALIDA}/resultados-por-anuncio.png` });
-
-  await page.getByRole("button", { name: "Campaña", exact: true }).click();
-  await page.getByText("Por campaña").waitFor();
-  await page.getByRole("cell", { name: /Campaña 1/ }).first().waitFor();
-  ok("al agrupar por campaña la tabla cambia a «Campaña»", (await page.getByRole("columnheader", { name: "Campaña", exact: true }).count()) === 1);
+  // Con la cuenta conectada la vista arranca por campaña, como el Administrador de Anuncios.
+  await page.locator('[data-abrir="camp-1"]:visible').waitFor();
+  ok("con la cuenta conectada arranca por campaña y los nombres son clicables", (await page.getByRole("columnheader", { name: "Campaña", exact: true }).count()) === 1);
+  await page.locator('[data-abrir="acct-camp-b"]:visible').waitFor();
+  ok("la campaña pausada y sin conversaciones sale con su insignia «Pausada»", (await page.locator('[data-abrir="acct-camp-b"]:visible').locator("..").locator('[data-estado="paused"]').count()) === 1 || (await page.locator('[data-abrir="acct-camp-b"]:visible [data-estado="paused"]').count()) === 1);
+  ok("hay fila de total al pie", (await page.locator("tfoot[data-total]").count()) === 1);
+  ok("y el gasto de la cuenta en Meta, sin diferencia que explicar", (await page.locator("[data-gasto-cuenta]").count()) === 1 && (await page.locator("[data-sin-desglosar]").count()) === 0);
   await quitaDev(page);
   await page.locator("#origen").screenshot({ path: `${SALIDA}/resultados-por-campana.png` });
+
+  // Drill-down: campaña → conjuntos → anuncios, con migas de pan.
+  await page.locator('[data-abrir="camp-1"]:visible').click();
+  await page.locator("[data-migas]").waitFor();
+  await page.getByText("Por conjunto de anuncios").waitFor();
+  await page.locator('[data-abrir="adset-11"]:visible').waitFor();
+  ok("clic en una campaña baja a sus Conjuntos", (await page.getByRole("columnheader", { name: "Conjunto", exact: true }).count()) === 1);
+  ok("las migas dicen «Todas las campañas › Campaña 1»", (await page.locator("[data-migas]").innerText()).replace(/\s+/g, " ").includes("Todas las campañas › Campaña 1"));
+  await page.locator('[data-abrir="adset-11"]:visible').waitFor();
+  ok("solo salen los conjuntos de esa campaña", (await page.locator('[data-abrir="acct-set-3"]:visible').count()) === 0);
+  await quitaDev(page);
+  await page.locator("#origen").screenshot({ path: `${SALIDA}/resultados-conjuntos-de-campana.png` });
+
+  await page.locator('[data-abrir="adset-11"]:visible').click();
+  await page.locator(`tr[data-anuncio="${AD(1)}"]`).waitFor();
+  ok("clic en un conjunto baja a sus Anuncios", (await page.getByRole("columnheader", { name: "Anuncio", exact: true }).count()) === 1);
+  ok("las migas ahora tienen tres tramos", (await page.locator("[data-migas] li").count()) === 3);
+  ok("y la tabla trae solo los anuncios de ese conjunto", (await page.locator(`tr[data-anuncio="${AD(2)}"]`).count()) === 0);
+  const campanaFiltrada = await page.getByRole("combobox", { name: "Filtrar por campaña" }).innerText();
+  ok("los selectores siguen la navegación (campaña y conjunto elegidos)", /Campaña 1/.test(campanaFiltrada));
+  await quitaDev(page);
+  await page.locator("#origen").screenshot({ path: `${SALIDA}/resultados-anuncios-de-conjunto.png` });
+
+  // Una miga vuelve atrás.
+  await page.locator("[data-migas]").getByRole("button", { name: "Campaña 1" }).click();
+  await page.locator('[data-abrir="adset-11"]:visible').waitFor();
+  ok("la miga de la campaña vuelve a sus conjuntos", (await page.locator("[data-migas] li").count()) === 2);
+  await page.locator("[data-migas]").getByRole("button", { name: "Todas las campañas" }).click();
+  await page.locator('[data-abrir="acct-camp-b"]:visible').waitFor();
+  ok("«Todas las campañas» quita los filtros y las migas desaparecen", (await page.locator("[data-migas]").count()) === 0);
+
+  // Las pestañas a mano: subir limpia lo de abajo.
+  await page.getByRole("button", { name: "Anuncio", exact: true }).click();
+  await page.locator(`tr[data-anuncio="${AD(1)}"]`).waitFor();
+  ok("la pestaña «Anuncio» lista los anuncios con su ruta «Campaña 1 › Conjunto 11»", (await page.locator(`tr[data-anuncio="${AD(1)}"] [data-jerarquia]`).innerText()).includes("Campaña 1 › Conjunto 11"));
+  ok("y las columnas de gasto y costo", (await page.getByRole("columnheader", { name: "Gasto" }).count()) === 1 && (await page.getByRole("columnheader", { name: /Costo \/ conv/ }).count()) === 1);
+  ok("el gasto sale con moneda", /\$/.test(await page.locator(`tr[data-anuncio="${AD(1)}"]`).innerText()));
+  await quitaDev(page);
+  await page.locator("#origen").screenshot({ path: `${SALIDA}/resultados-por-anuncio.png` });
 
   await page.getByRole("button", { name: "Conjunto", exact: true }).click();
   await page.getByText("Por conjunto de anuncios").waitFor();
   ok("al agrupar por conjunto dice a qué campaña pertenece", (await page.getByText("Campaña 1 ·", { exact: false }).count()) >= 1);
 
+  // El selector de campaña equivale al clic.
   await page.getByRole("button", { name: "Anuncio", exact: true }).click();
   await page.getByRole("combobox", { name: "Filtrar por campaña" }).click();
   await page.getByRole("option", { name: "Campaña 0" }).click();
-  // La tabla se recarga con el filtro: se espera a que el anuncio de OTRA campaña salga de la tabla.
   await page.locator(`tr[data-anuncio="${AD(1)}"]`).waitFor({ state: "detached" }).catch(() => {});
   await page.locator(`tr[data-anuncio="${AD(2)}"]`).waitFor();
   ok("el filtro por campaña deja solo los anuncios de esa campaña", (await page.locator(`tr[data-anuncio="${AD(1)}"]`).count()) === 0 && (await page.locator(`tr[data-anuncio="${AD(2)}"]`).count()) === 1);
+  ok("y aparecen las migas con esa campaña", (await page.locator("[data-migas]").innerText()).includes("Campaña 0"));
 
   // Móvil: tarjetas con gasto a la vista y sin desborde.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${BASE}/resultados`, { waitUntil: "domcontentloaded" });
   await cierraBienvenida(page);
   await page.locator("[data-controles-anuncios]").waitFor();
+  await page.locator('[data-abrir="camp-1"]:visible').first().waitFor();
+  ok("en el teléfono las campañas son tarjetas con el total a la vista", (await page.locator("li[data-total]").count()) === 1);
   ok("en el teléfono no hay desborde horizontal", !(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)));
   await quitaDev(page);
   await page.locator("#origen").screenshot({ path: `${SALIDA}/resultados-movil.png` });
@@ -304,11 +389,76 @@ try {
   await cierraBienvenida(page);
   await page.locator("[data-meta-ads]").waitFor();
   const card = page.locator("[data-meta-ads]");
+  // Los bloques de la tarjeta cargan por su cuenta: se espera a que digan algo antes de mirarlos.
+  await card.getByText("Cuenta publicitaria de prueba").first().waitFor();
+  await card.locator("details[data-capi-log] summary").getByText("Cargando…").waitFor({ state: "detached" }).catch(() => {});
   ok("la tarjeta de Ajustes dice «Conectado» y la cuenta", (await card.getByText("Conectado", { exact: true }).count()) === 1 && (await card.innerText()).includes("Cuenta publicitaria de prueba"));
   ok("no muestra el token, solo ····9876", !(await card.innerText()).includes("tok-ads-ok") && (await card.innerText()).includes("····9876"));
+  ok("UNA sola tarjeta «Meta Ads» con los dos bloques: Campañas y gasto, y Conversiones", (await page.locator("[data-meta-ads]").count()) === 1 && (await card.getByRole("heading", { name: "Campañas y gasto" }).count()) === 1 && (await card.getByRole("heading", { name: "Conversiones" }).count()) === 1);
+  ok("ya no hay una tarjeta aparte llamada «Actividad reciente»", (await page.getByText("Actividad reciente", { exact: true }).count()) === 0);
+  const registro = page.locator("details[data-capi-log]");
+  ok("el registro de eventos de conversión está en un acordeón CERRADO", (await registro.count()) === 1 && !(await registro.evaluate((el) => el.open)));
+  ok("y su resumen dice cómo va sin abrirlo", /conversiones todavía|enviadas/.test(await registro.locator("summary").innerText()));
+  await registro.locator("summary").click();
+  ok("se abre al hacer clic", await registro.evaluate((el) => el.open));
+  // El dataset se elige de la lista de la cuenta.
+  const datasetsOk = await conLista(
+    page,
+    "#capi-dataset",
+    /Dataset de prueba/,
+    async () => (await page.getByRole("option", { name: /Píxel de la tienda/ }).count()) === 1 && (await page.getByRole("option", { name: /Escribir el ID a mano/ }).count()) === 1
+  );
+  ok("el dataset se elige de la lista de la cuenta publicitaria (con salida «Escribir el ID a mano»)", datasetsOk);
+  await page.keyboard.press("Escape");
+  // Enrutamiento por anuncio con los nombres reales.
+  const ruta = page.locator(`tr[data-anuncio="${AD(1)}"]`);
+  await ruta.waitFor();
+  ok("el enrutamiento muestra «Campaña › Conjunto» del anuncio, no solo el titular del creativo", (await ruta.locator("[data-jerarquia]").innerText()).includes("Campaña 1 › Conjunto 11"));
+  ok("y el nombre real del anuncio como título", (await ruta.innerText()).includes(`Anuncio ${AD(1)}`));
   await quitaDev(page);
-  await page.screenshot({ path: `${SALIDA}/ajustes-meta-ads.png` });
+  await page.screenshot({ path: `${SALIDA}/ajustes-meta-ads.png`, fullPage: true });
+
+  // El diálogo de vincular ofrece los anuncios de la cuenta.
+  for (let i = 0; i < 6 && (await page.locator("#adflow-source").count()) === 0; i++) {
+    await page.getByRole("button", { name: "Vincular anuncio" }).click({ timeout: 8000 }).catch(() => {});
+    await page.locator("#adflow-source").waitFor({ timeout: 4000 }).catch(() => {});
+  }
+  // Hasta que llega el catálogo el campo es un cuadro de texto; después, una lista.
+  await page.locator("button#adflow-source").waitFor({ timeout: 15000 }).catch(() => {});
+  const vincularOk = await conLista(
+    page,
+    "#adflow-source",
+    /Campaña Alfa › Conjunto Alfa 1 › Anuncio Alfa 1/,
+    async () => (await page.getByRole("option", { name: /Anuncio borrado/ }).count()) === 0
+  );
+  if (!vincularOk) {
+    await page.screenshot({ path: `${SALIDA}/fallo-vincular.png` });
+    console.log("    opciones visibles:", JSON.stringify((await page.getByRole("option").allInnerTexts()).slice(0, 30)));
+  }
+  ok("«Vincular anuncio» ofrece los anuncios de la cuenta con su campaña y conjunto (no los borrados)", vincularOk);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+
+  // Teléfono: el enrutamiento son tarjetas, sin scroll lateral.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${BASE}/ajustes/anuncios`, { waitUntil: "domcontentloaded" });
+  await cierraBienvenida(page);
+  await page.locator(`li[data-anuncio="${AD(1)}"]`).waitFor();
+  ok("en el teléfono Ajustes → Anuncios no se desborda a lo ancho", !(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)));
+  ok("y cada anuncio del enrutamiento es una tarjeta", (await page.locator(`li[data-anuncio="${AD(1)}"]`).count()) === 1);
+  await quitaDev(page);
+  await page.screenshot({ path: `${SALIDA}/ajustes-meta-ads-movil.png`, fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await ctx.close();
+
+  console.log("== Cuando la cuenta gastó más de lo que se puede desglosar ==");
+  r = await api("/api/settings/meta-ads", { method: "PUT", body: JSON.stringify({ adAccountId: CUENTA, token: "tok-ads-ok-descuadre" }) });
+  ok("se reconecta con una cuenta que descuadra", r.ok);
+  const cuadre = await espera(async () => {
+    const x = await bloque("group=campaign");
+    return x.hierarchy?.account?.unattributed ? x : null;
+  }, 60000);
+  ok("lo que ningún anuncio explica sale como «sin desglosar», nunca se oculta", !!cuadre && cuadre.hierarchy.account.unattributed > 0, JSON.stringify(cuadre?.hierarchy?.account));
 
   console.log("== Desconectar conserva lo traído ==");
   r = await api("/api/settings/meta-ads", { method: "DELETE" });

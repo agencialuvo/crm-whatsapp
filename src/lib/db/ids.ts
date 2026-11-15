@@ -40,6 +40,7 @@ const prefixes = {
   metaAdsSettings: "mas",
   metaAd: "mad",
   metaAdSpend: "msp",
+  metaAccountSpend: "mac",
   // Ajustes → IA (issue #85)
   aiCredentials: "aicred",
   // 021 — despacho al cerebro

@@ -178,8 +178,8 @@ describe("respuestas", () => {
       ],
     });
     expect(ads).toEqual([
-      { adId: "1", adName: "Anuncio uno", adsetId: "10", adsetName: "Conjunto", campaignId: "100", campaignName: "Campaña" },
-      { adId: "2", adName: "Sin jerarquía", adsetId: null, adsetName: null, campaignId: null, campaignName: null },
+      { adId: "1", adName: "Anuncio uno", adsetId: "10", adsetName: "Conjunto", campaignId: "100", campaignName: "Campaña", effectiveStatus: null },
+      { adId: "2", adName: "Sin jerarquía", adsetId: null, adsetName: null, campaignId: null, campaignName: null, effectiveStatus: null },
     ]);
   });
 

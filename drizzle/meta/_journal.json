@@ -519,6 +519,13 @@
       "when": 1794716622593,
       "tag": "0073_bumpy_william_stryker",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1794768562809,
+      "tag": "0074_magical_shaman",
+      "breakpoints": true
     }
   ]
 }

@@ -25,6 +25,7 @@ import {
   type AdFlowListDto,
   type AdFlowRowDto,
   type AdFlowTargetKind,
+  type CatalogAdOption,
 } from "@/lib/ad-flow";
 import { titularDeOrigen } from "@/lib/anuncios";
 import { matchesQuery } from "@/lib/search";
@@ -157,8 +158,25 @@ export function AdFlowsClient() {
               </p>
             )}
             <DataTableToolbar {...table.pagination} noun={AD_NOUN} />
-            <div className="relative overflow-x-auto rounded-lg border border-border-strong bg-card">
-              <table className="w-full min-w-[680px] text-sm">
+            {/* Teléfono: una tarjeta por anuncio, sin scroll lateral. */}
+            <ul className="divide-y rounded-lg border border-border-strong bg-card sm:hidden">
+              {table.rows.map((r) => (
+                <li key={r.sourceId} className="space-y-2 px-3 py-3" data-anuncio={r.sourceId}>
+                  <NombreAnuncio r={r} />
+                  <p className="text-xs text-text-3">
+                    {r.conversations} {r.conversations === 1 ? "conversación" : "conversaciones"}
+                    {r.flow?.targetName ? ` · ${r.flow.targetName}` : ""}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <EstadoFlujo r={r} />
+                    <AccionesFlujo r={r} onEdit={() => setEditing(r)} onRemove={() => r.flow && setRemoving(r.flow)} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            <div className="relative hidden overflow-x-auto rounded-lg border border-border-strong bg-card sm:block">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-subtle text-left text-xs font-semibold text-text-2">
                     <th scope="col" className="px-4 py-2.5">Anuncio</th>
@@ -172,22 +190,9 @@ export function AdFlowsClient() {
                 </thead>
                 <tbody>
                   {table.rows.map((r) => (
-                    <tr key={r.sourceId} className="border-b last:border-0">
+                    <tr key={r.sourceId} className="border-b last:border-0" data-anuncio={r.sourceId}>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <MiniaturaDeAnuncio
-                            imageAssetId={r.imageAssetId}
-                            alt={`Creativo: ${titularDeOrigen(r.headline, r.sourceType)}`}
-                          />
-                          <div className="min-w-0">
-                            <p className="max-w-xs truncate font-medium">
-                              {titularDeOrigen(r.headline, r.sourceType)}
-                            </p>
-                            <p className="max-w-xs truncate font-mono text-[11px] text-text-3" title={r.sourceId}>
-                              ID {r.sourceId}
-                            </p>
-                          </div>
-                        </div>
+                        <NombreAnuncio r={r} />
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                         {r.conversations}
@@ -199,40 +204,10 @@ export function AdFlowsClient() {
                         {r.flow?.targetName ?? <span className="text-text-3">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1.5">
-                          {!r.flow ? (
-                            <Badge variant="secondary">Sin configurar</Badge>
-                          ) : r.flow.active ? (
-                            <Badge variant="success">Activo</Badge>
-                          ) : (
-                            <Badge variant="warning">Pausado</Badge>
-                          )}
-                          {r.flow?.exclusive && <Badge variant="outline">Exclusivo</Badge>}
-                        </div>
+                        <EstadoFlujo r={r} />
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant={r.flow ? "ghost" : "outline"}
-                            size={r.flow ? "icon" : "sm"}
-                            aria-label={`${r.flow ? "Editar" : "Configurar"} el flujo del anuncio ${r.sourceId}`}
-                            title={r.flow ? "Editar flujo" : "Configurar"}
-                            onClick={() => setEditing(r)}
-                          >
-                            {r.flow ? <Pencil className="h-4 w-4" aria-hidden /> : "Configurar"}
-                          </Button>
-                          {r.flow && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Quitar el flujo del anuncio ${r.sourceId}`}
-                              title="Quitar flujo"
-                              onClick={() => setRemoving(r.flow)}
-                            >
-                              <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
-                            </Button>
-                          )}
-                        </div>
+                        <AccionesFlujo r={r} onEdit={() => setEditing(r)} onRemove={() => r.flow && setRemoving(r.flow)} />
                       </td>
                     </tr>
                   ))}
@@ -276,6 +251,81 @@ export function AdFlowsClient() {
   );
 }
 
+/**
+ * Cómo se llama el anuncio. Con la cuenta publicitaria conectada es lo que el dueño ve en Meta (anuncio, y
+ * debajo «Campaña › Conjunto»); sin ella, el titular del creativo de siempre. El ID queda como detalle.
+ */
+function NombreAnuncio({ r }: { r: AdFlowRowDto }) {
+  const ruta = [r.campaignName, r.adsetName].filter(Boolean).join(" › ");
+  const principal = r.adName ?? titularDeOrigen(r.headline, r.sourceType);
+  const detalle = r.adName && r.headline && r.headline !== r.adName ? `Creativo: ${r.headline} · ` : "";
+  return (
+    <div className="flex items-center gap-3">
+      <MiniaturaDeAnuncio imageAssetId={r.imageAssetId} alt={`Creativo: ${titularDeOrigen(r.headline, r.sourceType)}`} />
+      <div className="min-w-0">
+        <p className="truncate font-medium sm:max-w-xs" title={principal}>
+          {principal}
+          {r.effectiveStatus && r.effectiveStatus !== "ACTIVE" && /PAUSED/.test(r.effectiveStatus) ? (
+            <Badge variant="warning" className="ml-1.5 align-middle">
+              Pausado en Meta
+            </Badge>
+          ) : null}
+        </p>
+        {ruta && (
+          <p className="truncate text-[11px] text-text-2 sm:max-w-xs" title={ruta} data-jerarquia>
+            {ruta}
+          </p>
+        )}
+        <p className="truncate font-mono text-[11px] text-text-3 sm:max-w-xs" title={r.sourceId}>
+          {detalle}ID {r.sourceId}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function EstadoFlujo({ r }: { r: AdFlowRowDto }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {!r.flow ? (
+        <Badge variant="secondary">Sin configurar</Badge>
+      ) : r.flow.active ? (
+        <Badge variant="success">Activo</Badge>
+      ) : (
+        <Badge variant="warning">Pausado</Badge>
+      )}
+      {r.flow?.exclusive && <Badge variant="outline">Exclusivo</Badge>}
+    </div>
+  );
+}
+
+function AccionesFlujo({ r, onEdit, onRemove }: { r: AdFlowRowDto; onEdit: () => void; onRemove: () => void }) {
+  return (
+    <div className="flex justify-end gap-1">
+      <Button
+        variant={r.flow ? "ghost" : "outline"}
+        size={r.flow ? "icon" : "sm"}
+        aria-label={`${r.flow ? "Editar" : "Configurar"} el flujo del anuncio ${r.sourceId}`}
+        title={r.flow ? "Editar flujo" : "Configurar"}
+        onClick={onEdit}
+      >
+        {r.flow ? <Pencil className="h-4 w-4" aria-hidden /> : "Configurar"}
+      </Button>
+      {r.flow && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Quitar el flujo del anuncio ${r.sourceId}`}
+          title="Quitar flujo"
+          onClick={onRemove}
+        >
+          <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** Vincular o editar el flujo de un anuncio. Valida con el MISMO esquema Zod que la API. */
 function AdFlowDialog({
   row,
@@ -304,6 +354,18 @@ function AdFlowDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // 039 — Con la cuenta publicitaria conectada se elige el anuncio de una lista (con sus nombres de Meta); el
+  // ID a mano sigue disponible para uno que no esté en ella.
+  const [catalog, setCatalog] = useState<CatalogAdOption[] | null>(null);
+  const [manualId, setManualId] = useState(false);
+  useEffect(() => {
+    if (row) return;
+    void apiFetch<{ ads: CatalogAdOption[] }>("/api/settings/ad-flows/catalog")
+      .then((r) => setCatalog(r.ads))
+      .catch(() => setCatalog([]));
+  }, [row]);
+  const hayCatalogo = !row && !!catalog && catalog.length > 0 && !manualId;
 
   // Solo lo activo se puede elegir, salvo lo ya vinculado (aunque se haya desactivado después).
   const targetOptions = useMemo(() => {
@@ -354,17 +416,51 @@ function AdFlowDialog({
           required
           htmlFor="adflow-source"
           error={errors.sourceId}
-          hint={row ? undefined : "Lo ves en la tarjeta «Llegó por un anuncio» de la bandeja."}
+          hint={
+            row
+              ? undefined
+              : hayCatalogo
+                ? "Los anuncios de tu cuenta publicitaria. Si no aparece, escribe su ID a mano."
+                : "Lo ves en la tarjeta «Llegó por un anuncio» de la bandeja."
+          }
         >
-          <Input
-            id="adflow-source"
-            value={sourceId}
-            onChange={(e) => setSourceId(e.target.value)}
-            disabled={busy || !!row}
-            maxLength={128}
-            className="font-mono"
-            aria-invalid={!!errors.sourceId}
-          />
+          {hayCatalogo ? (
+            <SearchSelect
+              id="adflow-source"
+              value={sourceId}
+              onChange={(v) => {
+                if (v === "__manual__") {
+                  setManualId(true);
+                  setSourceId("");
+                  return;
+                }
+                setSourceId(v);
+                const elegido = catalog?.find((a) => a.adId === v);
+                if (elegido && !headline) setHeadline(elegido.label.split(" › ").pop() ?? "");
+              }}
+              options={[
+                ...(catalog ?? []).map((a) => ({
+                  value: a.adId,
+                  label: `${a.label}${a.effectiveStatus && a.effectiveStatus !== "ACTIVE" ? " (pausado)" : ""}`,
+                })),
+                { value: "__manual__", label: "Escribir el ID a mano…" },
+              ]}
+              placeholder="Elige un anuncio"
+              searchPlaceholder="Buscar por campaña, conjunto o anuncio…"
+              disabled={busy}
+              invalid={!!errors.sourceId}
+            />
+          ) : (
+            <Input
+              id="adflow-source"
+              value={sourceId}
+              onChange={(e) => setSourceId(e.target.value)}
+              disabled={busy || !!row}
+              maxLength={128}
+              className="font-mono"
+              aria-invalid={!!errors.sourceId}
+            />
+          )}
         </Field>
 
         <Field label="Nombre para reconocerlo" htmlFor="adflow-headline" error={errors.headline} hint="Opcional.">

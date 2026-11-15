@@ -1,15 +1,31 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type {
-  AdGroupBy,
-  AdGroupRowDto,
-  AdRowDto,
-  AdsBlockDto,
-  AdsHierarchyDto,
-  RateDto,
-  SpendDto,
+import {
+  rate,
+  type AdGroupBy,
+  type AdGroupRowDto,
+  type AdRowDto,
+  type AdsBlockDto,
+  type AdsHierarchyDto,
+  type AdStatus,
+  type AdTotalDto,
+  type GroupStatus,
+  type RateDto,
+  type SpendDto,
 } from "@/lib/analytics";
+import {
+  crumbs,
+  drillInto,
+  goToLevel,
+  pickAdset,
+  pickCampaign,
+  SIN_IDENTIFICAR,
+  tieneFiltros,
+  VISTA_INICIAL,
+  type AdsView,
+} from "@/lib/ads-nav";
+import { Badge } from "@/components/ui/badge";
 import { etiquetaDeOrigen, titularDeOrigen } from "@/lib/anuncios";
 import { cn } from "@/lib/utils";
 import { MiniaturaDeAnuncio } from "@/components/anuncio-origen";
@@ -18,12 +34,6 @@ import { Section, Subhead } from "./section";
 import { RateCard, StatCard } from "./stat-card";
 
 type Conteos = { conversations: number; leads: number; won: number; winRate: RateDto };
-
-/** Cómo mira el dueño la tabla: por qué nivel agrupa y qué filtra. */
-export type AdsView = { group: AdGroupBy; campaignId: string; adsetId: string };
-export const VISTA_INICIAL: AdsView = { group: "ad", campaignId: "", adsetId: "" };
-
-const SIN_IDENTIFICAR = "sin-identificar";
 
 /**
  * 019 — De dónde llegan: por origen y por anuncio.
@@ -104,6 +114,7 @@ export function AdsSection({
             {h && (h.connected || h.hasData) && onViewChange && (
               <Controles data={data} view={view} onChange={onViewChange} />
             )}
+            {h && (h.connected || h.hasData) && onViewChange && <Migas data={data} view={view} onChange={onViewChange} />}
 
             {agrupado ? (
               data.groups && data.groups.length > 0 ? (
@@ -112,29 +123,40 @@ export function AdsSection({
                   conGasto={conGasto}
                   conCitas={conCitas}
                   moneda={moneda}
+                  total={conGasto ? data.total : undefined}
                   filas={data.groups.map((g) => ({
                     key: g.key,
-                    titulo: <Grupo grupo={g} />,
+                    titulo: (
+                      <Grupo
+                        grupo={g}
+                        onAbrir={
+                          onViewChange
+                            ? () => onViewChange(drillInto(view, { key: g.key, level: g.level === "campaign" ? "campaign" : "adset", campaignId: g.campaignId }))
+                            : undefined
+                        }
+                      />
+                    ),
                     conteos: g,
                     bookings: g.bookings,
                     costs: g,
                   }))}
                 />
               ) : (
-                <p className="text-sm text-text-3">Nada coincide con este filtro en el periodo.</p>
+                <SinCoincidencia view={view} onViewChange={onViewChange} texto="Nada coincide con este filtro en el periodo." />
               )
             ) : data.ads.length === 0 ? (
-              <p className="text-sm text-text-3">
-                {view.campaignId || view.adsetId
-                  ? "Nada coincide con este filtro en el periodo."
-                  : "Ninguna conversación de este periodo llegó por un anuncio de Click a WhatsApp."}
-              </p>
+              tieneFiltros(view) ? (
+                <SinCoincidencia view={view} onViewChange={onViewChange} texto="Nada coincide con este filtro en el periodo." />
+              ) : (
+                <p className="text-sm text-text-3">Ninguna conversación de este periodo llegó por un anuncio de Click a WhatsApp.</p>
+              )
             ) : (
               <Filas
                 primera="Anuncio"
                 conGasto={conGasto}
                 conCitas={conCitas}
                 moneda={moneda}
+                total={conGasto ? data.total : undefined}
                 filas={data.ads.map((a) => ({
                   key: a.key,
                   titulo: <Anuncio anuncio={a} />,
@@ -146,6 +168,8 @@ export function AdsSection({
               />
             )}
           </div>
+
+          {h && conGasto && <Cuenta hierarchy={h} total={data.total} filtrado={tieneFiltros(view)} moneda={moneda} />}
 
           <div className="space-y-1 text-[11px] text-text-3">
             <p>
@@ -190,6 +214,20 @@ function Estado({ hierarchy: h }: { hierarchy: AdsHierarchyDto }) {
       </p>
     );
   }
+  if (h.connected && h.syncing) {
+    return (
+      <p className="mb-3 text-xs text-text-3" role="status" data-sincronizando>
+        Trayendo de Meta el gasto de este periodo… lo que ves puede estar incompleto por unos minutos.
+      </p>
+    );
+  }
+  if (h.timezoneNote) {
+    return (
+      <p className="mb-3 rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-xs text-warning-text">
+        {h.timezoneNote}
+      </p>
+    );
+  }
   if (h.connected && h.pending > 0) {
     return (
       <p className="mb-3 text-xs text-text-3">
@@ -228,7 +266,7 @@ function Controles({
             key={n.value}
             type="button"
             aria-pressed={view.group === n.value}
-            onClick={() => onChange({ ...view, group: n.value })}
+            onClick={() => onChange(goToLevel(view, n.value))}
             className={cn(
               "px-3 py-1.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               view.group === n.value ? "bg-brand text-white" : "bg-card text-text-2 hover:bg-subtle"
@@ -242,7 +280,7 @@ function Controles({
       <SearchSelect
         value={view.campaignId}
         // Cambiar de campaña invalida el conjunto elegido.
-        onChange={(v) => onChange({ ...view, campaignId: v, adsetId: "" })}
+        onChange={(v) => onChange(pickCampaign(view, v))}
         options={[
           ...campaigns.map((c) => ({ value: c.id, label: c.name })),
           { value: SIN_IDENTIFICAR, label: "Sin identificar" },
@@ -255,7 +293,7 @@ function Controles({
       />
       <SearchSelect
         value={view.adsetId}
-        onChange={(v) => onChange({ ...view, adsetId: v })}
+        onChange={(v) => onChange(pickAdset(view, v))}
         options={[
           ...adsets.map((a) => ({ value: a.id, label: a.name })),
           { value: SIN_IDENTIFICAR, label: "Sin identificar" },
@@ -268,6 +306,112 @@ function Controles({
       />
     </div>
   );
+}
+
+/* ── Migas de pan ──────────────────────────────────────────────── */
+
+function Migas({
+  data,
+  view,
+  onChange,
+}: {
+  data: AdsBlockDto;
+  view: AdsView;
+  onChange: (next: AdsView) => void;
+}) {
+  const migas = crumbs(view, { campaigns: data.campaigns ?? [], adsets: data.adsets ?? [] });
+  if (migas.length === 0) return null;
+  return (
+    <nav aria-label="Ubicación" className="mb-3 text-xs" data-migas>
+      <ol className="flex flex-wrap items-center gap-1.5 text-text-3">
+        {migas.map((m, i) => (
+          <li key={`${i}-${m.label}`} className="flex min-w-0 items-center gap-1.5">
+            {i > 0 && <span aria-hidden>›</span>}
+            {m.view ? (
+              <button
+                type="button"
+                onClick={() => onChange(m.view!)}
+                className="max-w-[16rem] truncate rounded text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {m.label}
+              </button>
+            ) : (
+              <span aria-current="page" className="max-w-[16rem] truncate font-medium text-text-1">
+                {m.label}
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+function SinCoincidencia({
+  view,
+  onViewChange,
+  texto,
+}: {
+  view: AdsView;
+  onViewChange?: (next: AdsView) => void;
+  texto: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm text-text-3">
+      <p>{texto}</p>
+      {onViewChange && tieneFiltros(view) && (
+        <button
+          type="button"
+          onClick={() => onViewChange({ ...VISTA_INICIAL, group: "campaign" })}
+          className="rounded text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Quitar filtros
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ── El gasto de la cuenta y lo que no se pudo desglosar ───────── */
+
+function Cuenta({
+  hierarchy: h,
+  total,
+  filtrado,
+  moneda,
+}: {
+  hierarchy: AdsHierarchyDto;
+  total: AdTotalDto | undefined;
+  filtrado: boolean;
+  moneda: string | null;
+}) {
+  const lineas: ReactNode[] = [];
+  if (h.account && !filtrado) {
+    lineas.push(
+      <p key="cuenta" data-gasto-cuenta>
+        Gasto de tu cuenta en Meta en este periodo: <span className="font-medium tabular-nums text-text-2">{dinero(h.account.spend, moneda)}</span>
+        {h.account.unattributed === null ? " · coincide con la suma de los anuncios." : null}
+      </p>
+    );
+    if (h.account.unattributed !== null) {
+      lineas.push(
+        <p key="diff" data-sin-desglosar className="text-warning-text">
+          Sin desglosar por anuncio: <span className="font-medium tabular-nums">{dinero(h.account.unattributed, moneda)}</span>.
+          Es gasto que Meta cuenta en la cuenta pero ya no devuelve a nivel de anuncio (por ejemplo, anuncios eliminados).
+        </p>
+      );
+    }
+  }
+  if (total && total.ads > 50 && !filtrado) {
+    lineas.push(
+      <p key="recorte">
+        La lista muestra los 50 anuncios con más conversaciones de {total.ads}; el total de abajo cuenta todos. Agrupa
+        por campaña o conjunto, o filtra, para ver el resto.
+      </p>
+    );
+  }
+  if (lineas.length === 0) return null;
+  return <div className="space-y-1 text-[11px] text-text-3">{lineas}</div>;
 }
 
 /* ── Tabla ─────────────────────────────────────────────────────── */
@@ -302,12 +446,15 @@ function Filas({
   conGasto,
   conCitas,
   moneda,
+  total,
 }: {
   primera: string;
   filas: Fila[];
   conGasto: boolean;
   conCitas: boolean;
   moneda: string | null;
+  /** 039 — Total de todo lo filtrado (solo con la Marketing API). */
+  total?: AdTotalDto;
 }) {
   return (
     <>
@@ -339,6 +486,17 @@ function Filas({
             )}
           </li>
         ))}
+        {total && (
+          <li className="py-2.5" data-total>
+            <p className="font-semibold">Total</p>
+            <dl className="mt-2 grid grid-cols-4 gap-2 text-center">
+              <Dato etiqueta="conversaciones" valor={total.conversations} />
+              <Dato etiqueta="prospectos" valor={total.leads} />
+              <Dato etiqueta="ventas" valor={total.won} />
+              <DatoTexto etiqueta="gasto" valor={dinero(total.spend, moneda)} />
+            </dl>
+          </li>
+        )}
       </ul>
 
       <div className="hidden overflow-x-auto sm:block">
@@ -385,9 +543,48 @@ function Filas({
               </tr>
             ))}
           </tbody>
+          {total && (
+            <tfoot data-total>
+              <tr className="border-t-2 font-semibold">
+                <td className="py-2 pr-3">Total</td>
+                <Cell>{total.conversations}</Cell>
+                <Cell>{total.leads}</Cell>
+                {conCitas && <Cell>{total.bookings ?? "—"}</Cell>}
+                <Cell>{total.won}</Cell>
+                <Cell>
+                  <TasaCorta rate={rate(total.won, total.leads)} />
+                </Cell>
+                {conGasto && (
+                  <>
+                    <Cell>{dinero(total.spend, moneda)}</Cell>
+                    <Cell>{dinero(total.costPerConversation, moneda)}</Cell>
+                    <Cell>{dinero(total.costPerLead, moneda)}</Cell>
+                    {conCitas && <Cell>{dinero(total.costPerBooking, moneda)}</Cell>}
+                  </>
+                )}
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </>
+  );
+}
+
+const ESTADO_ETIQUETA: Record<Exclude<GroupStatus, null>, string> = {
+  active: "Activa",
+  paused: "Pausada",
+  archived: "Archivada",
+  mixed: "Mixta",
+};
+
+/** El estado en Meta; solo se pinta si se conoce y NO es el normal (un «Activa» en cada fila es ruido). */
+function EstadoMeta({ estado }: { estado: GroupStatus | AdStatus | undefined }) {
+  if (!estado || estado === "active") return null;
+  return (
+    <Badge variant={estado === "paused" ? "warning" : "secondary"} className="ml-1.5 align-middle" data-estado={estado}>
+      {ESTADO_ETIQUETA[estado]}
+    </Badge>
   );
 }
 
@@ -400,6 +597,7 @@ function Anuncio({ anuncio: a }: { anuncio: AdRowDto }) {
       <div className="min-w-0">
         <p className="truncate font-medium sm:max-w-[20rem]" title={titular}>
           {titular}
+          <EstadoMeta estado={a.status} />
         </p>
         {ruta && (
           <p className="truncate text-[11px] text-text-2 sm:max-w-[20rem]" title={ruta} data-jerarquia>
@@ -415,12 +613,30 @@ function Anuncio({ anuncio: a }: { anuncio: AdRowDto }) {
   );
 }
 
-function Grupo({ grupo: g }: { grupo: AdGroupRowDto }) {
+function Grupo({ grupo: g, onAbrir }: { grupo: AdGroupRowDto; onAbrir?: () => void }) {
+  const nombre = (
+    <>
+      {g.name}
+      <EstadoMeta estado={g.status} />
+    </>
+  );
   return (
     <div className="min-w-0">
-      <p className="truncate font-medium sm:max-w-[20rem]" title={g.name}>
-        {g.name}
-      </p>
+      {onAbrir ? (
+        <button
+          type="button"
+          onClick={onAbrir}
+          title={`Ver ${g.level === "campaign" ? "los conjuntos" : "los anuncios"} de ${g.name}`}
+          data-abrir={g.key}
+          className="block max-w-full truncate rounded text-left font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:max-w-[20rem]"
+        >
+          {nombre}
+        </button>
+      ) : (
+        <p className="truncate font-medium sm:max-w-[20rem]" title={g.name}>
+          {nombre}
+        </p>
+      )}
       <p className="truncate text-[11px] text-text-3 sm:max-w-[20rem]">
         {g.campaignName ? `${g.campaignName} · ` : ""}
         {g.ads} {g.ads === 1 ? "anuncio" : "anuncios"}

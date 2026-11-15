@@ -111,7 +111,7 @@ El webhook de WhatsApp solo dice **de qué anuncio** vino la conversación (`sou
 anuncio, ni su conjunto, ni su campaña, ni cuánto costó. Para eso hay un conector opcional con la Marketing API de
 Meta (spec [038](../specs/038-meta-marketing-api/spec.md)), detrás de la misma bandera `ATRIBUCION`.
 
-**Cómo conectarlo** — Ajustes → Anuncios → *Datos de campañas y gasto*:
+**Cómo conectarlo** — Ajustes → Anuncios → tarjeta *Meta Ads* → bloque *Campañas y gasto*:
 
 1. **ID de la cuenta publicitaria**: Administrador de anuncios → Configuración de la cuenta. Sirve con o sin `act_`.
 2. **Token con el permiso `ads_read`**: se crea con un *usuario del sistema* en el Business Manager (Configuración del
@@ -122,16 +122,38 @@ Meta (spec [038](../specs/038-meta-marketing-api/spec.md)), detrás de la misma 
 
 **Qué hace después**, siempre en segundo plano (la ingesta del mensaje jamás espera a Meta):
 
-- Cada anuncio nuevo entra a una cola y se consulta su jerarquía (campaña › conjunto › anuncio) en el siguiente minuto.
-  Al conectar, se recuperan también los anuncios que ya habían traído gente.
-- El gasto diario se sincroniza cada 3 horas (90 días de historia la primera vez, y 7 días hacia atrás después porque Meta
-  revisa las cifras recientes).
-- Los nombres se refrescan cada 12 horas mientras el anuncio siga trayendo gente.
+- **Se lee la cuenta publicitaria ENTERA** (spec [039](../specs/039-meta-catalogo-completo-y-drilldown/spec.md)), no solo
+  los anuncios que ya escribieron: cada 12 horas se lista todo (`/{act}/ads`, con su campaña, conjunto y estado, también
+  lo pausado) y el gasto se trae de todos los anuncios. Por eso una campaña pausada o sin conversaciones aparece con su
+  gasto. Un anuncio que gastó y ya no está en el listado (borrado) entra por su gasto, con el nombre que Meta le dio.
+- El gasto diario se sincroniza cada 3 horas, por **ventanas de 7 días** (como máximo 4 por pasada, para no agotar la
+  cuota de Meta): la de los últimos 7 días siempre se vuelve a pedir porque Meta revisa las cifras recientes, y hacia
+  atrás se trae el historial (90 días la primera vez, en varias pasadas de un minuto).
+- **Si en Resultados eliges un rango más viejo** de lo ya traído (hasta 366 días), la pantalla encarga el relleno y dice
+  «Trayendo de Meta el gasto de este periodo…»; la lectura nunca espera a Meta.
+- **Cuadre con la cuenta**: además del gasto por anuncio se trae el de la cuenta entera. Debajo de la tabla, Resultados
+  dice «Gasto de tu cuenta en Meta» y, si lo desglosado no lo alcanza (anuncios eliminados que Meta ya no devuelve),
+  una línea **«Sin desglosar por anuncio»** con la diferencia: nunca se maquilla.
+- Una ventana de gasto que Meta devuelve cortada **no se guarda** (dinero a medias es peor que dinero viejo): se conserva
+  lo anterior y Ajustes avisa.
+- Los anuncios que llegan por WhatsApp y no están en la cuenta (de otra cuenta, borrados) se consultan por su id, como en
+  la 038.
 
 **Dónde se ve**: la tarjeta de origen del contacto muestra «Campaña › Conjunto › Anuncio», y **Resultados → Origen y
-anuncios** agrupa por campaña, conjunto o anuncio (con filtros) y suma gasto, costo por conversación, por prospecto y
+anuncios** agrupa por campaña, conjunto o anuncio y suma gasto, costo por conversación, por prospecto y
 por cita (esta última solo con la agenda encendida). Un costo en «—» significa que falta el gasto o no hubo resultados:
 nunca es un cero que parezca dato. Un anuncio con gasto y sin conversaciones **sí aparece**: es el dinero tirado.
+
+**Navegar como en el Administrador de Anuncios**: la vista arranca por campaña. Un clic en el nombre de una campaña baja a
+sus conjuntos; un clic en un conjunto, a sus anuncios. Arriba salen las migas de pan («Todas las campañas › Campaña ›
+Conjunto»), cada tramo clicable para volver. Las pestañas Campaña | Conjunto | Anuncio y los dos selectores usan las
+mismas reglas que el clic (subir de pestaña quita los filtros de abajo). Al pie hay una fila de **Total** de todo lo
+filtrado, y las campañas y anuncios pausados llevan su insignia.
+
+**En Ajustes → Anuncios**: una sola tarjeta *Meta Ads* con las dos conexiones (campañas y gasto; conversiones). El
+dataset de las conversiones se elige de una lista de la cuenta publicitaria (con «Escribir el ID a mano» por si el de
+WhatsApp no aparece). El registro de eventos reportados queda en un acordeón cerrado, y el enrutamiento por anuncio
+muestra el nombre real de cada anuncio, conjunto y campaña, y permite elegir el anuncio de la cuenta al vincularlo.
 
 **Si algo falla**: nada de lo core se afecta. El conector lo dice en Ajustes (token vencido, falta `ads_read`) y
 Resultados muestra el aviso; con el límite de uso de Meta espera y reintenta solo; si un anuncio no se puede leer lo

@@ -19,8 +19,10 @@ import {
   cargarEstado,
   cargarGasto,
   CONSULTA_POR_DEFECTO,
+  leerCobertura,
   type AdsQuery,
 } from "@/server/analytics/ads-hierarchy";
+import { requestSpendBackfill } from "@/server/attribution/meta-ads/settings";
 import type { ResolvedPeriod } from "@/server/analytics/period";
 import {
   effectiveSourceExpr,
@@ -92,10 +94,20 @@ export async function adsBlock(
     ]);
     const out = armarJerarquia({ rows: todos, catalog, spend, bookings, query, maxAds: MAX_ANUNCIOS });
     const moneda = [...spend.values()][0]?.currencies[0] ?? null;
-    const hierarchy = await cargarEstado(organizationId, catalog, out.mixedCurrency, moneda);
+
+    // 039 — Un rango más viejo que lo ya traído de Meta encarga el relleno (un UPDATE local: la ruta no espera a Meta).
+    const cobertura = await leerCobertura(organizationId, period);
+    if (cobertura.needsRequest) await requestSpendBackfill(organizationId, period.dto.from).catch(() => {});
+    const listedSpend = [...spend.values()].reduce((a, s) => a + s.amount, 0);
+    const hierarchy = await cargarEstado(organizationId, catalog, out.mixedCurrency, moneda, {
+      period,
+      listedSpend,
+      syncing: cobertura.syncing,
+    });
     return {
       ...base,
       ads: out.ads,
+      total: out.total,
       hierarchy,
       groupBy: query.group,
       groups: out.groups,

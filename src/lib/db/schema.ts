@@ -2325,6 +2325,14 @@ export const metaAdsSettings = pgTable(
     /** Golpes de límite seguidos: alimenta el backoff. */
     rateHits: integer("rate_hits").notNull().default(0),
     lastSpendSyncAt: timestamp("last_spend_sync_at"),
+    /** 039 — Último listado completo de la cuenta. */
+    catalogSyncedAt: timestamp("catalog_synced_at"),
+    /** 039 — El día más antiguo cuyo gasto ya se trajo. */
+    spendCoveredSince: date("spend_covered_since", { mode: "string" }),
+    /** 039 — Hasta qué día atrás pide Resultados que se rellene (lo borra el worker al llegar). */
+    spendBackfillFrom: date("spend_backfill_from", { mode: "string" }),
+    /** 039 — Zona horaria de la cuenta: Meta corta los días en ella. */
+    accountTimezone: text("account_timezone"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -2360,6 +2368,10 @@ export const metaAd = pgTable(
     lastError: text("last_error"),
     syncedAt: timestamp("synced_at"),
     spendSyncedAt: timestamp("spend_synced_at"),
+    /** 039 — `effective_status` de Meta (ACTIVE, PAUSED, CAMPAIGN_PAUSED, ADSET_PAUSED…). */
+    effectiveStatus: text("effective_status"),
+    /** 039 — La última vez que el listado de la cuenta devolvió este anuncio. */
+    listedAt: timestamp("listed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -2388,6 +2400,22 @@ export const metaAdSpend = pgTable(
     uniqueIndex("meta_ad_spend_org_ad_day_uq").on(t.organizationId, t.adId, t.day),
     index("meta_ad_spend_org_day_idx").on(t.organizationId, t.day),
   ]
+);
+
+/** 039 — Gasto diario de la CUENTA publicitaria, para cuadrar con lo desglosado por anuncio. */
+export const metaAccountSpend = pgTable(
+  "meta_account_spend",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    day: date("day", { mode: "string" }).notNull(),
+    spend: numeric("spend", { precision: 14, scale: 2 }).notNull(),
+    currency: text("currency").notNull(),
+    syncedAt: timestamp("synced_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("meta_account_spend_org_day_uq").on(t.organizationId, t.day)]
 );
 
 /* ============================================================
