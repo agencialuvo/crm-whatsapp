@@ -1,3 +1,4 @@
+import { deflateSync, crc32 } from "node:zlib";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { mockGuard } from "@/lib/dev-guard";
@@ -275,6 +276,89 @@ async function universoDeLaCuenta(): Promise<AnuncioDeCuenta[]> {
   return [...ANUNCIOS_DE_LA_CUENTA, ...(await anunciosAtribuidos())];
 }
 
+/**
+ * 040 — Creativos de prueba. `acct-ad-1`: titular, texto e imagen. `acct-ad-2`: imagen DEMASIADO grande (pasa del tope de
+ * 300 KB de la descarga) y miniatura normal, para probar la caída a la miniatura. `acct-ad-3`: imagen sin titular ni texto
+ * (un creativo dinámico). `acct-ad-4`: todo, y en pausa. `acct-ad-5`: sin creativo. Los anuncios que ya trajeron gente
+ * traen titular, texto y miniatura. Token con sufijo `-sincreativo`: pedir `creative{…}` falla (error 1, «reduce data»).
+ */
+const CREATIVOS: Record<string, { title?: string; body?: string; imagen?: "normal" | "grande" | "ninguna"; miniatura?: boolean }> = {
+  "acct-ad-1": { title: "Corte + barba 2x1", body: "Solo esta semana: llega con un amigo y paga uno.", imagen: "normal" },
+  "acct-ad-2": { title: "Promo de lunes", body: "Texto largo\ncon salto de línea.", imagen: "grande", miniatura: true },
+  "acct-ad-3": { imagen: "normal" },
+  "acct-ad-4": { title: "Anuncio pausado", body: "Esta campaña está en pausa.", imagen: "normal" },
+  "acct-ad-5": { imagen: "ninguna" },
+};
+
+function creativoDeAnuncio(id: string, origen: string) {
+  const c = CREATIVOS[id] ?? { title: `Titular ${id}`, body: "Texto del anuncio", imagen: "ninguna" as const, miniatura: true };
+  const url = (tipo: string) => `${origen}/api/dev/wa-mock/graph/creative/${tipo}-${id}.png`;
+  return {
+    id: `creative-${id}`,
+    ...(c.title ? { title: c.title } : {}),
+    ...(c.body ? { body: c.body } : {}),
+    ...(c.imagen && c.imagen !== "ninguna" ? { image_url: url(c.imagen === "grande" ? "big" : "img") } : {}),
+    ...(c.imagen !== "ninguna" || c.miniatura ? { thumbnail_url: url("thumb") } : {}),
+  };
+}
+
+/** Un PNG RGB válido: color sólido con un degradado, o ruido incompresible si se pide pesado. */
+function pngDePrueba(id: string, ancho: number, alto: number, pesado: boolean): Buffer {
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const r0 = 60 + (h % 150);
+  const g0 = 60 + ((h >> 8) % 150);
+  const b0 = 60 + ((h >> 16) % 150);
+  const filas: Buffer[] = [];
+  for (let y = 0; y < alto; y++) {
+    const fila = Buffer.alloc(1 + ancho * 3);
+    for (let x = 0; x < ancho; x++) {
+      const o = 1 + x * 3;
+      if (pesado) {
+        fila[o] = (Math.imul(x + 1, 2654435761) ^ Math.imul(y + 7, 40503)) & 255;
+        fila[o + 1] = (Math.imul(x + 13, 2246822519) ^ Math.imul(y + 3, 3266489917)) & 255;
+        fila[o + 2] = (Math.imul(x + 5, 668265263) ^ Math.imul(y + 11, 374761393)) & 255;
+      } else {
+        const k = Math.floor((y / alto) * 70);
+        fila[o] = Math.min(255, r0 + k);
+        fila[o + 1] = Math.min(255, g0 + k);
+        fila[o + 2] = Math.min(255, b0 - (k >> 1));
+      }
+    }
+    filas.push(fila);
+  }
+  const trozo = (tipo: string, datos: Buffer) => {
+    const largo = Buffer.alloc(4);
+    largo.writeUInt32BE(datos.length);
+    const cuerpo = Buffer.concat([Buffer.from(tipo, "ascii"), datos]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc32(cuerpo) >>> 0);
+    return Buffer.concat([largo, cuerpo, sum]);
+  };
+  const cab = Buffer.alloc(13);
+  cab.writeUInt32BE(ancho, 0);
+  cab.writeUInt32BE(alto, 4);
+  cab[8] = 8; // 8 bits
+  cab[9] = 2; // RGB
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    trozo("IHDR", cab),
+    trozo("IDAT", deflateSync(Buffer.concat(filas), { level: pesado ? 0 : 6 })),
+    trozo("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** `GET …/graph/creative/<tipo>-<id>.png`: lo que sirve el «CDN» del mock (sin token, como el de Meta). */
+function handleCreativeImage(path: string[]): Response | null {
+  if (path[0] !== "creative" || !path[1]) return null;
+  const m = /^(img|thumb|big)-(.+)\.png$/.exec(path[1]);
+  if (!m) return new Response("no encontrado", { status: 404 });
+  const [, tipo, id] = m;
+  const png =
+    tipo === "big" ? pngDePrueba(id!, 260, 400, true) : tipo === "thumb" ? pngDePrueba(id!, 64, 64, false) : pngDePrueba(id!, 480, 480, false);
+  return new Response(new Uint8Array(png), { headers: { "content-type": "image/png", "cache-control": "no-store" } });
+}
+
 async function handleMarketing(path: string[], req: Request, token: string): Promise<Response | null> {
   if (!path[0]?.startsWith("act_")) return null;
   const fail = marketingFailure(token);
@@ -301,10 +385,25 @@ async function handleMarketing(path: string[], req: Request, token: string): Pro
       const data = filtrados.filter((id) => !id.startsWith("gone-")).map(mockAd);
       return Response.json({ data }, { headers });
     }
-    // Listado de TODA la cuenta (039).
+    // Listado de TODA la cuenta (039); con `creative{…}` en los campos (040) trae también el creativo y el enlace.
+    const conCreativo = (url.searchParams.get("fields") ?? "").includes("creative{");
+    if (conCreativo && token.endsWith("-sincreativo")) {
+      return Response.json(
+        { error: { message: "Please reduce the amount of data you're asking for, then retry your request", type: "OAuthException", code: 1, fbtrace_id: "mock" } },
+        { status: 500 }
+      );
+    }
+    const origen = new URL(req.url).origin;
     const data = (await universoDeLaCuenta())
       .filter((a) => a.listado)
-      .map((a) => ({ id: a.id, name: a.name, effective_status: a.status, adset: a.adset, campaign: a.campaign }));
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        effective_status: a.status,
+        adset: a.adset,
+        campaign: a.campaign,
+        ...(conCreativo ? { preview_shareable_link: `https://fb.me/mock-${a.id}`, creative: creativoDeAnuncio(a.id, origen) } : {}),
+      }));
     return Response.json({ data }, { headers });
   }
   if (path[1] === "insights") {
@@ -357,6 +456,9 @@ export async function GET(req: Request, ctx: Params) {
   const guard = mockGuard();
   if (guard) return guard;
   const path = normalizePath((await ctx.params).path);
+  // 040 — Las imágenes de los creativos las sirve un «CDN» sin token, como el de Meta.
+  const imagen = handleCreativeImage(path);
+  if (imagen) return imagen;
   const token = bearerToken(req);
   if (token.endsWith("-invalid")) return invalidTokenResponse();
 

@@ -7,7 +7,7 @@ import type {
   HygieneBlockDto,
   SalesBlockDto,
 } from "@/lib/analytics";
-import { VISTA_INICIAL, VISTA_POR_CAMPANA, type AdsView } from "@/lib/ads-nav";
+import { filtersFor, VISTA_INICIAL, VISTA_POR_CAMPANA, type AdsView } from "@/lib/ads-nav";
 import { AdsSection } from "./ads-section";
 import { BotSection } from "./bot-section";
 import { HygieneSection } from "./hygiene-section";
@@ -98,9 +98,12 @@ export function ResultsClient({
   // campaña no recalcule ventas ni agente.
   useEffect(() => {
     const ctl = new AbortController();
+    // 040 — Lo que la pestaña filtra viene de las casillas de arriba; las marcadas en ella solo cambian el Total.
+    const f = filtersFor(adsView);
     const p = new URLSearchParams({ from: range.from, to: range.to, group: adsView.group });
-    if (adsView.campaignId) p.set("campaignId", adsView.campaignId);
-    if (adsView.adsetId) p.set("adsetId", adsView.adsetId);
+    if (f.campaignIds.length > 0) p.set("campaignIds", f.campaignIds.join(","));
+    if (f.adsetIds.length > 0) p.set("adsetIds", f.adsetIds.join(","));
+    if (f.selected.length > 0) p.set("selected", f.selected.join(","));
     void cargar(`/api/analytics/ads?${p.toString()}`, setAds, ctl.signal);
     return () => ctl.abort();
   }, [range, adsView, tick]);

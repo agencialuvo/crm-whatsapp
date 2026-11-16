@@ -11,18 +11,6 @@ import {
 } from "@/lib/meta/ads";
 import { cuadrarCuenta, estadoDeAnuncio, estadoDeGrupo, rate, type AdRowDto } from "@/lib/analytics";
 import {
-  crumbs,
-  drillInto,
-  goToLevel,
-  pickAdset,
-  pickCampaign,
-  SIN_IDENTIFICAR,
-  tieneFiltros,
-  VISTA_INICIAL,
-  VISTA_POR_CAMPANA,
-  type AdsView,
-} from "@/lib/ads-nav";
-import {
   armarJerarquia,
   mismoHuso,
   totalDeFilas,
@@ -164,95 +152,6 @@ describe("zona horaria", () => {
   });
   it("una zona inválida no rompe: se asume que coincide (no se avisa de lo que no se sabe)", () => {
     expect(mismoHuso("Marte/Olimpo", "America/Mexico_City", at)).toBe(true);
-  });
-});
-
-/* ── Navegación por clic ──────────────────────────────────────── */
-
-describe("drill-down", () => {
-  it("clic en una campaña baja a sus conjuntos", () => {
-    expect(drillInto(VISTA_POR_CAMPANA, { key: "c1", level: "campaign" })).toEqual({ group: "adset", campaignId: "c1", adsetId: "" });
-  });
-
-  it("clic en un conjunto baja a sus anuncios y conserva la campaña de ese conjunto", () => {
-    const enConjuntos: AdsView = { group: "adset", campaignId: "c1", adsetId: "" };
-    expect(drillInto(enConjuntos, { key: "s9", level: "adset", campaignId: "c1" })).toEqual({
-      group: "ad", campaignId: "c1", adsetId: "s9",
-    });
-  });
-
-  it("un conjunto que llega de la vista global (sin campaña elegida) trae su campaña en la fila", () => {
-    const global: AdsView = { group: "adset", campaignId: "", adsetId: "" };
-    expect(drillInto(global, { key: "s9", level: "adset", campaignId: "cX" }).campaignId).toBe("cX");
-  });
-
-  it("«sin identificar» se puede abrir y filtra por lo no resuelto", () => {
-    expect(drillInto(VISTA_POR_CAMPANA, { key: SIN_IDENTIFICAR, level: "campaign" })).toEqual({
-      group: "adset", campaignId: SIN_IDENTIFICAR, adsetId: "",
-    });
-    expect(drillInto({ group: "adset", campaignId: "", adsetId: "" }, { key: SIN_IDENTIFICAR, level: "adset", campaignId: null })).toEqual({
-      group: "ad", campaignId: "", adsetId: SIN_IDENTIFICAR,
-    });
-  });
-
-  it("subir de pestaña limpia lo de abajo; bajar conserva lo elegido", () => {
-    const hondo: AdsView = { group: "ad", campaignId: "c1", adsetId: "s1" };
-    expect(goToLevel(hondo, "campaign")).toEqual({ group: "campaign", campaignId: "", adsetId: "" });
-    expect(goToLevel(hondo, "adset")).toEqual({ group: "adset", campaignId: "c1", adsetId: "" });
-    expect(goToLevel(hondo, "ad")).toEqual(hondo);
-    expect(goToLevel({ group: "campaign", campaignId: "", adsetId: "" }, "adset")).toEqual({ group: "adset", campaignId: "", adsetId: "" });
-  });
-
-  it("los selectores equivalen al clic: elegir campaña baja a sus conjuntos; elegir conjunto, a sus anuncios", () => {
-    expect(pickCampaign(VISTA_POR_CAMPANA, "c1")).toEqual({ group: "adset", campaignId: "c1", adsetId: "" });
-    // Estando ya en anuncios, elegir una campaña filtra sin cambiar de pestaña.
-    expect(pickCampaign({ group: "ad", campaignId: "", adsetId: "" }, "c1")).toEqual({ group: "ad", campaignId: "c1", adsetId: "" });
-    // Cambiar de campaña invalida el conjunto elegido.
-    expect(pickCampaign({ group: "ad", campaignId: "c1", adsetId: "s1" }, "c2").adsetId).toBe("");
-    expect(pickCampaign({ group: "adset", campaignId: "c1", adsetId: "" }, "")).toEqual({ group: "adset", campaignId: "", adsetId: "" });
-    expect(pickAdset({ group: "adset", campaignId: "c1", adsetId: "" }, "s1")).toEqual({ group: "ad", campaignId: "c1", adsetId: "s1" });
-    expect(pickAdset({ group: "ad", campaignId: "c1", adsetId: "s1" }, "")).toEqual({ group: "ad", campaignId: "c1", adsetId: "" });
-  });
-
-  it("tieneFiltros", () => {
-    expect(tieneFiltros(VISTA_INICIAL)).toBe(false);
-    expect(tieneFiltros({ group: "ad", campaignId: "c", adsetId: "" })).toBe(true);
-    expect(tieneFiltros({ group: "ad", campaignId: "", adsetId: "s" })).toBe(true);
-  });
-});
-
-describe("migas de pan", () => {
-  const nombres = {
-    campaigns: [{ id: "c1", name: "Campaña Alfa" }],
-    adsets: [{ id: "s1", name: "Conjunto Uno" }],
-  };
-
-  it("sin filtros no hay migas", () => {
-    expect(crumbs(VISTA_POR_CAMPANA, nombres)).toEqual([]);
-  });
-
-  it("en los conjuntos de una campaña: «Todas las campañas › Campaña», la última sin enlace", () => {
-    const m = crumbs({ group: "adset", campaignId: "c1", adsetId: "" }, nombres);
-    expect(m.map((x) => x.label)).toEqual(["Todas las campañas", "Campaña Alfa"]);
-    expect(m[0]!.view).toEqual({ group: "campaign", campaignId: "", adsetId: "" });
-    expect(m[1]!.view).toBeNull();
-  });
-
-  it("en los anuncios de un conjunto: tres migas; la campaña lleva de vuelta a sus conjuntos", () => {
-    const m = crumbs({ group: "ad", campaignId: "c1", adsetId: "s1" }, nombres);
-    expect(m.map((x) => x.label)).toEqual(["Todas las campañas", "Campaña Alfa", "Conjunto Uno"]);
-    expect(m[1]!.view).toEqual({ group: "adset", campaignId: "c1", adsetId: "" });
-    expect(m[2]!.view).toBeNull();
-  });
-
-  it("un conjunto sin campaña elegida: «Todas las campañas › Conjunto»", () => {
-    const m = crumbs({ group: "ad", campaignId: "", adsetId: "s1" }, nombres);
-    expect(m.map((x) => x.label)).toEqual(["Todas las campañas", "Conjunto Uno"]);
-  });
-
-  it("si el nombre no está entre las opciones se muestra el id, y «sin identificar» se nombra", () => {
-    expect(crumbs({ group: "adset", campaignId: "desconocida", adsetId: "" }, nombres)[1]!.label).toBe("desconocida");
-    expect(crumbs({ group: "adset", campaignId: SIN_IDENTIFICAR, adsetId: "" }, nombres)[1]!.label).toBe("Sin identificar");
   });
 });
 

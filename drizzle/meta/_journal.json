@@ -526,6 +526,13 @@
       "when": 1794768562809,
       "tag": "0074_magical_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1794786374791,
+      "tag": "0075_clean_the_liberteens",
+      "breakpoints": true
     }
   ]
 }

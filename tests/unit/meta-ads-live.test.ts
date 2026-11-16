@@ -32,6 +32,8 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
   let ads: typeof import("@/lib/meta/ads");
   let MetaApiError: (typeof import("@/lib/meta/client"))["MetaApiError"];
   let newId: (typeof import("@/lib/db/ids"))["newId"];
+  let sql: (typeof import("drizzle-orm"))["sql"];
+  let deleteMediaFileFn: (typeof import("@/server/whatsapp/media"))["deleteMediaFile"];
   let addDaysISO: (typeof import("@/lib/time/slots"))["addDaysISO"];
 
   const uid = Date.now().toString(36);
@@ -45,7 +47,8 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
   beforeAll(async () => {
     process.env.ATRIBUCION = "on";
     process.env.AGENDA = "on";
-    ({ eq, and, inArray } = await import("drizzle-orm"));
+    ({ eq, and, inArray, sql } = await import("drizzle-orm"));
+    ({ deleteMediaFile: deleteMediaFileFn } = await import("@/server/whatsapp/media"));
     const l = await import("@/lib/db");
     db = l.getDb();
     schema = l.schema;
@@ -78,6 +81,12 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       await db.delete(schema.metaAd).where(eq(schema.metaAd.organizationId, o));
       await db.delete(schema.metaAdsSettings).where(eq(schema.metaAdsSettings.organizationId, o));
     }
+    // 040 — Las copias locales de creativos (archivo y fila).
+    for (const o of [org, otherOrg]) {
+      const copias = await db.select({ id: schema.mediaAsset.id }).from(schema.mediaAsset).where(and(eq(schema.mediaAsset.organizationId, o), sql`${schema.mediaAsset.payload}->>'origen' = 'catalogo'`));
+      for (const c of copias) await deleteMediaFileFn(o, c.id).catch(() => {});
+      if (copias.length) await db.delete(schema.mediaAsset).where(inArray(schema.mediaAsset.id, copias.map((c) => c.id)));
+    }
     // Los contactos arrastran sus conversaciones, atribuciones y citas (cascada): cada prueba parte de cero.
     if (created.contacts.length) await db.delete(schema.contact).where(inArray(schema.contact.id, created.contacts));
     created.contacts = [];
@@ -109,7 +118,16 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
   const T0 = new Date("2026-11-14T12:00:00Z");
   const hoy = () => T0.toISOString().slice(0, 10);
 
-  type AnuncioFalso = { id: string; name?: string; status?: string; adset?: [string, string]; campaign?: [string, string] };
+  type AnuncioFalso = {
+    id: string;
+    name?: string;
+    status?: string;
+    adset?: [string, string];
+    campaign?: [string, string];
+    /** 040 — El creativo que devuelve el listado cuando se pide con `creative{…}`. */
+    creative?: { id?: string; title?: string; body?: string; image?: string; thumb?: string };
+    link?: string;
+  };
 
   /**
    * Un doble de la Graph API: consultas sueltas por ids (038), listado de la cuenta, gasto por anuncio y gasto de la
@@ -125,6 +143,8 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       /** Gasto de la cuenta que ningún anuncio explica, por día. */
       extraAccount?: number;
       timezone?: string;
+      /** 040 — Si se da, pedir el listado CON creativos falla con este error (sin creativos, bien). */
+      failCreatives?: unknown;
       /** Páginas del gasto por anuncio: si se da, cada página trae este número de filas y siempre dice que hay otra. */
       endlessSpendPages?: number;
     } = {}
@@ -147,7 +167,23 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
         return { name: "Cuenta test", currency: "MXN", timezone_name: opts.timezone ?? "America/Mexico_City" };
       }
       if (path.includes("/ads?")) {
-        if (filtro.length === 0) return { data: (opts.account ?? []).map(nodoDe) };
+        if (filtro.length === 0) {
+          const conCreativo = (q.get("fields") ?? "").includes("creative{");
+          if (conCreativo && opts.failCreatives) throw opts.failCreatives;
+          return {
+            data: (opts.account ?? []).map((a) => ({
+              ...nodoDe(a),
+              ...(conCreativo
+                ? {
+                    ...(a.link !== undefined ? { preview_shareable_link: a.link } : {}),
+                    ...(a.creative
+                      ? { creative: { id: a.creative.id, title: a.creative.title, body: a.creative.body, image_url: a.creative.image, thumbnail_url: a.creative.thumb } }
+                      : {}),
+                  }
+                : {}),
+            })),
+          };
+        }
         return {
           data: filtro
             .filter((id) => !id.includes("gone"))
@@ -197,7 +233,11 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
     throw new Error("el relleno no terminó");
   }
 
-  const deps = (graph: import("@/server/attribution/meta-ads/sync").GraphCall, now = T0): import("@/server/attribution/meta-ads/sync").SyncDeps => ({ now: () => now, graph });
+  const deps = (
+    graph: import("@/server/attribution/meta-ads/sync").GraphCall,
+    now = T0,
+    descargar?: import("@/server/attribution/meta-ads/creatives").Descargador
+  ): import("@/server/attribution/meta-ads/sync").SyncDeps => ({ now: () => now, graph, descargar });
 
   async function mkContactWithAd(adId: string | null, over: { organizationId?: string; isTest?: boolean; sourceType?: string } = {}) {
     const n = seq++;
@@ -989,6 +1029,215 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta(), spend: gasto() })));
       const adFlow = await import("@/server/attribution/ad-flow");
       expect((await adFlow.listCatalogAds(otherOrg)).ads.filter((a) => a.adId.endsWith(`-${uid}`))).toEqual([]);
+    });
+  });
+
+  /* ─── 040: los creativos de los anuncios ─── */
+
+  describe("040 — creativos", () => {
+    const id = (n: string) => `${n}-${uid}`;
+    const IMG = (n: string) => `https://scontent.xx.fbcdn.net/${uid}/${n}.jpg`;
+    const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    const consulta = { group: "ad" as const, campaignId: null, adsetId: null };
+    const rangoHoy = () => period.resolvePeriod({ from: addDaysISO(hoy(), -1), to: hoy(), timezone: "UTC", now: T0 });
+
+    /** Un descargador de mentira: cuenta llamadas y falla según el patrón de la URL. */
+    function descargador(calls: string[] = [], reglas: { permanente?: RegExp; transitoria?: RegExp } = {}) {
+      return async (url: string) => {
+        calls.push(url);
+        if (reglas.permanente?.test(url)) return { ok: false as const, falla: "permanente" as const };
+        if (reglas.transitoria?.test(url)) return { ok: false as const, falla: "transitoria" as const };
+        return { ok: true as const, data: PNG, mimeType: "image/png" };
+      };
+    }
+
+    const CUENTA = (): AnuncioFalso[] => [
+      { id: id("k-1"), name: "Con todo", link: "https://fb.me/e/uno", creative: { id: "cr-1", title: "Titular uno", body: "Texto uno", image: IMG("uno"), thumb: IMG("uno-t") } },
+      { id: id("k-2"), name: "Sin nada", creative: undefined },
+    ];
+    const gasto = () => ({ [id("k-1")]: 10 });
+    const conectarNuevo = () => conectar(org, TOKEN, { catalogoAlDia: false });
+    const asset = async (assetId: string | null) =>
+      assetId ? (await db.select().from(schema.mediaAsset).where(eq(schema.mediaAsset.id, assetId)))[0] : undefined;
+
+    it("el listado guarda titular, texto, enlace y URLs del creativo, y la imagen se copia al volumen de la organización", async () => {
+      await conectarNuevo();
+      const calls: string[] = [];
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador(calls)));
+      expect(r.creatives).toBe(1);
+
+      const fila = (await metaRow(org, id("k-1")))!;
+      expect(fila).toMatchObject({ creativeId: "cr-1", creativeTitle: "Titular uno", creativeBody: "Texto uno", previewLink: "https://fb.me/e/uno" });
+      expect(fila.creativeImageUrl).toBe(IMG("uno"));
+      expect(fila.creativeSourceUrl).toBe(IMG("uno"));
+      // La imagen completa primero; no se pidió la miniatura.
+      expect(calls).toEqual([IMG("uno")]);
+
+      const copia = (await asset(fila.creativeAssetId))!;
+      expect(copia).toMatchObject({ organizationId: org, kind: "image", mimeType: "image/png", fetchStatus: "available" });
+      expect((copia.payload as { origen?: string }).origen).toBe("catalogo");
+      // Un anuncio sin creativo no genera copia.
+      expect((await metaRow(org, id("k-2")))!.creativeAssetId).toBeNull();
+    });
+
+    it("una imagen que no baja de forma permanente (p. ej. pasa del tope) cae a la miniatura", async () => {
+      await conectarNuevo();
+      const calls: string[] = [];
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador(calls, { permanente: /uno\.jpg$/ })));
+      const fila = (await metaRow(org, id("k-1")))!;
+      expect(calls).toEqual([IMG("uno"), IMG("uno-t")]);
+      expect(fila.creativeSourceUrl).toBe(IMG("uno-t"));
+      expect(fila.creativeAssetId).not.toBeNull();
+    });
+
+    it("una copia al día no se vuelve a bajar (aunque venga de la miniatura)", async () => {
+      await conectarNuevo();
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador([], { permanente: /uno\.jpg$/ })));
+      const calls: string[] = [];
+      const luego = new Date(T0.getTime() + 13 * 3_600_000);
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), luego, descargador(calls)));
+      expect(calls).toEqual([]);
+    });
+
+    it("si el creativo CAMBIA de imagen se copia la nueva y se borra la vieja (fila y archivo)", async () => {
+      await conectarNuevo();
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador()));
+      const vieja = (await metaRow(org, id("k-1")))!.creativeAssetId!;
+
+      const nueva = CUENTA().map((a) => (a.id === id("k-1") ? { ...a, creative: { ...a.creative!, image: IMG("dos") } } : a));
+      const luego = new Date(T0.getTime() + 13 * 3_600_000);
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: nueva, spend: gasto() }), luego, descargador()));
+      expect(r.creatives).toBe(1);
+      const fila = (await metaRow(org, id("k-1")))!;
+      expect(fila.creativeSourceUrl).toBe(IMG("dos"));
+      expect(fila.creativeAssetId).not.toBe(vieja);
+      expect(await asset(vieja)).toBeUndefined();
+      expect(await asset(fila.creativeAssetId)).toBeDefined();
+    });
+
+    it("un fallo TRANSITORIO se reintenta en la siguiente pasada; uno PERMANENTE se anota y no se reintenta", async () => {
+      await conectarNuevo();
+      const calls: string[] = [];
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador(calls, { transitoria: /.*/ })));
+      expect((await metaRow(org, id("k-1")))!).toMatchObject({ creativeAssetId: null, creativeSourceUrl: null });
+      const intentos1 = calls.length;
+      expect(intentos1).toBeGreaterThan(0);
+
+      // La siguiente pasada vuelve a intentar y ahora sí baja.
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), new Date(T0.getTime() + 60_000), descargador(calls)));
+      expect(r.creatives).toBe(1);
+
+      // Un permanente (host no permitido, 404…) se anota con su URL y se deja quieto.
+      await limpiar();
+      await conectarNuevo();
+      const calls2: string[] = [];
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador(calls2, { permanente: /.*/ })));
+      expect((await metaRow(org, id("k-1")))!.creativeSourceUrl).toBe(IMG("uno"));
+      const antes = calls2.length;
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), new Date(T0.getTime() + 60_000), descargador(calls2, { permanente: /.*/ })));
+      expect(calls2.length).toBe(antes);
+    });
+
+    it("máximo 25 copias por pasada: el resto llega en las siguientes", async () => {
+      await conectarNuevo();
+      const muchos: AnuncioFalso[] = Array.from({ length: 30 }, (_, i) => ({
+        id: id(`m-${i}`), creative: { image: IMG(`m${i}`), thumb: IMG(`m${i}-t`) },
+      }));
+      const r1 = await sync.syncOrganization(org, deps(fakeGraph({ account: muchos, spend: {} }), T0, descargador()));
+      expect(r1.creatives).toBe(25);
+      const r2 = await sync.syncOrganization(org, deps(fakeGraph({ account: muchos, spend: {} }), new Date(T0.getTime() + 60_000), descargador()));
+      expect(r2.creatives).toBe(5);
+    });
+
+    it("el listado CON creativos que Meta rechaza (error 1) se reintenta SIN ellos: catálogo y gasto siguen llegando", async () => {
+      await conectarNuevo();
+      const error1 = new MetaApiError("Please reduce the amount of data you are asking for", { status: 500, code: 1 });
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto(), failCreatives: error1 }), T0, descargador()));
+      expect(r).toMatchObject({ stopped: null, catalogAds: 2, creatives: 0 });
+      expect(await metaRow(org, id("k-1"))).toMatchObject({ adName: "Con todo", creativeTitle: null, creativeAssetId: null });
+      // El gasto llegó, y el aviso lo explica.
+      expect(await db.select().from(schema.metaAdSpend).where(eq(schema.metaAdSpend.adId, id("k-1")))).not.toHaveLength(0);
+      expect((await settings.getMetaAdsSettings(org))!.lastError).toContain("creativos");
+
+      // En el siguiente listado (12 h) Meta ya responde bien: los creativos llegan y el aviso se limpia.
+      const luego = new Date(T0.getTime() + 13 * 3_600_000);
+      const r2 = await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), luego, descargador()));
+      expect(r2.creatives).toBe(1);
+      expect(await metaRow(org, id("k-1"))).toMatchObject({ creativeTitle: "Titular uno" });
+    });
+
+    it("un error de token en el listado con creativos NO se reintenta sin ellos: se detiene como siempre", async () => {
+      await conectarNuevo();
+      const malo = new MetaApiError("Invalid OAuth access token", { status: 401, code: 190 });
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), failCreatives: malo, fail: () => null }), T0, descargador()));
+      // `failCreatives` solo afecta al listado con creativos: con 190 el conector se marca en error, sin segundo intento.
+      expect(r.stopped).toBe("auth");
+      expect((await settings.getMetaAdsSettings(org))!.status).toBe("error");
+    });
+
+    it("un listado sin creativos NO borra los ya conocidos (no se pisa con null)", async () => {
+      await conectarNuevo();
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador()));
+      const error1 = new MetaApiError("reduce data", { status: 500, code: 1 });
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto(), failCreatives: error1 }), new Date(T0.getTime() + 13 * 3_600_000), descargador()));
+      expect(await metaRow(org, id("k-1"))).toMatchObject({ creativeTitle: "Titular uno", previewLink: "https://fb.me/e/uno" });
+      expect((await metaRow(org, id("k-1")))!.creativeAssetId).not.toBeNull();
+    });
+
+    it("un enlace de vista previa que no es de Meta no se guarda", async () => {
+      await conectarNuevo();
+      const cuenta = CUENTA().map((a) => (a.id === id("k-1") ? { ...a, link: "javascript:alert(1)" } : a));
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta, spend: gasto() }), T0, descargador()));
+      expect((await metaRow(org, id("k-1")))!.previewLink).toBeNull();
+    });
+
+    it("Resultados lleva el creativo en la fila (también de un anuncio con gasto y sin conversaciones)", async () => {
+      await conectarNuevo();
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador()));
+      const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+      const fila = b.ads.find((a) => a.key === id("k-1"))!;
+      expect(fila.conversations).toBe(0);
+      expect(fila.creative).toMatchObject({ title: "Titular uno", body: "Texto uno", previewLink: "https://fb.me/e/uno" });
+      expect(fila.creative!.assetId).toMatch(/^ma_/);
+    });
+
+    it("aislamiento: el creativo de una organización no aparece en otra", async () => {
+      await conectarNuevo();
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador()));
+      expect(await metaRow(otherOrg, id("k-1"))).toBeUndefined();
+      const ajenas = await db.select().from(schema.mediaAsset).where(and(eq(schema.mediaAsset.organizationId, otherOrg), sql`${schema.mediaAsset.payload}->>'origen' = 'catalogo'`));
+      expect(ajenas).toHaveLength(0);
+    });
+
+    it("sin la bandera el bloque no trae el creativo ni ninguna llave nueva", async () => {
+      await conectarNuevo();
+      await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador()));
+      process.env.ATRIBUCION = "off";
+      try {
+        const b = await analytics.adsBlock(org, rangoHoy(), consulta);
+        for (const k of ["hierarchy", "total", "selectedCount"]) expect(b).not.toHaveProperty(k);
+        expect(JSON.stringify(b)).not.toContain("creative");
+      } finally {
+        process.env.ATRIBUCION = "on";
+      }
+    });
+
+    it("la consulta con varias campañas y filas marcadas devuelve el Total de la selección (extremo a extremo)", async () => {
+      await conectarNuevo();
+      const cuenta: AnuncioFalso[] = [
+        { id: id("p-1"), campaign: ["kc-1", "Camp 1"], adset: ["ks-1", "Conj 1"] },
+        { id: id("p-2"), campaign: ["kc-2", "Camp 2"], adset: ["ks-2", "Conj 2"] },
+        { id: id("p-3"), campaign: ["kc-3", "Camp 3"], adset: ["ks-3", "Conj 3"] },
+      ];
+      const g = { [id("p-1")]: 10, [id("p-2")]: 20, [id("p-3")]: 40 };
+      await sync.syncOrganization(org, deps(fakeGraph({ account: cuenta, spend: g }), T0, descargador()));
+      const r = rangoHoy();
+      const dos = await analytics.adsBlock(org, r, { group: "ad", campaignId: null, adsetId: null, campaignIds: ["kc-1", "kc-2"] });
+      expect(dos.ads.map((a) => a.key).sort()).toEqual([id("p-1"), id("p-2")]);
+      expect(dos.total!.spend).toBe(2 * 30);
+      const marcada = await analytics.adsBlock(org, r, { group: "campaign", campaignId: null, adsetId: null, selected: ["kc-3"] });
+      expect(marcada.selectedCount).toBe(1);
+      expect(marcada.total).toMatchObject({ ads: 1, spend: 2 * 40 });
     });
   });
 });

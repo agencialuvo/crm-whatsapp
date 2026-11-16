@@ -150,6 +150,21 @@ Conjunto»), cada tramo clicable para volver. Las pestañas Campaña | Conjunto 
 mismas reglas que el clic (subir de pestaña quita los filtros de abajo). Al pie hay una fila de **Total** de todo lo
 filtrado, y las campañas y anuncios pausados llevan su insignia.
 
+**Casillas, como en Meta** (spec [040](../specs/040-resultados-seleccion-y-creativos/spec.md)): cada fila de las tres
+pestañas lleva una casilla a la izquierda, con una maestra en la cabecera. Las campañas marcadas filtran las pestañas
+**Conjunto** y **Anuncio**; los conjuntos marcados, la pestaña **Anuncio**; los anuncios marcados solo cambian el Total.
+Volver a una pestaña conserva sus casillas, y cambiar las de arriba vacía las de abajo. Sobre la tabla, píldoras dicen de
+dónde viene el filtro («Conjuntos de 2 campañas», «Quitar») y cuánto hay marcado («3 conjuntos seleccionados», «Limpiar»).
+La fila de **Total** se recalcula (en el servidor, con las mismas reglas de costos) sobre lo marcado en la pestaña actual,
+o sobre toda la vista si no hay nada marcado.
+
+**Vista previa de los creativos**: la sincronización trae también el creativo de cada anuncio (`creative{…}` y
+`preview_shareable_link`) y **copia la imagen al volumen local** (no se enlaza a Meta: sus URL caducan y el CRM no admite
+imágenes de otros hosts). En la pestaña Anuncio la miniatura es la real (el megáfono solo si no hay imagen), y un clic en
+ella o en el ojo abre un modal con la imagen en grande, el titular, el texto principal, la campaña y el conjunto, y un
+enlace a la vista previa nativa de Meta si hay. Si Meta rechaza el listado con creativos por pesado (error 1), se reintenta
+sin ellos: el catálogo y el gasto siguen llegando y Ajustes avisa.
+
 **En Ajustes → Anuncios**: una sola tarjeta *Meta Ads* con las dos conexiones (campañas y gasto; conversiones). El
 dataset de las conversiones se elige de una lista de la cuenta publicitaria (con «Escribir el ID a mano» por si el de
 WhatsApp no aparece). El registro de eventos reportados queda en un acordeón cerrado, y el enrutamiento por anuncio

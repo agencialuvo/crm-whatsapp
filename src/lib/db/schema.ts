@@ -2372,6 +2372,19 @@ export const metaAd = pgTable(
     effectiveStatus: text("effective_status"),
     /** 039 — La última vez que el listado de la cuenta devolvió este anuncio. */
     listedAt: timestamp("listed_at"),
+    /* 040 — El creativo del anuncio (de `/ads?fields=creative{…}`). */
+    creativeId: text("creative_id"),
+    creativeTitle: text("creative_title"),
+    creativeBody: text("creative_body"),
+    /** URLs tal como las dio Meta: caducan, solo sirven para descargar la copia local. */
+    creativeThumbUrl: text("creative_thumb_url"),
+    creativeImageUrl: text("creative_image_url"),
+    /** La URL de la que salió la copia actual (para saber si el creativo cambió). */
+    creativeSourceUrl: text("creative_source_url"),
+    /** `media_asset.id` de la copia local; sin FK: se limpia a mano al reemplazarla. */
+    creativeAssetId: text("creative_asset_id"),
+    /** `preview_shareable_link` ya validado (https de un host de Meta). */
+    previewLink: text("preview_link"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

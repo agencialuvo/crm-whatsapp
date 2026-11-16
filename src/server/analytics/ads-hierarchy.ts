@@ -9,12 +9,14 @@ import {
   rate,
   type AdGroupBy,
   type AdGroupRowDto,
+  type AdCreativeDto,
   type AdRowDto,
   type AdStatus,
   type AdsHierarchyDto,
   type AdTotalDto,
   type SpendDto,
 } from "@/lib/analytics";
+import { safePreviewLink } from "@/lib/meta/ads";
 import { countsByStatus } from "@/server/attribution/meta-ads/catalog";
 import type { ResolvedPeriod } from "@/server/analytics/period";
 import { firstAttributionIdExpr, notLabContact } from "@/server/analytics/shared";
@@ -43,6 +45,11 @@ export type AdsQuery = {
   /** Id de campaña, o `sin-identificar`. */
   campaignId: string | null;
   adsetId: string | null;
+  /** 040 — Varias campañas / conjuntos (unión). Si se dan, mandan sobre `campaignId` / `adsetId`. */
+  campaignIds?: string[] | null;
+  adsetIds?: string[] | null;
+  /** 040 — Llaves marcadas en la pestaña actual (campaña, conjunto o anuncio según `group`): solo para el Total. */
+  selected?: string[] | null;
 };
 
 export const CONSULTA_POR_DEFECTO: AdsQuery = { group: "ad", campaignId: null, adsetId: null };
@@ -56,6 +63,11 @@ export type CatalogEntry = {
   campaignName: string | null;
   /** 039 — `effective_status` de Meta, tal cual. */
   effectiveStatus?: string | null;
+  /** 040 — El creativo copiado y sus textos. */
+  creativeAssetId?: string | null;
+  creativeTitle?: string | null;
+  creativeBody?: string | null;
+  previewLink?: string | null;
 };
 
 export type SpendEntry = { amount: number; currencies: string[] };
@@ -80,7 +92,25 @@ export type HierarchyOutput = {
   mixedCurrency: boolean;
   /** 039 — Total de TODAS las filas del filtro (la lista de anuncios muestra solo las primeras). */
   total: AdTotalDto;
+  /** 040 — Cuántas filas marcadas se encontraron (0 = el Total es el de toda la vista). */
+  selectedCount: number;
 };
+
+/** 040 — La llave de una fila en su pestaña: lo que las casillas guardan y `selected` manda. */
+export function llaveDeFila(
+  group: AdGroupBy,
+  r: { key: string; campaignId?: string | null; adsetId?: string | null }
+): string {
+  if (group === "campaign") return r.campaignId ?? SIN_IDENTIFICAR;
+  if (group === "adset") return r.adsetId ?? SIN_IDENTIFICAR;
+  return r.key;
+}
+
+/** 040 — Los ids de filtro de una consulta: la lista si viene, o el valor único de 039. */
+function idsDe(lista: string[] | null | undefined, unico: string | null): string[] | null {
+  if (lista && lista.length > 0) return lista;
+  return unico ? [unico] : null;
+}
 
 const SIN_COSTOS: SpendDto = {
   spend: null,
@@ -145,6 +175,7 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
       campaignId: cat?.campaignId ?? null,
       campaignName: cat?.campaignName ?? null,
       status: estadoDeAnuncio(cat?.effectiveStatus),
+      creative: creativoDe(cat),
       bookings,
       ...costos(spend, { conversations: r.conversations, leads: r.leads, bookings }),
     };
@@ -159,10 +190,13 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
   }
 
   // 4. Filtros.
-  const coincide = (valor: string | null, filtro: string | null) =>
-    filtro === null || (filtro === SIN_IDENTIFICAR ? valor === null : valor === filtro);
+  // Unión de ids (040): una fila coincide si su valor está en la lista; `sin-identificar` es «sin campaña/conjunto».
+  const coincide = (valor: string | null, filtro: string[] | null) =>
+    filtro === null || filtro.includes(valor ?? SIN_IDENTIFICAR);
+  const filtroCampanas = idsDe(i.query.campaignIds, i.query.campaignId);
+  const filtroConjuntos = idsDe(i.query.adsetIds, i.query.adsetId);
   const filtradas = enriquecidas.filter(
-    (r) => coincide(r.campaignId, i.query.campaignId) && coincide(r.adsetId, i.query.adsetId)
+    (r) => coincide(r.campaignId, filtroCampanas) && coincide(r.adsetId, filtroConjuntos)
   );
 
   const ordenadas = [...filtradas].sort(
@@ -174,7 +208,11 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
   );
 
   const ads: AdRowDto[] = ordenadas.slice(0, i.maxAds).map(({ lastAt: _lastAt, ...fila }) => fila);
-  const total = totalDeFilas(filtradas, i.bookings !== null);
+  // 040 — Con filas marcadas en esta pestaña el Total es el de ellas; si ninguna marcada existe ya (cambió el rango o el
+  // filtro), el de toda la vista en vez de ceros.
+  const marcadas = new Set(i.query.selected ?? []);
+  const deLaSeleccion = marcadas.size > 0 ? filtradas.filter((r) => marcadas.has(llaveDeFila(i.query.group, r))) : [];
+  const total = totalDeFilas(deLaSeleccion.length > 0 ? deLaSeleccion : filtradas, i.bookings !== null);
 
   // 5. Agrupar por conjunto o campaña.
   let groups: AdGroupRowDto[] = [];
@@ -269,7 +307,20 @@ export function armarJerarquia(i: HierarchyInput): HierarchyOutput {
       .sort((a, b) => a.name.localeCompare(b.name, "es")),
     mixedCurrency,
     total,
+    // Cuántas FILAS de la pestaña (campañas, conjuntos o anuncios) quedaron marcadas, no cuántos anuncios las componen.
+    selectedCount: new Set(deLaSeleccion.map((r) => llaveDeFila(i.query.group, r))).size,
   };
+}
+
+function creativoDe(cat: CatalogEntry | undefined): AdCreativeDto | null {
+  if (!cat) return null;
+  const c: AdCreativeDto = {
+    assetId: cat.creativeAssetId ?? null,
+    title: cat.creativeTitle ?? null,
+    body: cat.creativeBody ?? null,
+    previewLink: safePreviewLink(cat.previewLink),
+  };
+  return c.assetId || c.title || c.body || c.previewLink ? c : null;
 }
 
 /**
@@ -322,6 +373,10 @@ export async function cargarCatalogo(organizationId: string): Promise<Map<string
       campaignId: schema.metaAd.campaignId,
       campaignName: schema.metaAd.campaignName,
       effectiveStatus: schema.metaAd.effectiveStatus,
+      creativeAssetId: schema.metaAd.creativeAssetId,
+      creativeTitle: schema.metaAd.creativeTitle,
+      creativeBody: schema.metaAd.creativeBody,
+      previewLink: schema.metaAd.previewLink,
     })
     .from(schema.metaAd)
     .where(scoped(schema.metaAd.organizationId, organizationId, eq(schema.metaAd.status, "synced")));

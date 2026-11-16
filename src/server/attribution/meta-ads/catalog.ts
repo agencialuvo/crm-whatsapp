@@ -407,6 +407,12 @@ export async function upsertAccountAds(
           campaignId: a.campaignId,
           campaignName: a.campaignName,
           effectiveStatus: a.effectiveStatus ?? null,
+          creativeId: a.creative?.creativeId ?? null,
+          creativeTitle: a.creative?.title ?? null,
+          creativeBody: a.creative?.body ?? null,
+          creativeThumbUrl: a.creative?.thumbnailUrl ?? null,
+          creativeImageUrl: a.creative?.imageUrl ?? null,
+          previewLink: a.previewLink ?? null,
           status: "synced" as const,
           syncedAt: now,
           listedAt: opts.listed ? now : null,
@@ -424,6 +430,13 @@ export async function upsertAccountAds(
           effectiveStatus: opts.listed
             ? sql`excluded.effective_status`
             : sql`coalesce(${schema.metaAd.effectiveStatus}, excluded.effective_status)`,
+          // 040 — el creativo: lo nuevo entra, lo ya conocido no se pisa con null (el listado sin creativos no lo borra).
+          creativeId: sql`coalesce(excluded.creative_id, ${schema.metaAd.creativeId})`,
+          creativeTitle: sql`coalesce(excluded.creative_title, ${schema.metaAd.creativeTitle})`,
+          creativeBody: sql`coalesce(excluded.creative_body, ${schema.metaAd.creativeBody})`,
+          creativeThumbUrl: sql`coalesce(excluded.creative_thumb_url, ${schema.metaAd.creativeThumbUrl})`,
+          creativeImageUrl: sql`coalesce(excluded.creative_image_url, ${schema.metaAd.creativeImageUrl})`,
+          previewLink: sql`coalesce(excluded.preview_link, ${schema.metaAd.previewLink})`,
           status: "synced",
           attempts: 0,
           lockedAt: null,

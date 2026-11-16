@@ -19,6 +19,7 @@ import {
   type SpendRow,
 } from "@/lib/meta/ads";
 import { addDaysISO, todayInTz } from "@/lib/time/slots";
+import { syncCreatives, type Descargador } from "@/server/attribution/meta-ads/creatives";
 import {
   claimDue,
   markFailed,
@@ -59,7 +60,12 @@ export type GraphCall = (
   onHeaders: (headers: Headers) => void
 ) => Promise<unknown>;
 
-export type SyncDeps = { now: () => Date; graph: GraphCall };
+export type SyncDeps = {
+  now: () => Date;
+  graph: GraphCall;
+  /** 040 — La descarga de la imagen del creativo; las pruebas la sustituyen (por defecto, la acotada de la 018). */
+  descargar?: Descargador;
+};
 
 export const defaultSyncDeps: SyncDeps = {
   now: () => new Date(),
@@ -76,6 +82,8 @@ export type SyncSummary = {
   /** 039 — Anuncios que devolvió el listado de la cuenta y ventanas de gasto reemplazadas. */
   catalogAds: number;
   windows: number;
+  /** 040 — Imágenes de creativos copiadas en esta pasada. */
+  creatives: number;
   /** Por qué se detuvo la pasada antes de terminar, si lo hizo. */
   stopped: null | GraphProblem["kind"] | "uso_alto" | "ventana_incompleta";
 };
@@ -89,7 +97,7 @@ export const BACKFILL_DAYS = 90;
 const REFRESH_DAYS = 7;
 /** Páginas por ventana de gasto y por listado de la cuenta (039). */
 const MAX_PAGES = 40;
-const MAX_LIST_PAGES = 50;
+const MAX_LIST_PAGES = 100;
 /** Ventanas de gasto por pasada: la de refresco y las que rellenan hacia atrás (039). */
 export const MAX_WINDOWS_PER_PASS = 4;
 const WINDOW_DAYS = 7;
@@ -264,15 +272,32 @@ async function syncCatalog(ctx: Ctx): Promise<void> {
   const timezone = typeof info?.timezone_name === "string" ? info.timezone_name : null;
   if (timezone) ctx.settings.accountTimezone = timezone;
 
-  const out = await fetchAllPages(
-    ctx,
-    (after) => buildAdsListPath(ctx.settings.adAccountId, after),
-    (j) => {
-      const p = parseAdsPage(j);
-      return { rows: p.ads, after: p.after };
-    },
-    MAX_LIST_PAGES
-  );
+  const listar = (creative: boolean) =>
+    fetchAllPages(
+      ctx,
+      (after) => buildAdsListPath(ctx.settings.adAccountId, after, { creative }),
+      (j) => {
+        const p = parseAdsPage(j);
+        return { rows: p.ads, after: p.after };
+      },
+      MAX_LIST_PAGES
+    );
+
+  // 040 — Con creativos (imagen, titular, texto, enlace). Es la consulta pesada: si Meta la rechaza por tamaño o por
+  // un error propio (no por token, permiso o límite de uso) se reintenta UNA vez sin creativos, para que el catálogo y el
+  // gasto sigan llegando; los creativos quedan para el siguiente listado.
+  let out = await listar(true);
+  if ("problem" in out && (out.problem.kind === "transient" || out.problem.kind === "permanent")) {
+    const primero = out.problem;
+    const sin = await listar(false);
+    if (!("problem" in sin)) {
+      out = sin;
+      await setSyncWarning(
+        ctx.organizationId,
+        `Meta no devolvió los creativos de los anuncios (${primero.message}). El catálogo y el gasto siguen al día; se reintenta en el siguiente listado.`
+      );
+    }
+  }
   if ("problem" in out) {
     await handleProblem(ctx, out.problem, []);
     return;
@@ -282,7 +307,7 @@ async function syncCatalog(ctx: Ctx): Promise<void> {
   if (!out.complete) {
     await setSyncWarning(
       ctx.organizationId,
-      `La cuenta tiene más de ${MAX_LIST_PAGES * 200} anuncios: se listaron los primeros. Los demás se conocen por su gasto.`
+      `La cuenta tiene muchos anuncios: se listaron los primeros ${out.rows.length}. Los demás se conocen por su gasto.`
     );
   }
 }
@@ -399,6 +424,7 @@ export async function syncOrganization(
     spendAds: 0,
     catalogAds: 0,
     windows: 0,
+    creatives: 0,
     stopped: null,
   };
   try {
@@ -418,6 +444,11 @@ export async function syncOrganization(
       now.getTime() - settings.catalogSyncedAt.getTime() >= CATALOG_EVERY_MS;
     if (catalogoVencido) await syncCatalog(ctx);
     if (!summary.stopped) await syncLookups(ctx);
+    // 040 — Las imágenes de los creativos: red y disco locales, nunca frenan lo demás.
+    if (!summary.stopped) {
+      const c = await syncCreatives(organizationId, { descargar: deps.descargar });
+      summary.creatives = c.downloaded;
+    }
 
     const debe =
       opts.forceSpend ||

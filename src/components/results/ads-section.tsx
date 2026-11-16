@@ -1,6 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Eye } from "lucide-react";
 import {
   rate,
   type AdGroupBy,
@@ -17,14 +18,22 @@ import {
 import {
   crumbs,
   drillInto,
+  filtersFor,
   goToLevel,
+  masterState,
   pickAdset,
   pickCampaign,
+  seleccionDe,
   SIN_IDENTIFICAR,
+  summary,
   tieneFiltros,
+  toggle,
+  toggleAll,
   VISTA_INICIAL,
+  VISTA_POR_CAMPANA,
   type AdsView,
 } from "@/lib/ads-nav";
+import { AnuncioPreviewDialog } from "@/components/results/anuncio-preview-dialog";
 import { Badge } from "@/components/ui/badge";
 import { etiquetaDeOrigen, titularDeOrigen } from "@/lib/anuncios";
 import { cn } from "@/lib/utils";
@@ -65,6 +74,25 @@ export function AdsSection({
   const conCitas = !!data?.ads.some((a) => a.bookings !== null && a.bookings !== undefined);
   const moneda = h?.currency ?? null;
   const agrupado = !!data && data.groupBy !== undefined && data.groupBy !== "ad";
+  const [preview, setPreview] = useState<AdRowDto | null>(null);
+
+  // 040 — Casillas: solo con la jerarquía de Meta (sin ella no hay niveles que filtrar). Actúan sobre las filas visibles.
+  const conSeleccion = !!h && (h.connected || h.hasData) && !!onViewChange;
+  const llavesVisibles = !data ? [] : agrupado ? (data.groups ?? []).map((g) => g.key) : data.ads.map((a) => a.key);
+  const seleccion: Seleccion | undefined =
+    conSeleccion && onViewChange
+      ? {
+          marcadas: seleccionDe(view, view.group),
+          visibles: llavesVisibles,
+          onToggle: (k) => onViewChange(toggle(view, view.group, k)),
+          onToggleAll: (on) => onViewChange(toggleAll(view, view.group, llavesVisibles, on)),
+          noun: view.group === "campaign" ? "campaña" : view.group === "adset" ? "conjunto" : "anuncio",
+        }
+      : undefined;
+  const rotuloTotal =
+    data && data.selectedCount && data.selectedCount > 0
+      ? `Total · ${data.selectedCount} ${data.selectedCount === 1 ? (view.group === "campaign" ? "seleccionada" : "seleccionado") : view.group === "campaign" ? "seleccionadas" : "seleccionados"}`
+      : "Total";
 
   return (
     <Section
@@ -115,6 +143,9 @@ export function AdsSection({
               <Controles data={data} view={view} onChange={onViewChange} />
             )}
             {h && (h.connected || h.hasData) && onViewChange && <Migas data={data} view={view} onChange={onViewChange} />}
+            {seleccion && onViewChange && (
+              <Pildoras view={view} visibles={llavesVisibles} onChange={onViewChange} onMarcarTodo={() => seleccion.onToggleAll(true)} />
+            )}
 
             {agrupado ? (
               data.groups && data.groups.length > 0 ? (
@@ -124,8 +155,11 @@ export function AdsSection({
                   conCitas={conCitas}
                   moneda={moneda}
                   total={conGasto ? data.total : undefined}
+                  rotuloTotal={rotuloTotal}
+                  seleccion={seleccion}
                   filas={data.groups.map((g) => ({
                     key: g.key,
+                    llave: g.key,
                     titulo: (
                       <Grupo
                         grupo={g}
@@ -157,9 +191,12 @@ export function AdsSection({
                 conCitas={conCitas}
                 moneda={moneda}
                 total={conGasto ? data.total : undefined}
+                rotuloTotal={rotuloTotal}
+                seleccion={seleccion}
                 filas={data.ads.map((a) => ({
                   key: a.key,
-                  titulo: <Anuncio anuncio={a} />,
+                  llave: a.key,
+                  titulo: <Anuncio anuncio={a} onPreview={conSeleccion ? () => setPreview(a) : undefined} />,
                   conteos: a,
                   sourceId: a.sourceId,
                   bookings: a.bookings ?? null,
@@ -169,7 +206,8 @@ export function AdsSection({
             )}
           </div>
 
-          {h && conGasto && <Cuenta hierarchy={h} total={data.total} filtrado={tieneFiltros(view)} moneda={moneda} />}
+          {h && conGasto && <Cuenta hierarchy={h} total={data.total} filtrado={filtrosDeArriba(view)} moneda={moneda} />}
+          {preview && <AnuncioPreviewDialog anuncio={preview} onClose={() => setPreview(null)} />}
 
           <div className="space-y-1 text-[11px] text-text-3">
             <p>
@@ -256,7 +294,12 @@ function Controles({
   onChange: (next: AdsView) => void;
 }) {
   const campaigns = data.campaigns ?? [];
-  const adsets = (data.adsets ?? []).filter((a) => !view.campaignId || view.campaignId === SIN_IDENTIFICAR || a.campaignId === view.campaignId);
+  const campanasMarcadas = view.campaignIds;
+  const adsets = (data.adsets ?? []).filter(
+    (a) => campanasMarcadas.length === 0 || campanasMarcadas.includes(SIN_IDENTIFICAR) || (a.campaignId !== null && campanasMarcadas.includes(a.campaignId))
+  );
+  const valorCampana = view.campaignIds.length === 1 ? view.campaignIds[0]! : "";
+  const valorConjunto = view.adsetIds.length === 1 ? view.adsetIds[0]! : "";
 
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2" data-controles-anuncios>
@@ -278,27 +321,27 @@ function Controles({
       </div>
 
       <SearchSelect
-        value={view.campaignId}
+        value={valorCampana}
         // Cambiar de campaña invalida el conjunto elegido.
         onChange={(v) => onChange(pickCampaign(view, v))}
         options={[
           ...campaigns.map((c) => ({ value: c.id, label: c.name })),
           { value: SIN_IDENTIFICAR, label: "Sin identificar" },
         ]}
-        emptyLabel="Todas las campañas"
+        emptyLabel={view.campaignIds.length > 1 ? `${view.campaignIds.length} campañas` : "Todas las campañas"}
         searchPlaceholder="Buscar campaña…"
         ariaLabel="Filtrar por campaña"
         triggerClassName="bg-card px-2 text-xs"
         minListWidth={220}
       />
       <SearchSelect
-        value={view.adsetId}
+        value={valorConjunto}
         onChange={(v) => onChange(pickAdset(view, v))}
         options={[
           ...adsets.map((a) => ({ value: a.id, label: a.name })),
           { value: SIN_IDENTIFICAR, label: "Sin identificar" },
         ]}
-        emptyLabel="Todos los conjuntos"
+        emptyLabel={view.adsetIds.length > 1 ? `${view.adsetIds.length} conjuntos` : "Todos los conjuntos"}
         searchPlaceholder="Buscar conjunto…"
         ariaLabel="Filtrar por conjunto de anuncios"
         triggerClassName="bg-card px-2 text-xs"
@@ -362,12 +405,105 @@ function SinCoincidencia({
       {onViewChange && tieneFiltros(view) && (
         <button
           type="button"
-          onClick={() => onViewChange({ ...VISTA_INICIAL, group: "campaign" })}
+          onClick={() => onViewChange({ ...VISTA_POR_CAMPANA })}
           className="rounded text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Quitar filtros
         </button>
       )}
+    </div>
+  );
+}
+
+/** ¿Hay un filtro que viene de arriba de esta pestaña? (la cuenta completa solo se compara sin filtros). */
+function filtrosDeArriba(view: AdsView): boolean {
+  const f = filtersFor(view);
+  return f.campaignIds.length > 0 || f.adsetIds.length > 0;
+}
+
+/* ── Casillas y píldoras (040) ─────────────────────────────────── */
+
+type Seleccion = {
+  marcadas: string[];
+  visibles: string[];
+  onToggle: (key: string) => void;
+  onToggleAll: (on: boolean) => void;
+  /** «campaña», «conjunto» o «anuncio»: para las etiquetas de accesibilidad. */
+  noun: string;
+};
+
+/** Una casilla nativa (con teclado y lector de pantalla); la maestra admite el estado intermedio. */
+function Casilla({
+  checked,
+  indeterminate = false,
+  onChange,
+  label,
+  dato,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: (on: boolean) => void;
+  label: string;
+  dato?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      aria-label={label}
+      data-casilla={dato}
+      className="h-4 w-4 shrink-0 cursor-pointer rounded border-border-strong accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    />
+  );
+}
+
+function Pildoras({
+  view,
+  visibles,
+  onChange,
+  onMarcarTodo,
+}: {
+  view: AdsView;
+  visibles: string[];
+  onChange: (next: AdsView) => void;
+  onMarcarTodo: () => void;
+}) {
+  const { filtro, seleccion } = summary(view, visibles);
+  const hay = !!filtro || !!seleccion;
+  return (
+    // En el teléfono no hay cabecera de tabla con casilla maestra: «Marcar todo» vive aquí.
+    <div className={cn("mb-3 flex flex-wrap items-center gap-2 text-xs", !hay && "sm:hidden")} data-pildoras>
+      {filtro && (
+        <span className="inline-flex items-center gap-1.5 rounded-full border bg-subtle px-2.5 py-1" data-pildora-filtro>
+          <span>
+            Filtrando: <span className="font-medium">{filtro.texto}</span>
+          </span>
+          <button type="button" onClick={() => onChange(filtro.accion)} className="text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Quitar
+          </button>
+        </span>
+      )}
+      {seleccion && (
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-brand/40 bg-brand/5 px-2.5 py-1" data-pildora-seleccion>
+          <span className="font-medium">{seleccion.texto}</span>
+          <button type="button" onClick={() => onChange(seleccion.accion)} className="text-brand underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Limpiar
+          </button>
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onMarcarTodo}
+        className="rounded-full border px-2.5 py-1 text-brand sm:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Marcar todo
+      </button>
     </div>
   );
 }
@@ -418,6 +554,8 @@ function Cuenta({
 
 type Fila = {
   key: string;
+  /** 040 — La llave que guardan las casillas (id de campaña/conjunto, o la del anuncio). */
+  llave?: string;
   titulo: ReactNode;
   conteos: Conteos;
   sourceId?: string | null;
@@ -447,21 +585,40 @@ function Filas({
   conCitas,
   moneda,
   total,
+  rotuloTotal = "Total",
+  seleccion,
 }: {
   primera: string;
   filas: Fila[];
   conGasto: boolean;
   conCitas: boolean;
   moneda: string | null;
-  /** 039 — Total de todo lo filtrado (solo con la Marketing API). */
+  /** 039 — Total de todo lo filtrado (solo con la Marketing API); con casillas marcadas, el de ellas (040). */
   total?: AdTotalDto;
+  rotuloTotal?: string;
+  /** 040 — Casillas; sin esto la tabla es la de siempre. */
+  seleccion?: Seleccion;
 }) {
+  const marcada = (f: Fila) => !!seleccion && !!f.llave && seleccion.marcadas.includes(f.llave);
+  const estadoMaestra = seleccion ? masterState(seleccion.marcadas, seleccion.visibles) : "none";
   return (
     <>
       <ul className="divide-y border-y text-sm sm:hidden">
         {filas.map((f) => (
-          <li key={f.key} className="py-2.5" data-anuncio={f.sourceId ?? undefined}>
-            {f.titulo}
+          <li key={f.key} className={cn("py-2.5", marcada(f) && "bg-brand/5")} data-anuncio={f.sourceId ?? undefined}>
+            <div className="flex items-start gap-2.5">
+              {seleccion && f.llave && (
+                <span className="pt-1">
+                  <Casilla
+                    checked={marcada(f)}
+                    onChange={() => seleccion.onToggle(f.llave!)}
+                    label={`Seleccionar ${seleccion.noun}`}
+                    dato={f.llave}
+                  />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">{f.titulo}</div>
+            </div>
             <dl className="mt-2 grid grid-cols-4 gap-2 text-center">
               <Dato etiqueta="conversaciones" valor={f.conteos.conversations} />
               <Dato etiqueta="prospectos" valor={f.conteos.leads} />
@@ -488,7 +645,7 @@ function Filas({
         ))}
         {total && (
           <li className="py-2.5" data-total>
-            <p className="font-semibold">Total</p>
+            <p className="font-semibold">{rotuloTotal}</p>
             <dl className="mt-2 grid grid-cols-4 gap-2 text-center">
               <Dato etiqueta="conversaciones" valor={total.conversations} />
               <Dato etiqueta="prospectos" valor={total.leads} />
@@ -503,6 +660,17 @@ function Filas({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-xs text-text-3">
+              {seleccion && (
+                <th scope="col" className="w-8 py-1.5 pr-1 text-left">
+                  <Casilla
+                    checked={estadoMaestra === "all"}
+                    indeterminate={estadoMaestra === "some"}
+                    onChange={(on) => seleccion.onToggleAll(on)}
+                    label={`Seleccionar todas las filas visibles (${seleccion.noun}s)`}
+                    dato="todas"
+                  />
+                </th>
+              )}
               <th scope="col" className="py-1.5 pr-2 text-left font-medium">
                 {primera}
               </th>
@@ -523,7 +691,19 @@ function Filas({
           </thead>
           <tbody>
             {filas.map((f) => (
-              <tr key={f.key} className="border-b last:border-0" data-anuncio={f.sourceId ?? undefined}>
+              <tr key={f.key} className={cn("border-b last:border-0", marcada(f) && "bg-brand/5")} data-anuncio={f.sourceId ?? undefined}>
+                {seleccion && (
+                  <td className="py-2 pr-1 align-middle">
+                    {f.llave && (
+                      <Casilla
+                        checked={marcada(f)}
+                        onChange={() => seleccion.onToggle(f.llave!)}
+                        label={`Seleccionar ${seleccion.noun}`}
+                        dato={f.llave}
+                      />
+                    )}
+                  </td>
+                )}
                 <td className="py-2 pr-3">{f.titulo}</td>
                 <Cell>{f.conteos.conversations}</Cell>
                 <Cell>{f.conteos.leads}</Cell>
@@ -546,7 +726,10 @@ function Filas({
           {total && (
             <tfoot data-total>
               <tr className="border-t-2 font-semibold">
-                <td className="py-2 pr-3">Total</td>
+                {seleccion && <td />}
+                <td className="py-2 pr-3" data-total-rotulo>
+                  {rotuloTotal}
+                </td>
                 <Cell>{total.conversations}</Cell>
                 <Cell>{total.leads}</Cell>
                 {conCitas && <Cell>{total.bookings ?? "—"}</Cell>}
@@ -588,12 +771,29 @@ function EstadoMeta({ estado }: { estado: GroupStatus | AdStatus | undefined }) 
   );
 }
 
-function Anuncio({ anuncio: a }: { anuncio: AdRowDto }) {
+function Anuncio({ anuncio: a, onPreview }: { anuncio: AdRowDto; onPreview?: () => void }) {
   const titular = a.adName ?? titularDeOrigen(a.headline, a.sourceType);
   const ruta = [a.campaignName, a.adsetName].filter(Boolean).join(" › ");
+  // La imagen del referral (la que vio el cliente) y, si no, la copia del catálogo de Meta (también la de un anuncio
+  // con gasto y sin conversaciones). Sin ninguna, el megáfono de siempre.
+  const imagen = a.imageAssetId ?? a.creative?.assetId ?? null;
+  const miniatura = <MiniaturaDeAnuncio imageAssetId={imagen} alt={`Creativo: ${titular}`} />;
   return (
     <div className="flex min-w-0 items-center gap-2.5">
-      <MiniaturaDeAnuncio imageAssetId={a.imageAssetId} alt={`Creativo: ${titular}`} />
+      {onPreview ? (
+        <button
+          type="button"
+          onClick={onPreview}
+          aria-label={`Vista previa del anuncio ${titular}`}
+          title="Ver vista previa"
+          data-preview={a.key}
+          className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {miniatura}
+        </button>
+      ) : (
+        miniatura
+      )}
       <div className="min-w-0">
         <p className="truncate font-medium sm:max-w-[20rem]" title={titular}>
           {titular}
@@ -609,6 +809,18 @@ function Anuncio({ anuncio: a }: { anuncio: AdRowDto }) {
           {a.sourceId && <span className="font-mono"> · {a.sourceId}</span>}
         </p>
       </div>
+      {onPreview && (
+        <button
+          type="button"
+          onClick={onPreview}
+          aria-label={`Ver vista previa de ${titular}`}
+          title="Vista previa"
+          data-preview-boton={a.key}
+          className="ml-auto shrink-0 rounded p-1.5 text-text-3 hover:bg-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Eye className="h-4 w-4" aria-hidden />
+        </button>
+      )}
     </div>
   );
 }

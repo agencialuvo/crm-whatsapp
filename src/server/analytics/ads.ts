@@ -108,6 +108,7 @@ export async function adsBlock(
       ...base,
       ads: out.ads,
       total: out.total,
+      selectedCount: out.selectedCount,
       hierarchy,
       groupBy: query.group,
       groups: out.groups,

@@ -165,9 +165,18 @@ export function buildAdsPath(accountId: string, adIds: readonly string[]): strin
 
 /** 039 — Listado de TODA la cuenta (no solo de los anuncios que ya escribieron), 200 por página. */
 export const ADS_LIST_PAGE = 200;
-export function buildAdsListPath(accountId: string, after?: string | null): string {
-  const fields = "id,name,effective_status,adset{id,name},campaign{id,name}";
-  const base = `${accountId}/ads?fields=${enc(fields)}&limit=${ADS_LIST_PAGE}`;
+/** Con creativos la respuesta pesa mucho más: páginas más chicas para no topar con «reduce la cantidad de datos». */
+export const ADS_LIST_PAGE_CREATIVE = 100;
+export const CREATIVE_FIELDS = "creative{id,thumbnail_url,image_url,title,body}";
+export function buildAdsListPath(
+  accountId: string,
+  after?: string | null,
+  opts: { creative?: boolean } = {}
+): string {
+  const base_fields = "id,name,effective_status,adset{id,name},campaign{id,name}";
+  const fields = opts.creative ? `${base_fields},preview_shareable_link,${CREATIVE_FIELDS}` : base_fields;
+  const limit = opts.creative ? ADS_LIST_PAGE_CREATIVE : ADS_LIST_PAGE;
+  const base = `${accountId}/ads?fields=${enc(fields)}&limit=${limit}`;
   return after ? `${base}&after=${enc(after)}` : base;
 }
 
@@ -217,9 +226,21 @@ export function buildInsightsPath(
 
 /* ── Respuestas ─────────────────────────────────────────────────── */
 
+/** 040 — El creativo de un anuncio, tal como lo da `/ads?fields=creative{…}`. */
+export type CreativeNode = {
+  creativeId: string | null;
+  title: string | null;
+  body: string | null;
+  thumbnailUrl: string | null;
+  imageUrl: string | null;
+};
+
 export type AdNode = {
   /** 039 — `effective_status` de Meta; solo lo trae el listado de la cuenta. */
   effectiveStatus?: string | null;
+  /** 040 — Solo el listado de la cuenta (y solo si se pidió con creativos). */
+  creative?: CreativeNode | null;
+  previewLink?: string | null;
   adId: string;
   adName: string | null;
   adsetId: string | null;
@@ -258,6 +279,49 @@ function nextCursor(json: unknown): string | null {
   return cadena(paging.cursors.after);
 }
 
+/** Hosts desde los que Meta sirve enlaces de vista previa. */
+const HOSTS_DE_VISTA_PREVIA = ["facebook.com", "fb.me", "fb.com"];
+
+/**
+ * 040 — El enlace de vista previa viene de afuera y acaba en un `href`: solo `https` de un host de Meta, sin usuario ni
+ * puerto. Devuelve la URL normalizada o `null`. Pura, para probarla (y se vuelve a llamar al pintar).
+ */
+export function safePreviewLink(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > 2000) return null;
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || u.username || u.password || u.port !== "") return null;
+  const h = u.hostname.toLowerCase();
+  return HOSTS_DE_VISTA_PREVIA.some((d) => h === d || h.endsWith(`.${d}`)) ? u.toString() : null;
+}
+
+/** Una URL de imagen: cualquier `https` (la descarga la filtra por host de Meta); lo demás no. */
+function urlDeImagen(v: unknown): string | null {
+  if (typeof v !== "string" || v.length > 4000) return null;
+  try {
+    const u = new URL(v.trim());
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function leerCreativo(raw: unknown): CreativeNode | null {
+  if (!esObjeto(raw)) return null;
+  const c: CreativeNode = {
+    creativeId: cadena(raw.id, 128),
+    title: cadena(raw.title, 300),
+    body: cadena(raw.body, 2000),
+    thumbnailUrl: urlDeImagen(raw.thumbnail_url),
+    imageUrl: urlDeImagen(raw.image_url),
+  };
+  return c.creativeId || c.title || c.body || c.thumbnailUrl || c.imageUrl ? c : null;
+}
+
 export function parseAdsPage(json: unknown): { ads: AdNode[]; after: string | null } {
   const data = esObjeto(json) && Array.isArray(json.data) ? json.data : [];
   const ads: AdNode[] = [];
@@ -267,8 +331,11 @@ export function parseAdsPage(json: unknown): { ads: AdNode[]; after: string | nu
     if (!adId) continue;
     const adset = esObjeto(raw.adset) ? raw.adset : {};
     const campaign = esObjeto(raw.campaign) ? raw.campaign : {};
+    const creative = leerCreativo(raw.creative);
     ads.push({
       adId,
+      ...(creative ? { creative } : {}),
+      ...(raw.preview_shareable_link !== undefined ? { previewLink: safePreviewLink(raw.preview_shareable_link) } : {}),
       effectiveStatus: cadena(raw.effective_status, 40),
       adName: cadena(raw.name),
       adsetId: cadena(adset.id, 128),

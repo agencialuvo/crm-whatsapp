@@ -1,7 +1,9 @@
 /**
  * Self-test E2E de comportamiento — conector de la Marketing API de Meta (spec 038, tests/e2e/us-meta-ads.md) y su
  * ampliación 039: la cuenta publicitaria ENTERA (campañas pausadas, anuncios sin conversaciones, cuadre con la cuenta,
- * relleno por rango), la navegación Campaña › Conjunto › Anuncio por clic con migas de pan y Ajustes → Anuncios en limpio.
+ * relleno por rango), la navegación Campaña › Conjunto › Anuncio por clic con migas de pan y Ajustes → Anuncios en limpio;
+ * y la 040: casillas de selección que filtran al cambiar de pestaña, Total de lo marcado y vista previa de los creativos
+ * (miniatura real, modal con titular, texto, campaña, conjunto y enlace).
  *
  * Recorre lo que vería el dueño, por los caminos REALES: llegan mensajes de anuncios por el webhook (wa-mock), se
  * conecta la cuenta publicitaria (que prueba el token contra la Graph API del mock), la sincronización corre en
@@ -70,6 +72,7 @@ async function limpiar(org) {
   await sql`delete from meta_ad_spend where organization_id = ${org} and (ad_id like 'ad-e2e%' or ad_id like '%acct-%')`;
   await sql`delete from meta_ad where organization_id = ${org} and (ad_id like 'ad-e2e%' or ad_id like '%acct-%')`;
   await sql`delete from meta_account_spend where organization_id = ${org}`;
+  await sql`delete from media_asset where organization_id = ${org} and payload->>'origen' = 'catalogo'`;
   await sql`delete from meta_ads_settings where organization_id = ${org}`;
 }
 
@@ -231,6 +234,34 @@ try {
     ok("lo encargado queda anotado en la base (la lectura jamás llamó a Meta)", cfg?.f === hace(200), JSON.stringify(cfg));
   }
 
+  console.log("== 040: varios valores, llaves marcadas y creativos (API) ==");
+  const uni = await bloque("group=ad&campaignIds=camp-0,camp-1");
+  ok("campaignIds filtra por la UNIÓN de campañas", uni.ads.some((a) => a.key === AD(1)) && uni.ads.some((a) => a.key === AD(2)) && !uni.ads.some((a) => a.key === GONE));
+  const sel = await bloque("group=campaign&selected=camp-1,camp-0");
+  const todoC = await bloque("group=campaign");
+  const suma = (x) => x.groups.filter((g) => ["camp-1", "camp-0"].includes(g.key)).reduce((t, g) => ({ c: t.c + g.conversations, g: t.g + (g.spend ?? 0) }), { c: 0, g: 0 });
+  ok("`selected` hace que el Total sea el de las filas marcadas", sel.selectedCount === 2 && sel.total.conversations === suma(sel).c && Math.abs(sel.total.spend - suma(sel).g) < 0.011, JSON.stringify(sel.total));
+  ok("sin `selected` el Total es el de toda la vista", todoC.selectedCount === 0 && todoC.total.conversations > sel.total.conversations, `${todoC.total.conversations} vs ${sel.total.conversations}`);
+  const fantasma = await bloque("group=campaign&selected=no-existe");
+  ok("una selección que ya no existe no deja el Total en ceros", fantasma.selectedCount === 0 && fantasma.total.conversations === todoC.total.conversations);
+  r = await api("/api/analytics/ads?group=ad&campaignIds=" + "x,".repeat(101));
+  ok("más de 100 ids se rechaza (422)", r.status === 422, `status ${r.status}`);
+  const alfa = await bloque("group=ad&campaignIds=acct-camp-a");
+  const anuncioAlfa1 = alfa.ads.find((a) => a.key === "acct-ad-1");
+  ok("el anuncio sin conversaciones trae su creativo: titular, texto y enlace de Meta", anuncioAlfa1?.conversations === 0 && anuncioAlfa1?.creative?.title === "Corte + barba 2x1" && /paga uno/.test(anuncioAlfa1.creative.body ?? "") && anuncioAlfa1.creative.previewLink === "https://fb.me/mock-acct-ad-1", JSON.stringify(anuncioAlfa1?.creative));
+  ok("la imagen se copió al volumen (id de adjunto propio, no una URL de Meta)", /^ma_/.test(anuncioAlfa1?.creative?.assetId ?? "") && !JSON.stringify(anuncioAlfa1.creative).includes("http://") , JSON.stringify(anuncioAlfa1?.creative));
+  const img = await fetch(`${BASE}/api/media/${anuncioAlfa1?.creative?.assetId}`, { headers: { cookie } });
+  ok("la copia se sirve con sesión (200, image/png)", img.status === 200 && (img.headers.get("content-type") ?? "").startsWith("image/png"), `status ${img.status}`);
+  const sinSesion = await fetch(`${BASE}/api/media/${anuncioAlfa1?.creative?.assetId}`);
+  ok("y NO sin sesión", sinSesion.status === 401 || sinSesion.status === 403 || sinSesion.status === 404, `status ${sinSesion.status}`);
+  ok("un creativo dinámico (sin titular ni texto) conserva su imagen", !!alfa.ads.find((a) => a.key === "acct-ad-3")?.creative?.assetId && alfa.ads.find((a) => a.key === "acct-ad-3").creative.title === null);
+  if (sql) {
+    const [c2] = await sql`select creative_source_url as u, creative_asset_id as a from meta_ad where organization_id = ${org} and ad_id = 'acct-ad-2'`;
+    ok("una imagen que pasa del tope de descarga cae a la miniatura", !!c2?.a && /thumb-acct-ad-2/.test(c2?.u ?? ""), JSON.stringify(c2));
+    const [c5] = await sql`select creative_asset_id as a from meta_ad where organization_id = ${org} and ad_id = 'acct-ad-5'`;
+    ok("un anuncio sin creativo no genera copia", c5?.a === null);
+  }
+
   console.log("== La tarjeta del contacto ==");
   const lista = (await api("/api/conversations")).json.conversations;
   const conv = lista.find((c) => c.contact.name === `Ana ${RUN}`);
@@ -356,6 +387,134 @@ try {
   ok("el filtro por campaña deja solo los anuncios de esa campaña", (await page.locator(`tr[data-anuncio="${AD(1)}"]`).count()) === 0 && (await page.locator(`tr[data-anuncio="${AD(2)}"]`).count()) === 1);
   ok("y aparecen las migas con esa campaña", (await page.locator("[data-migas]").innerText()).includes("Campaña 0"));
 
+  // ── 040: casillas ──
+  console.log("== 040: casillas que filtran al cambiar de pestaña ==");
+  await page.goto(`${BASE}/resultados`, { waitUntil: "domcontentloaded" });
+  await cierraBienvenida(page);
+  await page.locator('[data-casilla="camp-1"]:visible').waitFor();
+  ok("cada fila de campaña lleva su casilla y la cabecera una maestra", (await page.locator('[data-casilla="todas"]:visible').count()) === 1);
+  ok("el Total dice «Total» mientras no haya nada marcado", ((await page.locator("[data-total-rotulo]").innerText()).trim()) === "Total" && (await page.locator("[data-pildora-seleccion]").count()) === 0);
+  const totalAntes = await page.locator("tfoot[data-total] td").nth(2).innerText();
+  await page.locator('[data-casilla="camp-1"]:visible').check();
+  await page.locator('[data-casilla="camp-0"]:visible').check();
+  await page.locator("[data-pildora-seleccion]").waitFor();
+  ok("la píldora dice «2 campañas seleccionadas»", (await page.locator("[data-pildora-seleccion]").innerText()).includes("2 campañas seleccionadas"));
+  await page.locator("[data-total-rotulo]", { hasText: "2 seleccionadas" }).waitFor();
+  const totalDespues = await page.locator("tfoot[data-total] td").nth(2).innerText();
+  ok("el Total se recalcula con lo marcado y su rótulo lo dice", totalAntes !== totalDespues && Number(totalDespues) === sel.total.conversations, `${totalAntes} → ${totalDespues} (API ${sel.total.conversations})`);
+  await quitaDev(page);
+  await page.locator("#origen").screenshot({ path: `${SALIDA}/seleccion-campanas.png` });
+
+  await page.getByRole("button", { name: "Conjunto", exact: true }).click();
+  await page.locator("[data-pildora-filtro]").waitFor();
+  await page.locator('[data-abrir="adset-11"]:visible').waitFor();
+  ok("al pasar a Conjunto la tabla muestra SOLO los conjuntos de las campañas marcadas", (await page.locator('[data-abrir="acct-set-3"]:visible').count()) === 0 && (await page.locator('[data-abrir="adset-11"]:visible').count()) === 1);
+  ok("y una píldora dice de dónde viene el filtro", (await page.locator("[data-pildora-filtro]").innerText()).includes("Conjuntos de 2 campañas"));
+  await page.getByRole("button", { name: "Campaña", exact: true }).click();
+  await page.locator('[data-casilla="camp-1"]:visible').waitFor();
+  ok("volver a Campaña CONSERVA las casillas marcadas", (await page.locator('[data-casilla="camp-1"]:visible').isChecked()) && (await page.locator('[data-casilla="camp-0"]:visible').isChecked()));
+  await page.getByRole("button", { name: "Conjunto", exact: true }).click();
+  await page.locator('[data-abrir="adset-11"]:visible').waitFor();
+
+  // La casilla maestra marca todas las filas visibles y las desmarca.
+  await page.locator('[data-casilla="todas"]:visible').check();
+  const nFilas = await page.locator("tbody [data-casilla]:visible").count();
+  await page.locator("[data-pildora-seleccion]", { hasText: `${nFilas} conjuntos seleccionados` }).waitFor();
+  ok("la casilla maestra marca todos los conjuntos visibles", nFilas >= 2 && (await page.locator("tbody [data-casilla]:visible:checked").count()) === nFilas);
+  await page.locator('[data-casilla="todas"]:visible').uncheck();
+  await page.locator("[data-pildora-seleccion]").waitFor({ state: "detached" });
+  ok("y los desmarca", (await page.locator("tbody [data-casilla]:visible:checked").count()) === 0);
+
+  await page.locator('[data-casilla="adset-11"]:visible').check();
+  await page.getByRole("button", { name: "Anuncio", exact: true }).click();
+  await page.locator(`tr[data-anuncio="${AD(1)}"]`).waitFor();
+  ok("marcar un conjunto y pasar a Anuncio deja solo sus anuncios", (await page.locator(`tr[data-anuncio="${AD(1)}"]`).count()) === 1 && (await page.locator(`tr[data-anuncio="${AD(2)}"]`).count()) === 0);
+  ok("la píldora dice «Anuncios de 1 conjunto»", (await page.locator("[data-pildora-filtro]").innerText()).includes("Anuncios de 1 conjunto"));
+  await page.locator("[data-pildora-filtro]").getByRole("button", { name: "Quitar" }).click();
+  await page.locator(`tr[data-anuncio="${AD(2)}"]`).waitFor();
+  ok("«Quitar» deja los anuncios de las campañas marcadas (vuelve a salir el de la otra campaña)", (await page.locator(`tr[data-anuncio="${AD(1)}"]`).count()) === 1 && (await page.locator(`tr[data-anuncio="${AD(2)}"]`).count()) === 1);
+
+  // Marcar anuncios cambia solo el Total.
+  await page.locator(`tr[data-anuncio="${AD(1)}"] [data-casilla]`).check();
+  await page.locator("[data-total-rotulo]", { hasText: "1 seleccionado" }).waitFor();
+  const filasAntes = await page.locator("tbody tr[data-anuncio]:visible").count();
+  ok("marcar un anuncio cambia el Total pero no las filas", filasAntes >= 2 && Number(await page.locator("tfoot[data-total] td").nth(2).innerText()) === 2);
+  await page.locator("[data-pildora-seleccion]").getByRole("button", { name: "Limpiar" }).click();
+  await page.locator("[data-total-rotulo]", { hasText: /^Total$/ }).waitFor();
+  ok("«Limpiar» quita las casillas y el Total vuelve al de toda la vista", (await page.locator("[data-pildora-seleccion]").count()) === 0);
+
+  // ── 040: creativos ──
+  console.log("== 040: creativos de los anuncios ==");
+  await page.goto(`${BASE}/resultados`, { waitUntil: "domcontentloaded" });
+  await cierraBienvenida(page);
+  await page.locator('[data-casilla="acct-camp-a"]:visible').check();
+  await page.getByRole("button", { name: "Anuncio", exact: true }).click();
+  await page.locator('tr[data-anuncio="acct-ad-1"]').waitFor();
+  ok("el anuncio sin conversaciones muestra la MINIATURA real, no el megáfono", (await page.locator('tr[data-anuncio="acct-ad-1"] img[src^="/api/media/"]').count()) === 1);
+  const cargada = await page.locator('tr[data-anuncio="acct-ad-1"] img[src^="/api/media/"]').evaluate((el) => new Promise((res) => (el.complete ? res(el.naturalWidth > 0) : (el.onload = () => res(true), el.onerror = () => res(false)))));
+  ok("y la imagen carga de verdad (la copia local se sirve)", cargada === true);
+  ok("un anuncio borrado en Meta (sin creativo) conserva el megáfono", (await page.locator('tr[data-anuncio="gone-acct-9"] img').count()) === 0 && (await page.locator('tr[data-anuncio="gone-acct-9"]').count()) === 1);
+  await quitaDev(page);
+  await page.locator("#origen").screenshot({ path: `${SALIDA}/creativos-en-la-tabla.png` });
+
+  await page.locator('[data-preview="acct-ad-1"]:visible').click();
+  await page.locator("[data-preview-anuncio]").waitFor();
+  ok("clic en la miniatura abre el modal con el TITULAR del creativo", (await page.locator("[data-preview-titular]").innerText()) === "Corte + barba 2x1");
+  ok("el TEXTO principal", (await page.locator("[data-preview-texto]").innerText()).includes("llega con un amigo y paga uno"));
+  ok("la CAMPAÑA y el CONJUNTO", (await page.locator("[data-preview-campana]").innerText()) === "Campaña Alfa" && (await page.locator("[data-preview-conjunto]").innerText()) === "Conjunto Alfa 1");
+  ok("la imagen en grande se carga", await page.locator("[data-preview-imagen]").evaluate((el) => new Promise((res) => (el.complete ? res(el.naturalWidth > 0) : (el.onload = () => res(true), el.onerror = () => res(false))))));
+  const enlace = page.locator("[data-preview-enlace]");
+  ok("el enlace a la vista previa de Meta abre fuera, sin darle control a la página", (await enlace.getAttribute("href")) === "https://fb.me/mock-acct-ad-1" && (await enlace.getAttribute("target")) === "_blank" && /noopener/.test((await enlace.getAttribute("rel")) ?? ""));
+  await quitaDev(page);
+  await page.screenshot({ path: `${SALIDA}/creativo-modal.png` });
+  await page.keyboard.press("Escape");
+  await page.locator("[data-preview-anuncio]").waitFor({ state: "detached" });
+  ok("Escape cierra el modal", true);
+  await page.locator('[data-preview-boton="acct-ad-1"]:visible').click();
+  await page.locator("[data-preview-anuncio]").waitFor();
+  await page.getByRole("dialog").getByRole("button", { name: /cerrar/i }).first().click();
+  await page.locator("[data-preview-anuncio]").waitFor({ state: "detached" });
+  ok("el icono de ojo también abre la vista previa, y la X la cierra", true);
+
+  await page.locator('[data-preview-boton="acct-ad-3"]:visible').click();
+  await page.locator("[data-preview-anuncio]").waitFor();
+  ok("un creativo dinámico (sin titular ni texto) enseña la imagen y no inventa textos", (await page.locator("[data-preview-imagen]").count()) === 1 && (await page.locator("[data-preview-titular]").count()) === 0 && (await page.locator("[data-preview-texto]").count()) === 0);
+  await page.keyboard.press("Escape");
+
+  await page.locator('[data-preview-boton="gone-acct-9"]:visible').click();
+  await page.locator("[data-preview-anuncio]").waitFor();
+  ok("sin imagen ni textos el modal lo explica en vez de abrir vacío", (await page.locator("[data-preview-vacio]").count()) === 1 && (await page.locator("[data-preview-sin-imagen]").count()) === 1 && (await page.locator("[data-preview-enlace]").count()) === 0);
+  await page.keyboard.press("Escape");
+
+  // Modo oscuro y teléfono.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.locator('[data-preview="acct-ad-1"]:visible').click();
+  await page.locator("[data-preview-anuncio]").waitFor();
+  await quitaDev(page);
+  await page.screenshot({ path: `${SALIDA}/creativo-modal-oscuro.png` });
+  await page.keyboard.press("Escape");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${BASE}/resultados`, { waitUntil: "domcontentloaded" });
+  await cierraBienvenida(page);
+  await page.locator('[data-casilla="camp-1"]:visible').waitFor();
+  ok("en el teléfono cada tarjeta lleva su casilla y hay «Marcar todo»", (await page.getByRole("button", { name: "Marcar todo" }).count()) === 1);
+  await page.getByRole("button", { name: "Marcar todo" }).click();
+  await page.locator("[data-pildora-seleccion]").waitFor();
+  ok("«Marcar todo» marca las tarjetas visibles", (await page.locator("li [data-casilla]:visible:checked").count()) >= 2);
+  ok("sin desborde horizontal con casillas y píldoras", !(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)));
+  await page.locator('[data-casilla="acct-camp-a"]:visible').check();
+  await page.getByRole("button", { name: "Anuncio", exact: true }).click();
+  await page.locator('[data-preview="acct-ad-1"]:visible').waitFor();
+  await page.locator('[data-preview="acct-ad-1"]:visible').click();
+  await page.locator("[data-preview-anuncio]").waitFor();
+  ok("el modal cabe en el teléfono", await page.locator("[data-preview-anuncio]").evaluate((el) => el.getBoundingClientRect().right <= window.innerWidth + 1));
+  await quitaDev(page);
+  await page.screenshot({ path: `${SALIDA}/creativo-modal-movil.png` });
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   // Móvil: tarjetas con gasto a la vista y sin desborde.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${BASE}/resultados`, { waitUntil: "domcontentloaded" });
@@ -450,6 +609,17 @@ try {
   await page.screenshot({ path: `${SALIDA}/ajustes-meta-ads-movil.png`, fullPage: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   await ctx.close();
+
+  console.log("== 040: Meta rechaza el listado con creativos ==");
+  r = await api("/api/settings/meta-ads", { method: "PUT", body: JSON.stringify({ adAccountId: CUENTA, token: "tok-ads-ok-sincreativo" }) });
+  ok("se reconecta con una cuenta cuyo listado con creativos falla", r.ok);
+  const aviso = await espera(async () => {
+    const v = (await api("/api/settings/meta-ads")).json.metaAds;
+    return /creativos/.test(v?.lastError ?? "") ? v : null;
+  }, 60000);
+  ok("Ajustes lo explica (los creativos se reintentan) y el conector sigue conectado", !!aviso && aviso.status === "connected", JSON.stringify(aviso?.lastError));
+  b = await bloque("group=campaign");
+  ok("el catálogo y el gasto SIGUEN al día sin los creativos", !!b.groups?.find((g) => g.name === "Campaña Alfa" && g.spend > 0));
 
   console.log("== Cuando la cuenta gastó más de lo que se puede desglosar ==");
   r = await api("/api/settings/meta-ads", { method: "PUT", body: JSON.stringify({ adAccountId: CUENTA, token: "tok-ads-ok-descuadre" }) });

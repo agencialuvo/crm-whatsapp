@@ -206,7 +206,18 @@ export type AdRowDto = {
   bookings?: number | null;
   /** 039 — Estado del anuncio en Meta (activo, pausado, archivado); `null` si no se conoce. */
   status?: AdStatus;
+  /** 040 — El creativo del catálogo de Meta (imagen copiada, titular, texto, enlace); `null` si no hay nada. */
+  creative?: AdCreativeDto | null;
 } & Partial<SpendDto>;
+
+/** 040 — Lo que se sabe del creativo de un anuncio. La imagen es una copia local: `/api/media/{assetId}`. */
+export type AdCreativeDto = {
+  assetId: string | null;
+  title: string | null;
+  body: string | null;
+  /** `preview_shareable_link` ya validado (https de un host de Meta). */
+  previewLink: string | null;
+};
 
 /** 039 — Estado simplificado de un anuncio, de su `effective_status` en Meta. */
 export type AdStatus = "active" | "paused" | "archived" | null;
@@ -289,6 +300,8 @@ export type AdsBlockDto = {
   groups?: AdGroupRowDto[];
   /** 039 — Total de lo filtrado y cuántas filas hay en total (la lista muestra las primeras). */
   total?: AdTotalDto;
+  /** 040 — Cuántas de las filas marcadas (`selected`) encontró el servidor; el Total las usa si es > 0. */
+  selectedCount?: number;
   /** Opciones de los filtros. */
   campaigns?: { id: string; name: string }[];
   adsets?: { id: string; name: string; campaignId: string | null }[];
