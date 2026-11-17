@@ -1,23 +1,12 @@
 import { apiError, withAuth } from "@/lib/api";
 import { getConversation } from "@/server/inbox/queries";
+import { SEND_ERROR_STATUS } from "@/server/inbox/send-status";
 import { SendError, sendMediaMessage } from "@/server/inbox/send";
 import { MediaValidationError } from "@/server/whatsapp/media";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
-
-const SEND_ERROR_STATUS: Record<SendError["code"], number> = {
-  sandbox_violation: 403,
-  not_connected: 409,
-  reconnect_required: 409,
-  window_closed: 409,
-  message_limit: 409,
-  text_too_long: 422,
-  meta_error: 422,
-  meta_unavailable: 503,
-  upload_failed: 502,
-};
 
 /**
  * 008 — Envía un adjunto de archivo por la conversación (multipart):

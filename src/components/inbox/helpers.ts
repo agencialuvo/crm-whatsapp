@@ -74,3 +74,21 @@ export function previewText(preview: string | null): string {
   if (!preview) return "";
   return MEDIA_LABELS[preview] ? `📎 ${MEDIA_LABELS[preview]}` : preview;
 }
+
+const VARIABLE = /\{\{\s*(\d+)\s*\}\}/g;
+
+/**
+ * Plantilla rápida → texto del compositor. Solo {{1}} tiene un valor conocido
+ * (el nombre); el resto queda escrito como `{{n}}` para que el operador lo
+ * complete, y `unresolvedVariables` impide enviarlo así.
+ */
+export function fillQuickTemplate(body: string, firstName: string): string {
+  return body.replace(VARIABLE, (m, n: string) =>
+    n === "1" && firstName ? firstName : `{{${n}}}`
+  );
+}
+
+/** Variables `{{n}}` que siguen en el texto, sin repetir y en orden. */
+export function unresolvedVariables(text: string): string[] {
+  return [...new Set([...text.matchAll(VARIABLE)].map((m) => `{{${m[1]}}}`))];
+}
