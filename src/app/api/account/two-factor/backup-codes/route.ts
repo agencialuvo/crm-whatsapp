@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withAccountAuth } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyCurrentPassword } from "@/server/auth/password-change";
 import { regenerateBackupCodes } from "@/server/auth/two-factor";
@@ -13,7 +13,7 @@ const GUESS_LIMIT = { windowMs: 10 * 60 * 1000, max: 8 };
  * Mi perfil → códigos de respaldo nuevos (los anteriores dejan de valer). Pide la
  * contraseña actual y solo existe con el 2FA activo. Los devuelve UNA sola vez.
  */
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withAccountAuth(async (session, req: Request) => {
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
   if (!checkRateLimit(`pwd-guess:${session.userId}`, GUESS_LIMIT).allowed) {

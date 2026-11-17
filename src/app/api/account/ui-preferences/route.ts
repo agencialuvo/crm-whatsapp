@@ -1,4 +1,4 @@
-import { parseBody, withAuth } from "@/lib/api";
+import { parseBody, withAccountAuth } from "@/lib/api";
 import { setTablePageSizeInputSchema } from "@/lib/salon/cash-shifts";
 import { salonErrorResponse } from "@/server/business/http";
 import { getTablePageSizes, setTablePageSize } from "@/server/business/ui-preferences";
@@ -6,12 +6,12 @@ import { getTablePageSizes, setTablePageSize } from "@/server/business/ui-prefer
 export const dynamic = "force-dynamic";
 
 /** Mis filas por página guardadas, por vista. Es de quien inició sesión, sea cual sea su rol. */
-export const GET = withAuth(async (session) => {
+export const GET = withAccountAuth(async (session) => {
   return Response.json({ tablePageSizes: await getTablePageSizes(session.organizationId, session.userId) });
 });
 
 /** Guarda las filas por página de UNA vista sin tocar las demás. */
-export const PUT = withAuth(async (session, req: Request) => {
+export const PUT = withAccountAuth(async (session, req: Request) => {
   const body = await parseBody(req, setTablePageSizeInputSchema);
   if (!body.ok) return body.response;
   try {

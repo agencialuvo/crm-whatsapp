@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withAccountAuth } from "@/lib/api";
 import { consumeOtp } from "@/server/auth/otp";
 import { activateTwoFactor, isTwoFactorEnabled } from "@/server/auth/two-factor";
 
@@ -19,7 +19,7 @@ const CODE_ERRORS = {
  * llega— enciende `two_factor_enabled` y devuelve los códigos de respaldo, UNA sola vez
  * (en la base solo queda su hash).
  */
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withAccountAuth(async (session, req: Request) => {
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
   if (await isTwoFactorEnabled(session.userId)) {

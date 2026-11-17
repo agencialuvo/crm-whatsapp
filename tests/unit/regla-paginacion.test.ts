@@ -20,6 +20,7 @@ const TABLAS = [
   "src/components/automatizaciones/automations-client.tsx",
   "src/components/automatizaciones/history-panel.tsx",
   "src/components/settings/ad-flows-client.tsx",
+  "src/components/super-admin/organizations-table.tsx",
 ];
 
 const leer = (f: string) => readFileSync(join(process.cwd(), f), "utf8");

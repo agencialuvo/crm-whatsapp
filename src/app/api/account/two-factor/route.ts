@@ -1,4 +1,4 @@
-import { withAuth } from "@/lib/api";
+import { withAccountAuth } from "@/lib/api";
 import { changeCodeAvailable } from "@/server/auth/password-change";
 import { backupCodesRemaining, isTwoFactorEnabled } from "@/server/auth/two-factor";
 
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * `enable/start` + `enable/confirm` (con código de prueba al correo), `disable` y
  * `backup-codes`; todas piden la contraseña actual.
  */
-export const GET = withAuth(async (session) => {
+export const GET = withAccountAuth(async (session) => {
   return Response.json({
     enabled: await isTwoFactorEnabled(session.userId),
     emailAvailable: changeCodeAvailable(),

@@ -3,6 +3,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { pickInitialPlan } from "@/server/business/plan-selection";
+import { findDemoPlan, startFallbackSubscription, startTrial } from "@/server/saas/subscription";
 
 /**
  * Etapas sembradas del pipeline (US2) para los negocios NUEVOS. Los existentes conservan las suyas: nada del
@@ -59,24 +60,17 @@ async function seedOrganization(
     (await findCategory(categoryKey)) ??
     (categoryKey === DEFAULT_CATEGORY_KEY ? undefined : await findCategory(DEFAULT_CATEGORY_KEY));
 
-  // 4. SaaS: plan inicial = el más barato que incluye todos los módulos del sector. Así el menú que
-  // va a ver el negocio nuevo no aparece bloqueado desde el primer minuto.
-  const plans = await tx.select().from(schema.plan).where(eq(schema.plan.active, true));
-  const initialPlan = pickInitialPlan(plans, category?.defaultModules ?? []);
-
-  if (initialPlan) {
-    const now = new Date();
-    const periodEnd = new Date(now);
-    periodEnd.setDate(periodEnd.getDate() + 30); // 30 días de periodo inicial / trial
-
-    await tx.insert(schema.subscription).values({
-      id: newId("subscription"),
-      organizationId: orgId,
-      planId: initialPlan.id,
-      status: "trialing",
-      currentPeriodStart: now,
-      currentPeriodEnd: periodEnd,
-    });
+  // 4. SaaS (045): TODA organización nueva nace en la Demo, una prueba de 14 días con todo incluido
+  // (`startTrial` también deja el evento `trial_started`, la base de la conversión). Si el catálogo aún no
+  // tiene la Demo, cae al comportamiento anterior —el más barato que cubre el sector— para no dejar a nadie
+  // sin suscripción.
+  const demo = await findDemoPlan(tx);
+  if (demo) {
+    await startTrial(tx, orgId, demo);
+  } else {
+    const plans = await tx.select().from(schema.plan).where(eq(schema.plan.active, true));
+    const initialPlan = pickInitialPlan(plans, category?.defaultModules ?? []);
+    if (initialPlan) await startFallbackSubscription(tx, orgId, initialPlan);
   }
 
   // 5. SaaS: perfil de negocio (sector)

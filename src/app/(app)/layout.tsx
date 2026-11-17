@@ -10,6 +10,8 @@ import { salonEnabled } from "@/server/business/flag";
 import { automationsEnabled } from "@/server/automation/flag";
 import { avisoIaDe } from "@/server/ai/aviso";
 import { AvisoIaBanner } from "@/components/avisos/aviso-ia";
+import { AvisoSuscripcion } from "@/components/avisos/aviso-suscripcion";
+import { enforcementEnabled, getSubscriptionAccess } from "@/server/saas/enforcement";
 import { TimezoneDetector } from "@/components/onboarding/timezone-detector";
 import { isTimezoneConfigured } from "@/server/timezone";
 import { SectorSetupModal } from "@/components/onboarding/sector-setup-modal";
@@ -21,6 +23,10 @@ export default async function AppLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const session = await getSessionOrNull();
   if (!session) redirect("/iniciar-sesion");
+  // 045: con `SAAS_ENFORCE` encendido, una suscripción vencida, suspendida o cancelada no entra a la app. Apagado
+  // (lo normal) solo se muestra el aviso de la prueba. Un fallo de lectura jamás tumba la app.
+  const suscripcion = await getSubscriptionAccess(session.organizationId).catch(() => null);
+  if (suscripcion?.blocked && enforcementEnabled()) redirect("/suscripcion-inactiva");
   const branding = await getBranding(session.organizationId);
   const authSession = await getAuth().api.getSession({
     headers: await headers(),
@@ -58,7 +64,12 @@ export default async function AppLayout({
         agenda={agendaEnabled()}
         salon={salonEnabled()}
         automations={automationsEnabled()}
-        aviso={<AvisoIaBanner aviso={aviso} />}
+        aviso={
+          <>
+            <AvisoSuscripcion access={suscripcion} />
+            <AvisoIaBanner aviso={aviso} />
+          </>
+        }
       >
         {children}
       </AppShell>

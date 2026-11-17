@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withAccountAuth } from "@/lib/api";
 import { getAuth } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
@@ -23,7 +23,7 @@ const GUESS_LIMIT = { windowMs: 10 * 60 * 1000, max: 8 };
  * manda un código de un solo uso al correo de la cuenta. El segundo paso
  * (`POST /api/account/password`) lo exige para aplicar el cambio.
  */
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withAccountAuth(async (session, req: Request) => {
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
   if (!changeCodeAvailable()) {

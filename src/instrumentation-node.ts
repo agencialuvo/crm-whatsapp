@@ -173,3 +173,16 @@ export function resumeOutboxSweeper(): void {
     })
     .catch((err) => console.error("[boot] no se pudo iniciar la barredera de envíos:", err));
 }
+
+/**
+ * 045 — El vencimiento de pruebas (`trialing` de un plan de prueba → `past_due`). Del núcleo: corre siempre.
+ * Import dinámico y a prueba de fallos: nunca tumba el arranque.
+ */
+export function resumeSubscriptionSweeper(): void {
+  void import("@/server/saas/subscription-sweeper")
+    .then(({ startSubscriptionSweeper, tickSubscriptions }) => {
+      startSubscriptionSweeper();
+      void tickSubscriptions();
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar el vencimiento de pruebas:", err));
+}

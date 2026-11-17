@@ -28,6 +28,11 @@ const OWNERS = [
   { email: "automations-e2e@vocero.test", name: "Dueño A" },
   { email: "automations-e2e-b@vocero.test", name: "Dueño B" },
 ];
+/** 045 — Super Admin de prueba: sin organización. */
+const SUPER_ADMINS = [
+  { email: "automations-sa@vocero.test", name: "Super Admin A" },
+  { email: "automations-sa2@vocero.test", name: "Super Admin B" },
+];
 /** Lo único que se puede borrar: los dueños de arriba y los miembros que crea el E2E. */
 const SAFE_PATTERN = "automations-%@vocero.test";
 
@@ -77,6 +82,26 @@ try {
       // Verifica el correo y crea SU PROPIO negocio como propietario (lo mismo que cierra un alta real).
       await completeSignup({ id, name: o.name, email: o.email });
       console.log(`  creada     ${o.email}`);
+    }
+    // 045: dos Super Admin de prueba SIN organización (cuentas de operador puras). El E2E inicia sesión con ellos y
+    // luego enciende `two_factor_enabled` por SQL en uno de los dos (el inicio de sesión con 2FA pide un código del
+    // correo, que un guion no puede leer): así prueba tanto el acceso como el 403 `two_factor_required`.
+    for (const sa of SUPER_ADMINS) {
+      const [existing] = await db.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.email, sa.email)).limit(1);
+      if (existing) {
+        console.log(`  ya existe  ${sa.email}`);
+        continue;
+      }
+      const id = randomBytes(16).toString("hex");
+      await db.insert(schema.user).values({ id, name: sa.name, email: sa.email, emailVerified: true, isSuperAdmin: true });
+      await db.insert(schema.account).values({
+        id: randomBytes(16).toString("hex"),
+        accountId: id,
+        providerId: "credential",
+        userId: id,
+        password: await hashPassword(PASSWORD),
+      });
+      console.log(`  creada     ${sa.email}  (Super Admin, sin organización)`);
     }
   } else {
     const users = await db.select({ id: schema.user.id, email: schema.user.email }).from(schema.user).where(like(schema.user.email, SAFE_PATTERN));

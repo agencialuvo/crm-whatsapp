@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import { z } from "zod";
 import { APIError } from "better-auth/api";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withAccountAuth } from "@/lib/api";
 import { getAuth, runInternalPasswordChange } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
@@ -40,7 +40,7 @@ const CODE_ERRORS = {
  * instancia puede enviar correo, el código de un solo uso. Al terminar cierra
  * las demás sesiones y avisa por correo a la persona y a los propietarios.
  */
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withAccountAuth(async (session, req: Request) => {
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
   const { currentPassword, newPassword, code } = body.data;

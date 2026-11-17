@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requireSession, UnauthorizedError, type SessionContext } from "@/lib/auth/session";
+import { subscriptionInactive } from "@/server/saas/enforcement";
 
 /** Respuesta de error estándar de la API interna (contrato api.md). */
 export function apiError(
@@ -15,7 +16,8 @@ export function apiError(
  * captura errores no controlados (500 sin stack) y deja pasar Response.
  */
 export function withAuth<Args extends unknown[]>(
-  handler: (session: SessionContext, ...args: Args) => Promise<Response>
+  handler: (session: SessionContext, ...args: Args) => Promise<Response>,
+  opts: { allowInactive?: boolean } = {}
 ): (...args: Args) => Promise<Response> {
   return async (...args: Args) => {
     let session: SessionContext;
@@ -27,6 +29,14 @@ export function withAuth<Args extends unknown[]>(
       }
       throw err;
     }
+    // 045: con `SAAS_ENFORCE` encendido, una organización con la prueba vencida, suspendida o cancelada no
+    // usa la API del tenant (la app la manda a `/suscripcion-inactiva`). Apagado (lo normal): no cuesta nada.
+    if (!opts.allowInactive) {
+      const inactive = await subscriptionInactive(session.organizationId).catch(() => null);
+      if (inactive) {
+        return apiError(403, "SUBSCRIPTION_INACTIVE", "Tu suscripción no está activa. Contacta a quien administra la plataforma.");
+      }
+    }
     try {
       return await handler(session, ...args);
     } catch (err) {
@@ -34,6 +44,16 @@ export function withAuth<Args extends unknown[]>(
       return apiError(500, "internal", "Error interno");
     }
   };
+}
+
+/**
+ * Para las rutas de la CUENTA (contraseña, segundo factor, preferencias): una persona con la suscripción vencida
+ * sigue pudiendo cuidar su propia cuenta. Es `withAuth` sin el corte por suscripción.
+ */
+export function withAccountAuth<Args extends unknown[]>(
+  handler: (session: SessionContext, ...args: Args) => Promise<Response>
+): (...args: Args) => Promise<Response> {
+  return withAuth(handler, { allowInactive: true });
 }
 
 /** Parsea el body JSON con un esquema Zod; inválido → Response 422. */

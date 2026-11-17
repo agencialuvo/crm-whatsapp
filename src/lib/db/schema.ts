@@ -42,6 +42,12 @@ export const user = pgTable("user", {
    * de cada código (nunca el código). Cada uno vale una sola vez; al usarlo se quita.
    */
   twoFactorBackupCodes: text("two_factor_backup_codes"),
+  /**
+   * 045 — Operador de la PLATAFORMA (no de un negocio): ve el panel `/super-admin`. Better Auth no declara
+   * este campo, así que NINGUNA de sus rutas puede escribirlo (no hay auto-promoción por HTTP): solo se
+   * concede por backend (`pnpm superadmin grant`). Se lee de la base en cada petición, nunca de la sesión.
+   */
+  isSuperAdmin: boolean("is_super_admin").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -641,10 +647,16 @@ export const plan = pgTable(
     }>().notNull(),
 
     active: boolean("active").notNull().default(true),
+    /** 045 — Días de prueba gratis. Un plan con `trialDays` es un plan de PRUEBA (Demo); null = plan de pago. */
+    trialDays: integer("trial_days"),
+    /** 045 — Moneda del precio. El MRR solo suma los planes de una misma moneda. */
+    currency: text("currency").notNull().default("PEN"),
+    sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
     check("plan_price_nonneg", sql`${t.priceMonthlyCents} >= 0`),
+    check("plan_trial_days_nonneg", sql`${t.trialDays} is null or ${t.trialDays} >= 0`),
   ]
 );
 
@@ -669,13 +681,98 @@ export const subscription = pgTable(
     currentPeriodStart: timestamp("current_period_start").notNull().defaultNow(),
     currentPeriodEnd: timestamp("current_period_end").notNull(),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
-    
+
+    /** 045 — Cuándo empezó la prueba y cuándo se convirtió a pago (null mientras no). */
+    trialStartedAt: timestamp("trial_started_at"),
+    convertedAt: timestamp("converted_at"),
+    /** 045 — Por qué está en este estado: `trial_ended` (la prueba venció), `payment_failed`, `manual`… */
+    statusReason: text("status_reason"),
+    statusChangedAt: timestamp("status_changed_at"),
+
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("subscription_org_uq").on(t.organizationId),
     index("subscription_status_idx").on(t.status),
+  ]
+);
+
+/**
+ * 045 — Historia de las suscripciones: append-only. Sin ella el CRM solo sabe en qué estado está cada
+ * organización HOY, y «cuántas pruebas convirtieron» no tiene respuesta (un `canceled` de hoy no recuerda que
+ * fue `active`). Mismo principio que `lead_stage_event`: la ÚNICA puerta que escribe `subscription.status`,
+ * `plan_id` y los periodos (y por tanto esta tabla) es `src/server/saas/subscription.ts`; una prueba de
+ * vigilancia lo comprueba.
+ */
+export const subscriptionEvent = pgTable(
+  "subscription_event",
+  {
+    id: text("id").primaryKey(), // prefix: 'sev'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    type: text("type", {
+      enum: [
+        "trial_started",
+        "converted",
+        "reactivated",
+        "plan_changed",
+        "status_changed",
+        "trial_extended",
+        "period_changed",
+        "expired",
+        "assigned",
+      ],
+    }).notNull(),
+    fromStatus: text("from_status"),
+    toStatus: text("to_status"),
+    /** Snapshots del plan (id y nombre): sobreviven a que un plan se retire o se renombre. */
+    fromPlanId: text("from_plan_id"),
+    fromPlanName: text("from_plan_name"),
+    toPlanId: text("to_plan_id"),
+    toPlanName: text("to_plan_name"),
+    periodEndBefore: timestamp("period_end_before"),
+    periodEndAfter: timestamp("period_end_after"),
+    /** `signup` (el alta) · `admin` (el panel) · `system` (el temporizador) · `payment` (el cobro, paso 2). */
+    source: text("source", { enum: ["signup", "admin", "system", "payment"] }).notNull(),
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    reason: text("reason"),
+    /** true = fila SEMBRADA en la migración, no observada: cuenta en los totales pero no en la conversión. */
+    approximate: boolean("approximate").notNull().default(false),
+    occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("sev_org_occurred_idx").on(t.organizationId, t.occurredAt),
+    index("sev_type_occurred_idx").on(t.type, t.occurredAt),
+  ]
+);
+
+/**
+ * 045 — Rastro de todo lo que hace un Super Admin sobre otras organizaciones (y de quién recibe o pierde la
+ * bandera). Append-only. `target_organization_id` NO cascadea: la auditoría sobrevive a que se elimine el
+ * negocio (por eso guarda también su nombre).
+ */
+export const superAdminAudit = pgTable(
+  "super_admin_audit",
+  {
+    id: text("id").primaryKey(), // prefix: 'saa'
+    /** null = lo hizo el operador del servidor por línea de comandos (grant/revoke). */
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    actorEmail: text("actor_email"),
+    action: text("action").notNull(),
+    targetOrganizationId: text("target_organization_id"),
+    targetOrganizationName: text("target_organization_name"),
+    targetUserId: text("target_user_id"),
+    before: jsonb("before").$type<Record<string, unknown> | null>(),
+    after: jsonb("after").$type<Record<string, unknown> | null>(),
+    reason: text("reason"),
+    ip: text("ip"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("saa_created_idx").on(t.createdAt),
+    index("saa_target_org_idx").on(t.targetOrganizationId, t.createdAt),
   ]
 );
 

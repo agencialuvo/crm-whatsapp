@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withAccountAuth } from "@/lib/api";
 import { getAuth } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { changeCodeAvailable, verifyCurrentPassword } from "@/server/auth/password-change";
@@ -24,7 +24,7 @@ function maskEmail(email: string): string {
  * escribir ese código. Así quien tenga el correo mal o un SMTP caído se entera ahora
  * y no cuando ya no pueda entrar.
  */
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withAccountAuth(async (session, req: Request) => {
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
   if (!changeCodeAvailable()) {

@@ -70,39 +70,86 @@ export const BASE_CATEGORIES: readonly CategoryInsert[] = [
 ];
 
 /**
- * Planes base. El plan inicial de un negocio nuevo lo elige `pickInitialPlan` según los
- * `defaultModules` de su sector: el más barato que los cubre todos. Por eso hay un plan que
- * cubre el sector `salon` (agenda + salón + fidelización + finanzas) además del Básico.
+ * Planes base de la plataforma SaaS (045). Precios en CENTAVOS de sol (PEN).
+ *
+ * - **Demo**: la prueba de 14 días con la que nace TODA organización nueva. Incluye todo (los módulos y canales
+ *   de Pro): la prueba tiene que enseñar el producto completo, y lo único que la limita es el tiempo.
+ * - **Emprendedor / Pro / Enterprise**: los tres planes de pago.
+ *
+ * Los límites (`maxStaff`, `maxMonthlyAiTurns`) hoy solo se DECLARAN: ninguna parte del sistema los aplica
+ * todavía (`-1` = ilimitado). Los antiguos «Básico» y «Salón» ya no se siembran: la migración 0080 los retira
+ * (`active = false`) y quien los tiene conserva su acceso. Un plan ya sembrado no se pisa (`ON CONFLICT DO
+ * NOTHING` por `slug`): ajustar un precio es una decisión consciente, no un efecto del siguiente arranque.
  */
-export const DEFAULT_PLAN: PlanInsert = {
-  name: "Básico",
-  slug: "basico",
-  description: "Plan inicial: WhatsApp, agenda y hasta 3 profesionales.",
+export const DEMO_PLAN: PlanInsert = {
+  name: "Demo",
+  slug: "demo",
+  description: "Prueba gratuita de 14 días con todo incluido.",
   priceMonthlyCents: 0,
+  trialDays: 14,
+  currency: "PEN",
+  sortOrder: 0,
+  features: {
+    maxStaff: 3,
+    maxMonthlyAiTurns: 1000,
+    channels: ["whatsapp", "instagram", "messenger"],
+    modules: ["agenda", "salon", "loyalty", "finances", "atribucion"],
+  },
+  active: true,
+};
+
+export const EMPRENDEDOR_PLAN: PlanInsert = {
+  name: "Emprendedor",
+  slug: "emprendedor",
+  description: "Para empezar: WhatsApp, agenda, equipo y fidelización.",
+  priceMonthlyCents: 7900,
+  trialDays: null,
+  currency: "PEN",
+  sortOrder: 1,
   features: {
     maxStaff: 3,
     maxMonthlyAiTurns: 1000,
     channels: ["whatsapp"],
-    modules: ["agenda"],
+    modules: ["agenda", "salon", "loyalty"],
   },
   active: true,
 };
 
-export const SALON_PLAN: PlanInsert = {
-  name: "Salón",
-  slug: "salon",
-  description: "Barberías y salones: agenda por sillas, equipo y comisiones, caja, gastos y fidelización.",
-  priceMonthlyCents: 0,
+export const PRO_PLAN: PlanInsert = {
+  name: "Pro",
+  slug: "pro",
+  description: "El recomendado: finanzas, atribución de anuncios y más canales.",
+  priceMonthlyCents: 14900,
+  trialDays: null,
+  currency: "PEN",
+  sortOrder: 2,
   features: {
     maxStaff: 10,
-    maxMonthlyAiTurns: 3000,
-    channels: ["whatsapp"],
-    modules: ["agenda", "salon", "loyalty", "finances"],
+    maxMonthlyAiTurns: 5000,
+    channels: ["whatsapp", "instagram", "messenger"],
+    modules: ["agenda", "salon", "loyalty", "finances", "atribucion"],
   },
   active: true,
 };
 
-export const BASE_PLANS: readonly PlanInsert[] = [DEFAULT_PLAN, SALON_PLAN];
+export const ENTERPRISE_PLAN: PlanInsert = {
+  name: "Enterprise",
+  slug: "enterprise",
+  description: "Sin límites: todos los módulos y canales.",
+  priceMonthlyCents: 29900,
+  trialDays: null,
+  currency: "PEN",
+  sortOrder: 3,
+  features: {
+    maxStaff: -1,
+    maxMonthlyAiTurns: -1,
+    channels: ["whatsapp", "instagram", "messenger", "tiktok"],
+    modules: ["agenda", "salon", "loyalty", "finances", "atribucion"],
+  },
+  active: true,
+};
+
+export const BASE_PLANS: readonly PlanInsert[] = [DEMO_PLAN, EMPRENDEDOR_PLAN, PRO_PLAN, ENTERPRISE_PLAN];
 
 /** Inserta lo que falte. Devuelve cuántas filas nuevas entraron (0 en un arranque normal). */
 export async function seedPlatformCatalog(

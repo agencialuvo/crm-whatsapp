@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSessionOrNull } from "@/lib/auth/session";
+import { isSuperAdminUser } from "@/lib/auth/super-admin";
 import { salonHomePath } from "@/lib/nav";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { salonEnabled } from "@/server/business/flag";
@@ -17,6 +18,8 @@ export const dynamic = "force-dynamic";
  */
 export default async function Home() {
   const session = await getSessionOrNull();
+  // 045: un Super Admin SIN organización (cuenta de operador pura) no tiene sesión de negocio: entra al panel.
+  if (!session && (await isSuperAdminUser())) redirect("/super-admin");
   if (session && salonEnabled()) {
     redirect(salonHomePath({ agenda: agendaEnabled(), role: session.role }));
   }

@@ -4,6 +4,7 @@ import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { DEFAULT_SECTOR_KEY, type BusinessSector } from "@/lib/business-sector";
 import { pickInitialPlan } from "@/server/business/plan-selection";
+import { reassignTrialPlan } from "@/server/saas/subscription";
 
 /**
  * Elegir (o dejar para después) el sector del negocio, ya con el negocio creado. El registro no lo
@@ -86,13 +87,12 @@ export async function chooseSector(organizationId: string, categoryKey: string):
       const plans = await tx.select().from(schema.plan).where(eq(schema.plan.active, true));
       const current = plans.find((p) => p.id === sub.planId);
       planSlug = current?.slug ?? null;
-      if (sub.status === "trialing") {
+      // 045: solo una prueba con un plan ANTERIOR (retirado: Básico/Salón, que se elegían por el sector) se reajusta.
+      // La Demo ya incluye todos los módulos y los planes de pago los contrata el negocio: el sector no los toca.
+      if (sub.status === "trialing" && !current) {
         const next = pickInitialPlan(plans, category.defaultModules);
         if (next && next.id !== sub.planId) {
-          await tx
-            .update(schema.subscription)
-            .set({ planId: next.id, updatedAt: new Date() })
-            .where(eq(schema.subscription.id, sub.id));
+          await reassignTrialPlan(tx, organizationId, { id: next.id, name: next.name });
           planSlug = next.slug;
           planChanged = true;
         }

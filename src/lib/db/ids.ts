@@ -24,6 +24,9 @@ const prefixes = {
   // SaaS & Multi-sector
   plan: "plan",
   subscription: "sub",
+  // 045 — Super Admin
+  subscriptionEvent: "sev",
+  superAdminAudit: "saa",
   businessCategory: "bcat",
   businessProfile: "bpro",
   // Módulo Medios — la biblioteca de imágenes y videos
