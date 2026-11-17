@@ -13,7 +13,14 @@ import {
 import type { ConversationDto, TemplateDto } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CHANNEL_LABEL } from "@/lib/channels";
-import { formatBytes, formatRemaining, formatRemainingLong } from "./helpers";
+import { windowStateAt } from "@/lib/inbox-window";
+import {
+  fillQuickTemplate,
+  formatBytes,
+  formatRemaining,
+  formatRemainingLong,
+  unresolvedVariables,
+} from "./helpers";
 import { TemplateSender } from "./template-sender";
 
 /** 008 — Panel secundario del clip: formulario de ubicación o contacto. */
@@ -34,13 +41,17 @@ function parseCoords(raw: string): { latitude: number; longitude: number } | nul
 
 export function Composer({
   conversation,
+  nowMs,
   onSend,
   onSent,
 }: {
   conversation: ConversationDto;
+  /** 042 — «Ahora» en hora del servidor: la ventana se cierra sola, sin esperar a que se pida la lista otra vez. */
+  nowMs: number;
   onSend: (text: string) => Promise<string | null>;
   onSent: () => void;
 }) {
+  const ventana = windowStateAt(conversation, nowMs);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,8 +105,11 @@ export function Composer({
   async function apiSend(path: string, init: RequestInit): Promise<string | null> {
     const res = await fetch(path, init);
     if (res.ok) return null;
-    const data = (await res.json().catch(() => null)) as { message?: string } | null;
-    return data?.message ?? `Error ${res.status}`;
+    const data = (await res.json().catch(() => null)) as {
+      error?: { message?: string };
+      message?: string;
+    } | null;
+    return data?.error?.message ?? data?.message ?? `Error ${res.status}`;
   }
 
   async function submit() {
@@ -128,6 +142,13 @@ export function Composer({
 
     const value = text.trim();
     if (!value) return;
+    const pendientes = unresolvedVariables(value);
+    if (pendientes.length > 0) {
+      setError(
+        `Completa ${pendientes.join(", ")} antes de enviar: el cliente vería la variable sin resolver`
+      );
+      return;
+    }
     // Aquí NO se espera al servidor. Enviar tarda ~1.5 s (el viaje a Meta) y
     // durante ese rato el renglón siguiente se escribía encima del anterior y
     // salía todo como un solo mensaje. El campo se limpia ya; la burbuja
@@ -200,7 +221,7 @@ export function Composer({
 
   // 022 — TikTok no tiene plantillas ni otra forma de reabrir: con la ventana
   // cerrada no hay nada que ofrecer, solo decir qué pasa y qué lo arregla.
-  if (!conversation.windowOpen && conversation.channel === "tiktok") {
+  if (!ventana.standardOpen && conversation.channel === "tiktok") {
     return (
       <div className="border-t bg-background px-[18px] py-3.5">
         <div className="flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-3 text-sm text-warning-text">
@@ -223,7 +244,7 @@ export function Composer({
   // pasado ese plazo no hay nada que ofrecer salvo esperar al cliente.
   const human = conversation.humanWindow;
   const canal = CHANNEL_LABEL[conversation.channel];
-  if (!conversation.windowOpen && human && !human.open) {
+  if (!ventana.standardOpen && human && !ventana.humanOpen) {
     return (
       <div className="border-t bg-background px-[18px] py-3.5">
         <div
@@ -244,7 +265,7 @@ export function Composer({
     );
   }
 
-  if (!conversation.windowOpen && !human) {
+  if (!ventana.standardOpen && !human) {
     return (
       <div className="border-t bg-background px-[18px] py-3.5">
         <div className="mb-3 flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-3 text-sm text-warning-text">
@@ -265,7 +286,7 @@ export function Composer({
 
   const canSubmit = file !== null || text.trim().length > 0;
 
-  const soloPersona = !conversation.windowOpen && Boolean(human?.open);
+  const soloPersona = !ventana.standardOpen && ventana.humanOpen;
 
   return (
     <div className="border-t bg-background px-[18px] pb-3.5 pt-3">
@@ -290,7 +311,7 @@ export function Composer({
               className="rounded-full border border-border-strong bg-background px-3 py-1 text-xs font-semibold text-text-2 transition-colors hover:border-brand hover:bg-brand-tint hover:text-brand-text"
               onClick={() => {
                 const firstName = conversation.contact.name.split(" ")[0] ?? "";
-                setText(t.body.replace(/\{\{\s*1\s*\}\}/g, firstName));
+                setText(fillQuickTemplate(t.body, firstName));
                 taRef.current?.focus();
                 setTimeout(autogrow, 0);
               }}
@@ -486,8 +507,10 @@ export function Composer({
         {error ? <p className="text-xs text-destructive">{error}</p> : <span />}
         <p className="font-mono text-[10.5px] tracking-[0.04em] text-text-3">
           {soloPersona
-            ? `Ventana humana · quedan ${formatRemainingLong(human!.remainingMs)}`
-            : `Ventana abierta · quedan ${formatRemaining(conversation.windowRemainingMs)}`}
+            ? `Ventana humana · quedan ${formatRemainingLong(ventana.remainingMs)}`
+            : Number.isFinite(ventana.remainingMs)
+              ? `Ventana abierta · quedan ${formatRemaining(ventana.remainingMs)}`
+              : "Ventana abierta"}
         </p>
       </div>
     </div>

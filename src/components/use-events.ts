@@ -12,6 +12,8 @@ export type EventHandlers = {
     error?: string | null;
   }) => void;
   onConversationUpdated?: (data: { conversation: unknown }) => void;
+  /** 042 — Se marcó leída una conversación (el contador quedó en `unreadCount`). */
+  onConversationRead?: (data: { conversationId: string; unreadCount: number }) => void;
   /** 026 */
   onConversationDeleted?: (data: {
     conversationId: string;
@@ -61,6 +63,9 @@ export function useEvents(handlers: EventHandlers): void {
     );
     listen("conversation.updated", (d) =>
       handlersRef.current.onConversationUpdated?.(d as never)
+    );
+    listen("conversation.read", (d) =>
+      handlersRef.current.onConversationRead?.(d as never)
     );
     listen("conversation.deleted", (d) =>
       handlersRef.current.onConversationDeleted?.(d as never)

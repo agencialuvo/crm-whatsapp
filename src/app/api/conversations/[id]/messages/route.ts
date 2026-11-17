@@ -4,14 +4,26 @@ import {
 } from "@/server/channels/capabilities";
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
-import { getConversation, listMessages } from "@/server/inbox/queries";
+import { decodeThreadCursor } from "@/lib/inbox-cursor";
+import {
+  getConversation,
+  listMessages,
+  listMessagesPage,
+  PAGE_MAX,
+  THREAD_PAGE_DEFAULT,
+} from "@/server/inbox/queries";
 import { serializeMessage } from "@/server/inbox/ingest";
+import { SEND_ERROR_STATUS } from "@/server/inbox/send-status";
 import { SendError, sendStructured, sendText } from "@/server/inbox/send";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
+/**
+ * 042 — El hilo, por páginas hacia arriba: los `limit` (50) más recientes, o los anteriores a `before`, en orden
+ * ascendente por hora del evento. Con `since`, los mensajes registrados después (para quien lo necesite).
+ */
 export const GET = withAuth(async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const row = await getConversation(session.organizationId, id);
@@ -19,15 +31,27 @@ export const GET = withAuth(async (session, req: Request, ctx: Params) => {
 
   const url = new URL(req.url);
   const sinceParam = url.searchParams.get("since");
-  const since = sinceParam ? new Date(sinceParam) : undefined;
-  const messages = await listMessages(
-    session.organizationId,
-    id,
-    since && !Number.isNaN(since.getTime()) ? since : undefined
-  );
-  return Response.json({
-    messages: messages.map((r) => serializeMessage(r.message, r.media)),
-  });
+  if (sinceParam) {
+    const since = new Date(sinceParam);
+    if (Number.isNaN(since.getTime())) return apiError(422, "invalid_query", "since: fecha inválida");
+    const messages = await listMessages(session.organizationId, id, since);
+    return Response.json({
+      messages: messages.map((r) => serializeMessage(r.message, r.media)),
+      hasMore: false,
+      nextBefore: null,
+      serverTime: new Date().toISOString(),
+    });
+  }
+
+  const limitParam = Number(url.searchParams.get("limit") ?? THREAD_PAGE_DEFAULT);
+  const limit = Number.isInteger(limitParam) && limitParam >= 1 ? Math.min(limitParam, PAGE_MAX) : THREAD_PAGE_DEFAULT;
+  const beforeParam = url.searchParams.get("before");
+  let before = null;
+  if (beforeParam) {
+    before = decodeThreadCursor(beforeParam);
+    if (!before) return apiError(422, "invalid_cursor", "El cursor no es válido");
+  }
+  return Response.json(await listMessagesPage(session.organizationId, id, { limit, before }));
 });
 
 // 008: además de texto, el body acepta ubicación y contactos (discriminado
@@ -61,18 +85,6 @@ const sendSchema = z.union([
       .max(5),
   }),
 ]);
-
-const SEND_ERROR_STATUS: Record<SendError["code"], number> = {
-  sandbox_violation: 403,
-  not_connected: 409,
-  reconnect_required: 409,
-  window_closed: 409,
-  message_limit: 409,
-  text_too_long: 422,
-  meta_error: 422,
-  meta_unavailable: 503,
-  upload_failed: 502,
-};
 
 export const POST = withAuth(async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;

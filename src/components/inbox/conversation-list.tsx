@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Inbox, Megaphone, Search, Sparkles, UserRound, X } from "lucide-react";
-import type { ConversationDto } from "@/lib/types";
+import type { ConversationDto, InboxCountsDto, InboxFilters } from "@/lib/types";
+import { windowStateAt } from "@/lib/inbox-window";
 import { etiquetaDeOrigen, titularDeOrigen } from "@/lib/anuncios";
 import { CHANNEL_LABEL, type Channel } from "@/lib/channels";
 import { ChannelBadge } from "@/components/channel-badge";
-import { matchesQuery } from "@/lib/search";
 import { cn } from "@/lib/utils";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
@@ -83,25 +83,52 @@ function InboxEmptyState({
   );
 }
 
+/**
+ * 042 — La lista ya no filtra ni cuenta: eso lo hace el servidor (`GET /api/conversations`) con los filtros que
+ * esta pantalla le manda, y los contadores llegan hechos. Aquí solo se pinta lo que `InboxClient` entrega, se
+ * avisa cuando cambia un filtro y se pide la siguiente página al llegar al final.
+ */
 export function ConversationList({
-  conversations: conversationsProp,
+  conversations,
+  loading,
+  counts,
+  stages,
+  filters,
+  onFiltersChange,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   channels,
   selectedId,
   onSelect,
   onSeeded,
+  nowMs,
 }: {
-  conversations: ConversationDto[] | null;
+  /** Ya filtradas y en orden. */
+  conversations: ConversationDto[];
+  loading: boolean;
+  counts: InboxCountsDto | null;
+  stages: string[];
+  filters: InboxFilters;
+  onFiltersChange: (patch: Partial<InboxFilters>) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
   /** Canales encendidos en esta instancia (ADR-001). */
   channels: readonly Channel[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onSeeded: () => void;
+  /** «Ahora» en hora del servidor: el punto verde de la ventana se apaga solo. */
+  nowMs: number;
 }) {
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread" | "anuncios">("all");
-  const [stage, setStage] = useState<string>("all");
-  const [inbox, setInbox] = useState<Channel | "all">("all");
   const inputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Estable: el padre pasa una función nueva en cada render y el observador no debe volver a suscribirse por eso.
+  const onLoadMoreRef = useRef(onLoadMore);
+  onLoadMoreRef.current = onLoadMore;
+  const [typed, setTyped] = useState("");
 
   /**
    * Rescate de lo tecleado ANTES de que hidratara el JS. La caja se pinta en
@@ -111,70 +138,65 @@ export function ConversationList({
    * es NO controlado: el DOM manda y aquí solo adoptamos su valor.
    */
   useEffect(() => {
-    const typed = inputRef.current?.value ?? "";
-    if (typed) setQuery(typed);
+    const value = inputRef.current?.value ?? "";
+    if (value) {
+      setTyped(value);
+      onFiltersChange({ q: value });
+    }
+    // Solo al montar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loading = conversationsProp === null;
-  const conversations = conversationsProp ?? [];
-  // Solo NOMBRE y TELÉFONO, como cualquier filtro de contactos. Antes también
-  // miraba el preview, y como el agente nombra al dueño en sus propios
-  // mensajes, buscar ese nombre devolvía media bandeja. Encima era una
-  // búsqueda de mensajes a medias: solo el último de cada hilo, no el historial.
-  const searched = conversations.filter(
-    (c) =>
-      matchesQuery(query, {
-        text: [c.contact.name],
-        phone: c.contact.phone,
-      }) && (stage === "all" || c.stageName === stage)
-  );
-  // La bandeja elegida es el filtro de AFUERA: "Todas" y "No leídas" cuentan
-  // dentro de ella, no sobre la suma de los dos canales.
-  const inInbox =
-    inbox === "all" ? searched : searched.filter((c) => c.channel === inbox);
-  const inboxCount = (ch: Channel) =>
-    searched.filter((c) => c.channel === ch).length;
-  const unreadCount = inInbox.filter((c) => c.unreadCount > 0).length;
-  // 018: las que abrió un anuncio (o una publicación con botón de WhatsApp).
-  const deAnuncios = inInbox.filter((c) => c.anuncio !== null);
-  const visible =
-    filter === "unread"
-      ? inInbox.filter((c) => c.unreadCount > 0)
-      : filter === "anuncios"
-        ? deAnuncios
-        : inInbox;
+  const { filter, stage, channel: inbox } = filters;
+  const query = typed;
+  const total = counts?.total ?? conversations.length;
+  const filtros: { id: InboxFilters["filter"]; label: string; count: number }[] = [
+    { id: "all", label: "Todas", count: counts?.all ?? conversations.length },
+    { id: "unread", label: "No leídas", count: counts?.unread ?? 0 },
+  ];
   // Sin ninguna conversación de anuncio el filtro no aparece: a quien no
   // anuncia no se le pinta un botón que siempre dice 0. Si está elegido, se
   // queda, para poder salir de él aunque el contador baje a cero.
-  const filtros: { id: typeof filter; label: string; count: number }[] = [
-    { id: "all", label: "Todas", count: inInbox.length },
-    { id: "unread", label: "No leídas", count: unreadCount },
-  ];
-  if (deAnuncios.length > 0 || filter === "anuncios") {
-    filtros.push({ id: "anuncios", label: "Anuncios", count: deAnuncios.length });
+  if ((counts?.anuncios ?? 0) > 0 || filter === "anuncios") {
+    filtros.push({ id: "anuncios", label: "Anuncios", count: counts?.anuncios ?? 0 });
   }
   // Con un solo canal encendido no hay bandejas que distinguir: ni marca en
   // los renglones ni filtro. La pantalla queda exactamente como antes de 014.
   const multiChannel = channels.length > 1;
 
-  // Etapas presentes en la bandeja, en el orden en que llegan del pipeline.
-  const stages: string[] = [];
-  for (const c of conversations) {
-    if (c.stageName && !stages.includes(c.stageName)) stages.push(c.stageName);
-  }
+  // La etapa elegida siempre es una opción, aunque ya no haya conversaciones en ella.
+  const etapas = stage !== "all" && !stages.includes(stage) ? [...stages, stage] : stages;
+
+  // El centinela del final: al verse, pide la página siguiente.
+  useEffect(() => {
+    const bottom = bottomRef.current;
+    const root = listRef.current;
+    if (!bottom || !root || !hasMore || loadingMore || loading) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadMoreRef.current();
+      },
+      { root, rootMargin: "0px 0px 200px 0px" }
+    );
+    observer.observe(bottom);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, loading, conversations.length]);
 
   function clearQuery() {
     if (inputRef.current) inputRef.current.value = "";
-    setQuery("");
+    setTyped("");
+    onFiltersChange({ q: "" });
     inputRef.current?.focus();
   }
+
+  const sinFiltros = !query && filter === "all" && stage === "all" && inbox === "all";
 
   return (
     <div className="flex h-full flex-col">
       <header className="border-b px-4 pb-3 pt-4">
         <div className="mb-3 flex items-center gap-2">
           <h2 className="text-[17px] font-bold tracking-tight">Bandeja</h2>
-          <span className="font-mono text-[12px] text-text-3">{conversations.length}</span>
+          <span className="font-mono text-[12px] text-text-3">{total}</span>
           {multiChannel && (
             <div className="ml-auto flex items-center gap-1">
               {channels.map((ch) => {
@@ -182,7 +204,7 @@ export function ConversationList({
                 return (
                   <button
                     key={ch}
-                    onClick={() => setInbox(on ? "all" : ch)}
+                    onClick={() => onFiltersChange({ channel: on ? "all" : ch })}
                     aria-pressed={on}
                     title={
                       on
@@ -202,7 +224,7 @@ export function ConversationList({
                       channel={ch}
                       className="h-[13px] w-[13px] rounded-[4px]"
                     />
-                    {inboxCount(ch)}
+                    {counts?.byChannel[ch] ?? 0}
                   </button>
                 );
               })}
@@ -216,7 +238,10 @@ export function ConversationList({
             placeholder="Buscar por nombre o teléfono…"
             aria-label="Buscar conversación"
             defaultValue=""
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setTyped(e.target.value);
+              onFiltersChange({ q: e.target.value });
+            }}
             className="w-full bg-transparent text-[13px] outline-none placeholder:text-text-3"
           />
           {query && (
@@ -238,7 +263,7 @@ export function ConversationList({
         {filtros.map((f) => (
           <button
             key={f.id}
-            onClick={() => setFilter(f.id)}
+            onClick={() => onFiltersChange({ filter: f.id })}
             className={cn(
               "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-[5px] text-[12.5px] font-semibold transition-colors",
               FOCO_SEPARADO,
@@ -259,14 +284,14 @@ export function ConversationList({
           </button>
         ))}
 
-        {stages.length > 0 && (
+        {etapas.length > 0 && (
           <SearchSelect
             value={stage}
-            onChange={setStage}
+            onChange={(value) => onFiltersChange({ stage: value })}
             ariaLabel="Filtrar por etapa del embudo"
             options={[
               { value: "all", label: "Toda etapa" },
-              ...stages.map((s) => ({ value: s, label: s })),
+              ...etapas.map((s) => ({ value: s, label: s })),
             ]}
             searchPlaceholder="Buscar etapa…"
             minListWidth={220}
@@ -282,120 +307,138 @@ export function ConversationList({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listRef} data-testid="conversation-list" className="flex-1 overflow-y-auto">
         {loading ? (
           <p className="p-6 text-center text-xs text-text-3">Cargando…</p>
-        ) : conversations.length === 0 ? (
+        ) : sinFiltros && total === 0 && conversations.length === 0 ? (
           <InboxEmptyState onSeeded={onSeeded} channels={channels} />
-        ) : visible.length === 0 ? (
+        ) : conversations.length === 0 ? (
           <p className="p-6 text-center text-xs text-text-3">
             {/* 028: un canal en el que nadie ha escrito no es una búsqueda fallida. */}
             {inbox !== "all" &&
             !query &&
             filter === "all" &&
             stage === "all" &&
-            !conversations.some((c) => c.channel === inbox)
+            (counts?.byChannel[inbox] ?? 0) === 0
               ? `Nadie ha escrito por ${CHANNEL_LABEL[inbox]} todavía.`
               : "Sin resultados para este filtro."}
           </p>
         ) : (
-          <ul>
-            {visible.map((c) => {
-              const unread = c.unreadCount > 0;
-              const active = selectedId === c.id;
-              return (
-                <li key={c.id} className="relative border-b border-border">
-                  {active && (
-                    <span className="absolute inset-y-0 left-0 w-[3px] bg-brand" />
-                  )}
-                  <button
-                    onClick={() => onSelect(c.id)}
-                    className={cn(
-                      "flex w-full items-start gap-[11px] px-4 py-[var(--row-py)] text-left transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                      active ? "bg-[var(--bg-active)]" : "hover:bg-row-hover"
+          <>
+            <ul>
+              {conversations.map((c) => {
+                const unread = c.unreadCount > 0;
+                const active = selectedId === c.id;
+                const ventanaAbierta = windowStateAt(c, nowMs).standardOpen;
+                return (
+                  <li key={c.id} className="relative border-b border-border">
+                    {active && (
+                      <span className="absolute inset-y-0 left-0 w-[3px] bg-brand" />
                     )}
-                  >
-                    <span className="relative shrink-0">
-                      <ContactAvatar name={c.contact.name} seed={c.contact.id} size="lg" />
-                      {c.windowOpen && (
-                        <span className="absolute bottom-0 right-0 h-[11px] w-[11px] rounded-full border-[2.5px] border-background bg-success" />
+                    <button
+                      onClick={() => onSelect(c.id)}
+                      className={cn(
+                        "flex w-full items-start gap-[11px] px-4 py-[var(--row-py)] text-left transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                        active ? "bg-[var(--bg-active)]" : "hover:bg-row-hover"
                       )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          {multiChannel && <ChannelBadge channel={c.channel} />}
-                          <span
-                            className={cn(
-                              "truncate text-sm",
-                              unread ? "font-[680]" : "font-semibold"
-                            )}
-                          >
-                            {c.contact.name}
-                          </span>
-                        </span>
-                        <span
-                          className={cn(
-                            "shrink-0 font-mono text-[10.5px] tracking-[0.02em]",
-                            unread ? "font-semibold text-brand-ink" : "text-text-3"
-                          )}
-                        >
-                          {formatTime(c.lastMessageAt)}
-                        </span>
-                      </span>
-                      <span className="mt-0.5 flex items-center justify-between gap-2">
-                        <span
-                          className={cn(
-                            "truncate text-[13px]",
-                            unread ? "font-medium text-text-2" : "text-text-3"
-                          )}
-                        >
-                          {previewText(c.preview)}
-                        </span>
-                        {unread && (
-                          <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-[10.5px] font-semibold text-brand-fg">
-                            {c.unreadCount}
-                          </span>
+                    >
+                      <span className="relative shrink-0">
+                        <ContactAvatar name={c.contact.name} seed={c.contact.id} size="lg" />
+                        {ventanaAbierta && (
+                          <span className="absolute bottom-0 right-0 h-[11px] w-[11px] rounded-full border-[2.5px] border-background bg-success" />
                         )}
                       </span>
-                      <span className="mt-1.5 flex items-center gap-1.5">
-                        {c.stageName && (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-border-strong bg-chip px-2 py-0.5 text-[11px] font-medium text-text-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            {multiChannel && <ChannelBadge channel={c.channel} />}
                             <span
-                              className="h-[7px] w-[7px] rounded-full"
-                              style={{
-                                background: STAGE_DOT[c.stageName] ?? STAGE_DOT_FALLBACK,
-                              }}
-                            />
-                            {c.stageName}
-                          </span>
-                        )}
-                        {c.handoffAt && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
-                            <UserRound className="h-3 w-3" strokeWidth={1.7} />
-                            Atención humana
-                          </span>
-                        )}
-                        {c.anuncio && (
-                          <span
-                            className="inline-flex min-w-0 items-center gap-1 rounded-full border border-info-soft bg-info-tint px-2 py-0.5 text-[11px] text-info-text"
-                            title={titularDeOrigen(c.anuncio.headline, c.anuncio.sourceType)}
-                          >
-                            <Megaphone className="h-3 w-3 shrink-0" strokeWidth={1.7} />
-                            <span className="truncate">
-                              {etiquetaDeOrigen(c.anuncio.sourceType)}
-                              {c.anuncio.headline ? ` · ${c.anuncio.headline}` : ""}
+                              data-testid="conv-name"
+                              className={cn(
+                                "truncate text-sm",
+                                unread ? "font-[680]" : "font-semibold"
+                              )}
+                            >
+                              {c.contact.name}
                             </span>
                           </span>
-                        )}
+                          <span
+                            className={cn(
+                              "shrink-0 font-mono text-[10.5px] tracking-[0.02em]",
+                              unread ? "font-semibold text-brand-ink" : "text-text-3"
+                            )}
+                          >
+                            {formatTime(c.lastMessageAt)}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 flex items-center justify-between gap-2">
+                          <span
+                            className={cn(
+                              "truncate text-[13px]",
+                              unread ? "font-medium text-text-2" : "text-text-3"
+                            )}
+                          >
+                            {previewText(c.preview)}
+                          </span>
+                          {unread && (
+                            <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-[10.5px] font-semibold text-brand-fg">
+                              {c.unreadCount}
+                            </span>
+                          )}
+                        </span>
+                        <span className="mt-1.5 flex items-center gap-1.5">
+                          {c.stageName && (
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-border-strong bg-chip px-2 py-0.5 text-[11px] font-medium text-text-2">
+                              <span
+                                className="h-[7px] w-[7px] rounded-full"
+                                style={{
+                                  background: STAGE_DOT[c.stageName] ?? STAGE_DOT_FALLBACK,
+                                }}
+                              />
+                              {c.stageName}
+                            </span>
+                          )}
+                          {c.handoffAt && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
+                              <UserRound className="h-3 w-3" strokeWidth={1.7} />
+                              Atención humana
+                            </span>
+                          )}
+                          {c.anuncio && (
+                            <span
+                              className="inline-flex min-w-0 items-center gap-1 rounded-full border border-info-soft bg-info-tint px-2 py-0.5 text-[11px] text-info-text"
+                              title={titularDeOrigen(c.anuncio.headline, c.anuncio.sourceType)}
+                            >
+                              <Megaphone className="h-3 w-3 shrink-0" strokeWidth={1.7} />
+                              <span className="truncate">
+                                {etiquetaDeOrigen(c.anuncio.sourceType)}
+                                {c.anuncio.headline ? ` · ${c.anuncio.headline}` : ""}
+                              </span>
+                            </span>
+                          )}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <div ref={bottomRef} className="h-1" />
+            {hasMore && (
+              <div className="flex justify-center p-3">
+                <button
+                  type="button"
+                  onClick={onLoadMore}
+                  disabled={loadingMore}
+                  data-testid="load-more"
+                  className="kicker rounded-full border border-border-strong bg-background px-3 py-1 text-text-2 hover:bg-accent disabled:opacity-60"
+                >
+                  {loadingMore ? "Cargando…" : "Cargar más conversaciones"}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

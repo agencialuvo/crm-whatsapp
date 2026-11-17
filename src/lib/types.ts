@@ -13,16 +13,32 @@ export type ConversationDto = {
   handoffReason: string | null;
   lastInboundAt: string | null;
   lastMessageAt: string | null;
+  /**
+   * 042 — La llave de orden de la lista: `coalesce(last_message_at, created_at)`, en ISO. Es lo que el cliente
+   * usa para ordenar y para saber dónde cae una conversación que cambió.
+   */
+  sortKey: string;
   unreadCount: number;
   windowOpen: boolean;
   windowRemainingMs: number;
+  /**
+   * 042 — Cuándo se cierra la ventana normal del canal (ISO). `null` con `windowOpen: true` = un canal sin
+   * ventana, que no vence jamás; `null` con `windowOpen: false` = no hay ventana (sin mensajes del cliente).
+   * El cliente deriva el estado de aquí con su reloj; `windowOpen`/`windowRemainingMs` son la foto del servidor.
+   */
+  windowExpiresAt: string | null;
   /**
    * 024 — La ventana humana del canal (Instagram y Messenger:
    * hasta 7 días con la etiqueta de agente humano). `null` en un canal que no
    * la tiene. `open` = la ventana normal ya cerró pero una persona todavía
    * puede contestar; `remainingMs` es lo que le queda.
    */
-  humanWindow: { open: boolean; remainingMs: number } | null;
+  humanWindow: {
+    open: boolean;
+    remainingMs: number;
+    /** 042 — Cuándo se acaba la extensión humana (ISO); siempre presente si el canal la tiene y hubo un entrante. */
+    expiresAt: string | null;
+  } | null;
   /**
    * 028 — Lo que el compositor puede ofrecer en este canal: adjuntos, y
    * ubicación o contacto. El servidor rechaza lo demás igual.
@@ -196,3 +212,47 @@ export type SourceDto = {
 
 /** La fija el dueño; NULL = nadie la ha decidido (no es "media"). */
 export type PriorityValue = "alta" | "media" | "baja";
+
+
+/** 042 — Los filtros de la lista de la bandeja; viajan al servidor y también se aplican en el cliente. */
+export type InboxFilters = {
+  q: string;
+  /** Nombre de la etapa, o `all`. */
+  stage: string;
+  channel: Channel | "all";
+  filter: "all" | "unread" | "anuncios";
+};
+
+/** 042 — Los contadores de la pantalla, calculados en el servidor con los filtros vigentes. */
+export type InboxCountsDto = {
+  /** Sin ningún filtro: el número del encabezado. */
+  total: number;
+  /** Con `q` y `stage`: lo que dicen las marcas de cada bandeja. */
+  byChannel: Partial<Record<Channel, number>>;
+  /** Con además el canal elegido: los tres chips. */
+  all: number;
+  unread: number;
+  anuncios: number;
+};
+
+export type ConversationsPageDto = {
+  conversations: ConversationDto[];
+  /** `null` = no hay más. Opaco. */
+  nextCursor: string | null;
+  /** El reloj del servidor al empezar la consulta: de aquí salen el `since` siguiente y el desfase del reloj. */
+  serverTime: string;
+  /** Presentes en la primera página y en los deltas; no en «cargar más». */
+  counts?: InboxCountsDto;
+  stages?: string[];
+  /** Un delta que no cupo (más de 200): el cliente repone la primera página. */
+  truncated?: boolean;
+};
+
+export type MessagesPageDto = {
+  /** En orden ascendente por hora del evento. */
+  messages: MessageDto[];
+  hasMore: boolean;
+  /** Cursor para pedir lo anterior; `null` si no hay más. */
+  nextBefore: string | null;
+  serverTime: string;
+};

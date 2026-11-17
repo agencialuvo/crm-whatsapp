@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
   Check,
   CheckCheck,
   Clock3,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import type { MessageDto, MessageMediaDto } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { isNearBottom, isOlderThanSeen } from "@/lib/inbox-state";
 import { formatBytes, mediaLabel } from "./helpers";
 
 function StatusTicks({ status }: { status: MessageDto["status"] }) {
@@ -182,119 +184,269 @@ function bubbleTime(iso: string): string {
   });
 }
 
-export function MessageThread({ messages }: { messages: MessageDto[] }) {
+/**
+ * 042 — El hilo.
+ *
+ * - Pagina hacia ARRIBA: un centinela al principio pide los mensajes anteriores (con un botón de respaldo) y
+ *   al anteponerlos compensa el cambio de altura, para que no salte lo que el operador está leyendo.
+ * - Scroll inteligente: un mensaje nuevo baja el hilo SOLO si el operador ya estaba cerca del fondo (120 px).
+ *   Si está leyendo historial, no se mueve y aparece «↓ N mensajes nuevos».
+ * - Enviar siempre baja (`scrollToBottomToken`), y cambiar de conversación empieza en el fondo.
+ */
+export function MessageThread({
+  conversationId,
+  messages,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
+  scrollToBottomToken,
+  onBottomChange,
+}: {
+  conversationId: string;
+  messages: MessageDto[];
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
+  /** Cambia cada vez que el operador envía algo: baja al fondo pase lo que pase. */
+  scrollToBottomToken: number;
+  /** Avisa si el operador está en el fondo (para marcar leído solo lo que de verdad ve). */
+  onBottomChange: (atBottom: boolean) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const [newCount, setNewCount] = useState(0);
 
-  useEffect(() => {
+  const atBottomRef = useRef(true);
+  const prev = useRef<{
+    conversationId: string;
+    ids: Set<string>;
+    firstId: string | null;
+    lastId: string | null;
+    last: MessageDto | undefined;
+    scrollHeight: number;
+  }>({ conversationId: "", ids: new Set(), firstId: null, lastId: null, last: undefined, scrollHeight: 0 });
+  const tokenRef = useRef(scrollToBottomToken);
+  const onBottomRef = useRef(onBottomChange);
+  onBottomRef.current = onBottomChange;
+  // Estable: el padre pasa una función nueva en cada render y el observador no debe volver a suscribirse por eso.
+  const onLoadOlderRef = useRef(onLoadOlder);
+  onLoadOlderRef.current = onLoadOlder;
+
+  const setAtBottom = useCallback((value: boolean) => {
+    if (atBottomRef.current === value) return;
+    atBottomRef.current = value;
+    onBottomRef.current(value);
+  }, []);
+
+  const toBottom = useCallback((smooth = false) => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setNewCount(0);
+    setAtBottom(true);
+  }, [setAtBottom]);
+
+  // Después de pintar y ANTES de que el navegador lo muestre: decide dónde queda el scroll.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const before = prev.current;
+    const firstId = messages[0]?.id ?? null;
+    const last = messages[messages.length - 1];
+    const lastId = last?.id ?? null;
+    const sameThread = before.conversationId === conversationId;
+    const forced = tokenRef.current !== scrollToBottomToken;
+    tokenRef.current = scrollToBottomToken;
+
+    if (!sameThread) {
+      // Otra conversación: arranca en el fondo.
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      setNewCount(0);
+    } else if (forced) {
+      toBottom();
+    } else if (firstId !== before.firstId && lastId === before.lastId && before.firstId !== null) {
+      // Se antepusieron mensajes anteriores: se compensa la altura que ganó el hilo.
+      el.scrollTop += el.scrollHeight - before.scrollHeight;
+    } else if (lastId !== before.lastId || messages.length > before.ids.size) {
+      const added = messages.filter((m) => !before.ids.has(m.id) && !m.id.startsWith("tmp_"));
+      if (atBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      } else {
+        // Lejos del fondo: no se mueve. Cuenta como nuevo lo que llegó DESPUÉS de lo que ya se había visto.
+        const nuevos = added.filter((m) => !isOlderThanSeen(m, before.last)).length;
+        if (nuevos > 0) setNewCount((n) => n + nuevos);
+      }
+    }
+
+    prev.current = {
+      conversationId,
+      ids: new Set(messages.map((m) => m.id)),
+      firstId,
+      lastId,
+      last,
+      scrollHeight: el.scrollHeight,
+    };
+  }, [messages, conversationId, scrollToBottomToken, toBottom]);
+
+  // El operador mueve el scroll: ¿sigue cerca del fondo?
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near = isNearBottom(el);
+    setAtBottom(near);
+    if (near) setNewCount(0);
+  }
+
+  // El centinela de arriba: al verse, pide lo anterior.
+  useEffect(() => {
+    const top = topRef.current;
+    const root = scrollRef.current;
+    if (!top || !root || !hasOlder || loadingOlder) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadOlderRef.current();
+      },
+      { root, rootMargin: "120px 0px 0px 0px" }
+    );
+    observer.observe(top);
+    return () => observer.disconnect();
+  }, [hasOlder, loadingOlder, conversationId, messages.length]);
 
   return (
-    <div
-      ref={scrollRef}
-      className="thread-bg flex flex-1 flex-col gap-[3px] overflow-y-auto px-3 py-5 sm:px-[6%]"
-    >
-      {messages.map((m, i) => {
-        const prev = messages[i - 1];
-        const newDay =
-          !prev ||
-          new Date(prev.createdAt).toDateString() !==
-            new Date(m.createdAt).toDateString();
-        const grouped =
-          !newDay && prev !== undefined && prev.direction === m.direction;
-        const out = m.direction === "out";
-
-        return (
-          <div key={m.id}>
-            {newDay && (
-              <div className="my-3 flex justify-center">
-                <span className="kicker rounded-full border border-border-strong bg-background px-3 py-1 text-text-2 shadow-sm">
-                  {dayLabel(m.createdAt)}
-                </span>
-              </div>
-            )}
-            <div
-              className={cn(
-                "flex",
-                out ? "justify-end" : "justify-start",
-                grouped ? "mt-[3px]" : "mt-2.5"
-              )}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        data-testid="thread-scroll"
+        className="thread-bg flex flex-1 flex-col gap-[3px] overflow-y-auto px-3 py-5 sm:px-[6%]"
+      >
+        <div ref={topRef} className="flex justify-center pb-2">
+          {hasOlder && (
+            <button
+              type="button"
+              onClick={onLoadOlder}
+              disabled={loadingOlder}
+              data-testid="load-older"
+              className="kicker rounded-full border border-border-strong bg-background px-3 py-1 text-text-2 shadow-sm hover:bg-accent disabled:opacity-60"
             >
+              {loadingOlder ? "Cargando…" : "Cargar mensajes anteriores"}
+            </button>
+          )}
+        </div>
+        {messages.map((m, i) => {
+          const before = messages[i - 1];
+          const newDay =
+            !before ||
+            new Date(before.createdAt).toDateString() !==
+              new Date(m.createdAt).toDateString();
+          const grouped =
+            !newDay && before !== undefined && before.direction === m.direction;
+          const out = m.direction === "out";
+
+          return (
+            <div key={m.id} data-message-id={m.id}>
+              {newDay && (
+                <div className="my-3 flex justify-center">
+                  <span className="kicker rounded-full border border-border-strong bg-background px-3 py-1 text-text-2 shadow-sm">
+                    {dayLabel(m.createdAt)}
+                  </span>
+                </div>
+              )}
               <div
                 className={cn(
-                  // En el teléfono la burbuja necesita casi todo el renglón:
-                  // con 64% cada mensaje se parte en tres líneas.
-                  // Burbujas del mockup de la landing: el cliente entra en
-                  // verde WhatsApp, el CRM contesta con el lavado del acento.
-                  "max-w-[85%] rounded-[14px] border px-3 pb-1.5 pt-2 text-[13.5px] leading-[1.45] shadow-sm sm:max-w-[64%]",
-                  out
-                    ? "border-bubble-out-border bg-bubble-out text-bubble-out-text"
-                    : "border-bubble-in-border bg-bubble-in",
-                  !grouped && (out ? "rounded-tr-[5px]" : "rounded-tl-[5px]")
+                  "flex",
+                  out ? "justify-end" : "justify-start",
+                  grouped ? "mt-[3px]" : "mt-2.5"
                 )}
               >
-                {m.media ? (
-                  <span className="block">
-                    <MediaBlock media={m.media} />
-                    {m.media.caption && (
-                      <span className="mt-1 block whitespace-pre-wrap break-words">
-                        {m.media.caption}
+                <div
+                  className={cn(
+                    // En el teléfono la burbuja necesita casi todo el renglón:
+                    // con 64% cada mensaje se parte en tres líneas.
+                    // Burbujas del mockup de la landing: el cliente entra en
+                    // verde WhatsApp, el CRM contesta con el lavado del acento.
+                    "max-w-[85%] rounded-[14px] border px-3 pb-1.5 pt-2 text-[13.5px] leading-[1.45] shadow-sm sm:max-w-[64%]",
+                    out
+                      ? "border-bubble-out-border bg-bubble-out text-bubble-out-text"
+                      : "border-bubble-in-border bg-bubble-in",
+                    !grouped && (out ? "rounded-tr-[5px]" : "rounded-tl-[5px]")
+                  )}
+                >
+                  {m.media ? (
+                    <span className="block">
+                      <MediaBlock media={m.media} />
+                      {m.media.caption && (
+                        <span className="mt-1 block whitespace-pre-wrap break-words">
+                          {m.media.caption}
+                        </span>
+                      )}
+                    </span>
+                  ) : m.type === "text" || m.type === "template" ? (
+                    <span className="whitespace-pre-wrap break-words">
+                      {m.text}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-text-3">
+                      <Paperclip className="h-3.5 w-3.5" strokeWidth={1.7} />
+                      {mediaLabel(m.type)}
+                      {m.text ? ` — ${m.text}` : ""}
+                    </span>
+                  )}
+                  <span className="float-right ml-2 mt-1 flex items-center gap-1">
+                    {m.aiGenerated && (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-[10px] font-medium text-brand-ink"
+                        title="Respuesta generada por IA"
+                      >
+                        <Sparkles className="h-3 w-3" strokeWidth={1.7} /> IA
                       </span>
                     )}
-                  </span>
-                ) : m.type === "text" || m.type === "template" ? (
-                  <span className="whitespace-pre-wrap break-words">
-                    {m.text}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-text-3">
-                    <Paperclip className="h-3.5 w-3.5" strokeWidth={1.7} />
-                    {mediaLabel(m.type)}
-                    {m.text ? ` — ${m.text}` : ""}
-                  </span>
-                )}
-                <span className="float-right ml-2 mt-1 flex items-center gap-1">
-                  {m.aiGenerated && (
-                    <span
-                      className="inline-flex items-center gap-0.5 text-[10px] font-medium text-brand-ink"
-                      title="Respuesta generada por IA"
-                    >
-                      <Sparkles className="h-3 w-3" strokeWidth={1.7} /> IA
+                    {m.origin === "manual" && (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-[10px] font-medium text-text-3"
+                        title="Enviado a mano desde la app de WhatsApp Business"
+                      >
+                        <Smartphone className="h-3 w-3" strokeWidth={1.7} /> Celular
+                      </span>
+                    )}
+                    <span className="font-mono text-[10px] tracking-[0.04em] text-text-3">
+                      {bubbleTime(m.createdAt)}
                     </span>
+                    {out && <StatusTicks status={m.status} />}
+                  </span>
+                  {out && m.status === "failed" && (
+                    // El triángulo solo decía "algo falló". El motivo lo manda
+                    // Meta y lo guardábamos sin enseñarlo nunca.
+                    <p className="mt-1.5 flex items-start gap-1.5 rounded-md border border-danger-soft bg-danger-tint px-2 py-1.5 text-[11.5px] leading-snug text-danger-text">
+                      <AlertTriangle
+                        className="mt-[1px] h-3.5 w-3.5 shrink-0"
+                        strokeWidth={1.8}
+                      />
+                      <span>
+                        <span className="font-semibold">No se entregó.</span>{" "}
+                        {m.error ?? "Meta no informó el motivo."}
+                      </span>
+                    </p>
                   )}
-                  {m.origin === "manual" && (
-                    <span
-                      className="inline-flex items-center gap-0.5 text-[10px] font-medium text-text-3"
-                      title="Enviado a mano desde la app de WhatsApp Business"
-                    >
-                      <Smartphone className="h-3 w-3" strokeWidth={1.7} /> Celular
-                    </span>
-                  )}
-                  <span className="font-mono text-[10px] tracking-[0.04em] text-text-3">
-                    {bubbleTime(m.createdAt)}
-                  </span>
-                  {out && <StatusTicks status={m.status} />}
-                </span>
-                {out && m.status === "failed" && (
-                  // El triángulo solo decía "algo falló". El motivo lo manda
-                  // Meta y lo guardábamos sin enseñarlo nunca.
-                  <p className="mt-1.5 flex items-start gap-1.5 rounded-md border border-danger-soft bg-danger-tint px-2 py-1.5 text-[11.5px] leading-snug text-danger-text">
-                    <AlertTriangle
-                      className="mt-[1px] h-3.5 w-3.5 shrink-0"
-                      strokeWidth={1.8}
-                    />
-                    <span>
-                      <span className="font-semibold">No se entregó.</span>{" "}
-                      {m.error ?? "Meta no informó el motivo."}
-                    </span>
-                  </p>
-                )}
+                </div>
               </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
+
+      {newCount > 0 && (
+        <button
+          type="button"
+          data-testid="new-messages"
+          onClick={() => toBottom(true)}
+          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-brand px-3.5 py-1.5 text-[12.5px] font-semibold text-brand-fg shadow-pop transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ArrowDown className="h-3.5 w-3.5" strokeWidth={2} />
+          {newCount === 1 ? "1 mensaje nuevo" : `${newCount} mensajes nuevos`}
+        </button>
+      )}
     </div>
   );
 }

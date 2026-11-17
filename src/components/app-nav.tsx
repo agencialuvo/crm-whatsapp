@@ -93,22 +93,42 @@ export function AppNav({
     };
   }, [menuOpen]);
 
+  /**
+   * 042 — El número de «Bandeja» sale de un `SUM` en el servidor, no de descargar la lista de conversaciones
+   * (esta barra vive en TODAS las pantallas y en todas las pestañas). Los avisos que llegan juntos se agrupan
+   * en un solo viaje, y solo cambian el número los eventos que de verdad lo mueven: un mensaje ENTRANTE, una
+   * conversación leída o una eliminada. Un saliente o una etapa que cambia no lo tocan.
+   */
+  const unreadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unreadSeq = useRef(0);
+
   async function refetchUnread() {
-    const res = await fetch("/api/conversations").catch(() => null);
-    if (!res?.ok) return;
-    const data = (await res.json()) as {
-      conversations: { unreadCount: number }[];
-    };
-    setUnread(data.conversations.reduce((a, c) => a + c.unreadCount, 0));
+    const mine = ++unreadSeq.current;
+    const res = await fetch("/api/conversations/unread").catch(() => null);
+    if (!res?.ok || mine !== unreadSeq.current) return; // una respuesta vieja no pisa a una nueva
+    const data = (await res.json()) as { unread: number };
+    setUnread(data.unread);
+  }
+
+  function scheduleUnread() {
+    if (unreadTimer.current) clearTimeout(unreadTimer.current);
+    unreadTimer.current = setTimeout(() => void refetchUnread(), 400);
   }
 
   useEffect(() => {
     void refetchUnread();
+    return () => {
+      if (unreadTimer.current) clearTimeout(unreadTimer.current);
+    };
   }, []);
 
   useEvents({
-    onMessageNew: () => void refetchUnread(),
-    onConversationUpdated: () => void refetchUnread(),
+    onMessageNew: ({ message }) => {
+      if ((message as { direction?: string } | null)?.direction === "in") scheduleUnread();
+    },
+    onConversationRead: () => scheduleUnread(),
+    onConversationDeleted: () => scheduleUnread(),
+    onReconnect: () => scheduleUnread(),
   });
 
   // #87 — Qué hay en el menú y en qué grupo lo decide `appNavGroups`; aquí

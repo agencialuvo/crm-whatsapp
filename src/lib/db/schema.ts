@@ -1202,6 +1202,14 @@ export const conversation = pgTable(
       .on(t.organizationId, t.contactId)
       .where(sql`${t.isTest} = false`),
     index("conversation_org_last_idx").on(t.organizationId, t.lastMessageAt),
+    // 042 — La lista de la bandeja y su cursor: la expresión EXACTA por la que se ordena.
+    index("conversation_list_idx")
+      .on(
+        t.organizationId,
+        sql`(coalesce(${t.lastMessageAt}, ${t.createdAt})) desc`,
+        sql`${t.id} desc`
+      )
+      .where(sql`${t.isTest} = false`),
   ]
 );
 
@@ -1250,6 +1258,49 @@ export const message = pgTable(
       t.conversationId,
       t.createdAt
     ),
+    // 042 — El hilo, el preview y la paginación hacia arriba: UNA llave de orden, la hora del evento.
+    index("message_event_idx").on(
+      t.organizationId,
+      t.conversationId,
+      sql`(coalesce(${t.waTimestamp}, ${t.createdAt})) desc`,
+      sql`${t.createdAt} desc`,
+      sql`${t.id} desc`
+    ),
+    // 041 — La barredera de envíos sin confirmar: casi siempre vacío.
+    index("message_unconfirmed_idx")
+      .on(t.createdAt)
+      .where(
+        sql`${t.direction} = 'out' and ${t.status} = 'pending' and ${t.waMessageId} is null`
+      ),
+  ]
+);
+
+/**
+ * 041 — Un estado de entrega que llegó ANTES que su mensaje.
+ *
+ * Meta puede mandar `sent`/`delivered` antes de que el CRM haya guardado el
+ * `wa_message_id` del mensaje que acaba de enviar. En vez de descartarlo, se
+ * estaciona aquí (uno por mensaje, el de mayor rango) y se aplica en cuanto
+ * el mensaje existe. Se poda a las 24 h.
+ */
+export const messageStatusOrphan = pgTable(
+  "message_status_orphan",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    waMessageId: text("wa_message_id").notNull(),
+    status: text("status", {
+      enum: ["sent", "delivered", "read", "failed"],
+    }).notNull(),
+    /** Ya traducido a algo accionable; solo con `failed`. */
+    error: text("error"),
+    receivedAt: timestamp("received_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("message_status_orphan_wa_uq").on(t.waMessageId),
+    index("message_status_orphan_received_idx").on(t.receivedAt),
   ]
 );
 

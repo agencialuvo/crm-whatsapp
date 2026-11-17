@@ -6,7 +6,7 @@ import { construirEventoOlvido } from "@/server/brains/contract";
 import { avisarOlvido, type ResultadoOlvido } from "@/server/brains/deliver";
 import { publish } from "@/server/events/bus";
 import { eliminarConversacion } from "@/server/inbox/eliminar";
-import { serializeConversation, getConversation, updateConversation } from "@/server/inbox/queries";
+import { getConversationDto, markConversationRead, updateConversation } from "@/server/inbox/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -18,30 +18,46 @@ const patchSchema = z.object({
 
 type Params = { params: Promise<{ id: string }> };
 
+/** 042 — Una conversación completa (con su preview y etapa): el enlace directo y la apertura de una que aún no se cargó. */
+export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
+  const { id } = await ctx.params;
+  const conversation = await getConversationDto(session.organizationId, id);
+  if (!conversation) return apiError(404, "not_found", "Conversación no encontrada");
+  return Response.json({ conversation });
+});
+
 export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const body = await parseBody(req, patchSchema);
   if (!body.ok) return body.response;
 
+  // 042 — Marcar leído, a solas, es lo que se manda al abrir una conversación: no escribe si no había nada
+  // por leer y, cuando sí, avisa con un evento ligero en vez de mandar a todo el equipo a recargar la lista.
+  const soloLeer =
+    body.data.markRead === true && body.data.aiEnabled === undefined && !body.data.reactivate;
+  if (soloLeer) {
+    const result = await markConversationRead(session.organizationId, id);
+    if (!result.found) return apiError(404, "not_found", "Conversación no encontrada");
+    if (result.changed) {
+      publish(session.organizationId, {
+        type: "conversation.read",
+        data: { conversationId: id, unreadCount: 0 },
+      });
+    }
+    return Response.json({ conversation: await getConversationDto(session.organizationId, id) });
+  }
+
   const updated = await updateConversation(session.organizationId, id, body.data);
   if (!updated) return apiError(404, "not_found", "Conversación no encontrada");
 
-  const row = await getConversation(session.organizationId, id);
-  if (row) {
-    const dto = serializeConversation(
-      row.conversation,
-      row.contact,
-      null,
-      null,
-      row.anuncio
-    );
+  const dto = await getConversationDto(session.organizationId, id);
+  if (dto) {
     publish(session.organizationId, {
       type: "conversation.updated",
       data: { conversation: dto },
     });
-    return Response.json({ conversation: dto });
   }
-  return Response.json({ conversation: null });
+  return Response.json({ conversation: dto });
 });
 
 const FECHA_DE_CITA = new Intl.DateTimeFormat("es-MX", { dateStyle: "long" });

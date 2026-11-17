@@ -1,0 +1,33 @@
+import { or, sql, type SQL, type AnyColumn } from "drizzle-orm";
+import { digitsOnly, normalizeText } from "@/lib/search";
+
+/**
+ * Búsqueda tolerante en SQL, espejo de `matchesQuery` del cliente (`src/lib/search.ts`):
+ * - nombre sin acentos ni mayúsculas (`translate`, sin depender de la extensión `unaccent`,
+ *   que exigiría privilegios en la BD);
+ * - teléfono por DÍGITOS, para poder teclearlo como se ve ("+52 555 000…"), con mínimo 3
+ *   porque un dígito suelto barrería el directorio entero.
+ *
+ * La comparten Contactos y la Bandeja: una sola regla en dos pantallas.
+ */
+const UNACCENT_FROM = "áàäâãéèëêíìïîóòöôõúùüûñçÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑÇ";
+const UNACCENT_TO = "aaaaaeeeeiiiiooooouuuuncAAAAAEEEEIIIIOOOOOUUUUNC";
+
+export function busquedaDeContacto(
+  name: AnyColumn,
+  phone: AnyColumn,
+  q: string | null | undefined
+): SQL | undefined {
+  const texto = q?.trim();
+  if (!texto) return undefined;
+  const dígitos = digitsOnly(texto);
+  // El patrón viaja normalizado igual que la columna, y con los comodines de LIKE
+  // escapados para que un "%" tecleado no liste todo.
+  const like = normalizeText(texto).replace(/[\\%_]/g, "\\$&");
+  return or(
+    sql`lower(translate(${name}, ${UNACCENT_FROM}, ${UNACCENT_TO})) like ${`%${like}%`}`,
+    dígitos.length >= 3
+      ? sql`regexp_replace(coalesce(${phone}, ''), '\\D', '', 'g') like ${`%${dígitos}%`}`
+      : undefined
+  );
+}

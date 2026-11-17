@@ -19,6 +19,8 @@ export type SseEvent =
       };
     }
   | { type: "conversation.updated"; data: { conversation: unknown } }
+  /** 042 — alguien marcó leída una conversación: se parcha el contador, sin recargar nada. */
+  | { type: "conversation.read"; data: { conversationId: string; unreadCount: number } }
   /** 026 — alguien del equipo eliminó la conversación: se quita de la bandeja. */
   | {
       type: "conversation.deleted";

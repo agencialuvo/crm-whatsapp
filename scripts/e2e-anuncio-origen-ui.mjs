@@ -136,7 +136,7 @@ try {
   // La imagen se copia en segundo plano: se espera a que la API la tenga.
   const conImagen = async (nombre) => {
     for (let i = 0; i < 60; i++) {
-      const lista = await (await req.get(`${BASE}/api/conversations`)).json();
+      const lista = await (await req.get(`${BASE}/api/conversations?q=${encodeURIComponent(nombre)}`)).json();
       const conv = lista.conversations.find((c) => c.contact.name === nombre);
       if (conv) {
         const d = await (await req.get(`${BASE}/api/contacts/${conv.contact.id}`)).json();

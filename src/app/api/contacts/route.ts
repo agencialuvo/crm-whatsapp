@@ -1,24 +1,15 @@
-import { desc, eq, inArray, or, sql } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { normalizeMx } from "@/lib/meta/client";
-import { digitsOnly, normalizeText } from "@/lib/search";
+import { busquedaDeContacto } from "@/server/search-sql";
 import { serializeContact } from "@/server/contacts";
 import { createLeadForContact } from "@/server/inbox/lead-activity";
 
 export const dynamic = "force-dynamic";
-
-/**
- * Búsqueda tolerante en SQL, espejo de `matchesQuery` del cliente:
- * - nombre sin acentos ni mayúsculas (`translate`, sin depender de la
- *   extensión `unaccent`, que exigiría privilegios en la BD);
- * - teléfono por DÍGITOS, para poder teclearlo como se ve ("+52 555 000…").
- */
-const UNACCENT_FROM = "áàäâãéèëêíìïîóòöôõúùüûñçÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑÇ";
-const UNACCENT_TO = "aaaaaeeeeiiiiooooouuuuncAAAAAEEEEIIIIOOOOOUUUUNC";
 
 export const GET = withAuth(async (session, req: Request) => {
   const url = new URL(req.url);
@@ -50,22 +41,7 @@ export const GET = withAuth(async (session, req: Request) => {
     leadStages.map((r) => [r.contactId, r.priority])
   );
 
-  const qDigits = q ? digitsOnly(q) : "";
-  // El patrón viaja normalizado igual que la columna, y con los comodines de
-  // LIKE escapados para que un "%" tecleado no liste todo.
-  const qLike = q ? normalizeText(q).replace(/[\\%_]/g, "\\$&") : "";
-  const search =
-    q && q.length > 0
-      ? or(
-          sql`lower(translate(${schema.contact.name}, ${UNACCENT_FROM}, ${UNACCENT_TO}))
-              like ${`%${qLike}%`}`,
-          // Un dígito suelto barrería el directorio entero: mínimo 3.
-          qDigits.length >= 3
-            ? sql`regexp_replace(coalesce(${schema.contact.phone}, ''), '\\D', '', 'g')
-                  like ${`%${qDigits}%`}`
-            : undefined
-        )
-      : undefined;
+  const search = busquedaDeContacto(schema.contact.name, schema.contact.phone, q);
 
   // El filtro de etapa se aplica ANTES del límite: si no, un contacto de la
   // etapa buscada podría quedar fuera por el corte de 200.

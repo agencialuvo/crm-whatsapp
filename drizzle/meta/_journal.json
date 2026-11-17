@@ -533,6 +533,20 @@
       "when": 1794786374791,
       "tag": "0075_clean_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1794926189956,
+      "tag": "0076_cool_pestilence",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1794929114882,
+      "tag": "0077_lonely_santa_claus",
+      "breakpoints": true
     }
   ]
 }

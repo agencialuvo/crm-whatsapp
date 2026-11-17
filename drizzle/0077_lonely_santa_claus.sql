@@ -1,0 +1,2 @@
+CREATE INDEX "conversation_list_idx" ON "conversation" USING btree ("organization_id",(coalesce("last_message_at", "created_at")) desc,"id" desc) WHERE "conversation"."is_test" = false;--> statement-breakpoint
+CREATE INDEX "message_event_idx" ON "message" USING btree ("organization_id","conversation_id",(coalesce("wa_timestamp", "created_at")) desc,"created_at" desc,"id" desc);
