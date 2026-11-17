@@ -11,10 +11,21 @@ export class MetaApiError extends Error {
   code: number | null;
   type: string | null;
   details: unknown;
+  /**
+   * 041 — El tiempo se agotó SIN respuesta: Meta pudo haber aceptado la petición.
+   * Un error de conexión (DNS, rechazo) no lo es: ahí seguro no salió nada.
+   */
+  ambiguous: boolean;
 
   constructor(
     message: string,
-    opts: { status: number; code?: number | null; type?: string | null; details?: unknown }
+    opts: {
+      status: number;
+      code?: number | null;
+      type?: string | null;
+      details?: unknown;
+      ambiguous?: boolean;
+    }
   ) {
     super(message);
     this.name = "MetaApiError";
@@ -22,6 +33,7 @@ export class MetaApiError extends Error {
     this.code = opts.code ?? null;
     this.type = opts.type ?? null;
     this.details = opts.details;
+    this.ambiguous = opts.ambiguous ?? false;
   }
 
   /**
@@ -36,6 +48,24 @@ export class MetaApiError extends Error {
   }
 }
 
+/** 041 — Tiempo máximo de una llamada que ENVÍA (POST); las lecturas esperan el doble. */
+const SEND_TIMEOUT_MS = 30_000;
+
+function timeoutFor(method: string, override?: number): number {
+  if (override !== undefined) return override;
+  const fromEnv = Number(process.env.META_GRAPH_TIMEOUT_MS); // perilla de pruebas
+  const send = Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : SEND_TIMEOUT_MS;
+  return method === "POST" ? send : send * 2;
+}
+
+function isTimeout(cause: unknown): boolean {
+  const name = (cause as { name?: string } | null)?.name;
+  return name === "TimeoutError" || name === "AbortError";
+}
+
+const TIMEOUT_MESSAGE =
+  "Meta no respondió a tiempo: el mensaje pudo haber salido. Verifica en la conversación o en Meta antes de reenviarlo";
+
 export async function graphRequest<T>(
   path: string,
   opts: {
@@ -48,6 +78,8 @@ export async function graphRequest<T>(
      * llamadores no cambia.
      */
     onHeaders?: (headers: Headers) => void;
+    /** 041 — Tiempo máximo en ms; por omisión 30 s al enviar y 60 s al leer. */
+    timeoutMs?: number;
   }
 ): Promise<T> {
   const env = getEnv();
@@ -63,8 +95,16 @@ export async function graphRequest<T>(
           : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal: AbortSignal.timeout(timeoutFor(opts.method ?? "GET", opts.timeoutMs)),
     });
   } catch (cause) {
+    if (isTimeout(cause)) {
+      throw new MetaApiError(TIMEOUT_MESSAGE, {
+        status: 0,
+        details: cause,
+        ambiguous: true,
+      });
+    }
     throw new MetaApiError("No se pudo contactar la API de Meta", {
       status: 0,
       details: cause,
@@ -77,7 +117,17 @@ export async function graphRequest<T>(
     // un observador de cabeceras nunca rompe la llamada
   }
 
-  const text = await res.text();
+  let text: string;
+  try {
+    text = await res.text();
+  } catch (cause) {
+    // Las cabeceras llegaron y el cuerpo no: igual de ambiguo si se agotó el tiempo.
+    throw new MetaApiError(isTimeout(cause) ? TIMEOUT_MESSAGE : "Se cortó la respuesta de Meta", {
+      status: 0,
+      details: cause,
+      ambiguous: isTimeout(cause),
+    });
+  }
   let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;

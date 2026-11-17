@@ -3,6 +3,8 @@ import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { mockGuard } from "@/lib/dev-guard";
 import { getEnv } from "@/lib/env";
+import { buildStatusPayload, deliverToWebhook } from "@/server/dev/wa-mock-inbound";
+import { getCredentialsByPhoneNumberId } from "@/server/whatsapp/credentials";
 import {
   getWaMockState,
   nextN,
@@ -708,6 +710,23 @@ export async function POST(req: Request, ctx: Params) {
         }
       }
     }
+    // 041 — Modos de envío para probar la bandeja (se eligen en /api/dev/wa-mock/modo).
+    if (state.modoEnvio === "fallo") {
+      return Response.json(
+        {
+          error: {
+            message: "(#131000) Something went wrong",
+            code: 131000,
+            type: "OAuthException",
+            fbtrace_id: "mock-fallo",
+          },
+        },
+        { status: 400 }
+      );
+    }
+    if (state.modoEnvio === "colgado") {
+      await new Promise((r) => setTimeout(r, 120_000));
+    }
     const n = nextN();
     const waMessageId = nextOutboundWamid();
     state.outbox.push({
@@ -722,6 +741,20 @@ export async function POST(req: Request, ctx: Params) {
       body,
       at: new Date().toISOString(),
     });
+    if (state.modoEnvio === "estadoprimero") {
+      // El acuse llega ANTES de que el CRM sepa el id del mensaje que acaba de enviar.
+      const creds = await getCredentialsByPhoneNumberId(path[0]!);
+      if (creds) {
+        await deliverToWebhook(
+          buildStatusPayload({
+            wabaId: creds.wabaId,
+            phoneNumberId: path[0]!,
+            waMessageId,
+            status: "delivered",
+          })
+        ).catch(() => null);
+      }
+    }
     return Response.json({
       messaging_product: "whatsapp",
       contacts: [{ input: body.to, wa_id: body.to }],

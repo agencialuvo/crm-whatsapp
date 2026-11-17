@@ -9,6 +9,8 @@ const prefixes = {
   contact: "ct",
   conversation: "cv",
   message: "msg",
+  // 041 — estado de entrega que llegó antes que su mensaje
+  messageStatusOrphan: "mso",
   lead: "ld",
   stage: "stg",
   leadStageEvent: "lse",

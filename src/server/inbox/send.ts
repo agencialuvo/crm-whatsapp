@@ -3,7 +3,6 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
 import { destinatarioMeta, type Destinatario } from "@/lib/meta/destinatario";
-import { publish } from "@/server/events/bus";
 import {
   getCredentialsByOrg,
   markReconnectRequired,
@@ -46,36 +45,16 @@ import {
   aiWindowClosedMessage,
 } from "@/server/channels/capabilities";
 import { isChannelEnabled } from "@/server/channels/enabled";
-import { serializeMessage } from "@/server/inbox/ingest";
+import { SendError } from "@/server/inbox/send-error";
+import { enviarYRegistrar } from "@/server/inbox/outbox";
 import {
   saveMediaFile,
   uploadGraphMedia,
   validateOutgoing,
 } from "@/server/whatsapp/media";
 
-/** Error tipado del envío; `code` mapea a HTTP en la capa de API. */
-export class SendError extends Error {
-  code:
-    | "sandbox_violation"
-    | "not_connected"
-    | "reconnect_required"
-    | "window_closed"
-    /** 022: el canal no admite más mensajes hasta que el cliente escriba. */
-    | "message_limit"
-    /** 022: el texto no cabe en el canal de esa conversación. */
-    | "text_too_long"
-    | "meta_error"
-    | "meta_unavailable"
-    | "upload_failed";
-  /** 008: presente cuando el fallo ocurrió TRAS persistir el mensaje (failed). */
-  messageId?: string;
-
-  constructor(code: SendError["code"], message: string) {
-    super(message);
-    this.name = "SendError";
-    this.code = code;
-  }
-}
+// 041: la clase vive en `send-error.ts` para que `outbox.ts` la use sin importar este archivo.
+export { SendError };
 
 type SendResult = { messageId: string };
 
@@ -343,63 +322,13 @@ async function prepareSend(
   return { conversation: row.conversation, credentials, destinatario, recipient };
 }
 
-async function persistOutbound(input: {
-  organizationId: string;
-  conversationId: string;
-  waMessageId: string | null;
-  type: string;
-  text: string | null;
-  /**
-   * 014: 'sent' existe porque no todos los canales confirman por webhook.
-   * WhatsApp entra como 'pending' y avanza con los `statuses` de Meta;
-   * Instagram no manda ese evento salvo que se suscriba aparte, asi que la
-   * aceptacion de la plataforma ES la confirmacion. Sin esto el mensaje se
-   * queda con el reloj puesto para siempre aunque ya se haya entregado.
-   */
-  status: "pending" | "sent" | "failed";
-  error?: string | null;
-  aiGenerated?: boolean;
-  origin: "ai" | "operator";
-  mediaAssetId?: string | null;
-  media?: typeof schema.mediaAsset.$inferSelect | null;
-}): Promise<string> {
-  const db = getDb();
-  const inserted = await db
-    .insert(schema.message)
-    .values({
-      id: newId("message"),
-      organizationId: input.organizationId,
-      conversationId: input.conversationId,
-      waMessageId: input.waMessageId,
-      direction: "out",
-      type: input.type,
-      text: input.text,
-      status: input.status,
-      error: input.error ?? null,
-      aiGenerated: input.aiGenerated ?? false,
-      origin: input.origin,
-      mediaAssetId: input.mediaAssetId ?? null,
-    })
-    .returning();
-  const message = inserted[0]!;
+/**
+ * 041 — Los envíos de la bandeja pasan TODOS por `enviarYRegistrar` (`outbox.ts`): la fila del
+ * mensaje se inserta antes de llamar al canal y se confirma o se marca `failed` después.
+ * Aquí solo queda lo propio de cada tipo: qué se manda y cómo se traducen sus errores.
+ */
 
-  await db
-    .update(schema.conversation)
-    .set({ lastMessageAt: new Date(), updatedAt: new Date() })
-    .where(eq(schema.conversation.id, input.conversationId));
-
-  publish(input.organizationId, {
-    type: "message.new",
-    data: {
-      conversationId: input.conversationId,
-      message: serializeMessage(message, input.media ?? null),
-    },
-  });
-
-  return message.id;
-}
-
-/** Envía un mensaje de texto libre por WhatsApp. */
+/** Envía un mensaje de texto libre por el canal de la conversación. */
 export async function sendText(input: {
   conversationId: string;
   organizationId: string;
@@ -430,43 +359,41 @@ export async function sendText(input: {
     throw new SendError("text_too_long", textLimitMessage(canal));
   }
 
-  const waMessageId = target.instagram
-    ? await callInstagramSend(target, text)
-    : target.messenger
-      ? await callMessengerSend(target, text)
-      : target.tiktok
-        ? await callTiktokSend(target, text)
-        : await callGraphSend(credentials!, {
-          messaging_product: "whatsapp",
-          ...target.destinatario,
-          type: "text",
-          text: { body: text },
-        });
-
-  const messageId = await persistOutbound({
+  const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
-    waMessageId,
-    type: "text",
-    text,
+    fila: {
+      type: "text",
+      text,
+      origin: input.aiGenerated ? "ai" : "operator",
+      aiGenerated: input.aiGenerated,
+    },
     // Un canal sin acuses de entrega confirma al aceptar; uno con acuses
     // avanza despues por webhook. Sin esta distincion el mensaje se queda
     // con el reloj puesto para siempre.
-    status: capabilitiesFor(target.conversation.channel).deliveryReceipts
-      ? "pending"
-      : "sent",
-    aiGenerated: input.aiGenerated,
-    origin: input.aiGenerated ? "ai" : "operator",
+    estadoAlAceptar: capabilitiesFor(canal).deliveryReceipts ? "pending" : "sent",
+    enviar: () =>
+      target.instagram
+        ? callInstagramSend(target, text)
+        : target.messenger
+          ? callMessengerSend(target, text)
+          : target.tiktok
+            ? callTiktokSend(target, text)
+            : callGraphSend(credentials!, {
+                messaging_product: "whatsapp",
+                ...target.destinatario,
+                type: "text",
+                text: { body: text },
+              }),
   });
-
   return { messageId };
 }
 
 /**
  * 008 — Envía un adjunto de archivo (imagen/video/audio/documento).
  * El archivo queda ANTES en el volumen local (fuente durable de la preview);
- * si Graph falla tras eso, el mensaje se persiste `failed` (visible en el
- * hilo, nunca se pierde en silencio) y el SendError lleva `messageId`.
+ * si el envío falla tras eso, el mensaje queda `failed` (visible en el hilo,
+ * nunca se pierde en silencio) y el SendError lleva `messageId`.
  */
 export async function sendMediaMessage(input: {
   conversationId: string;
@@ -510,69 +437,51 @@ export async function sendMediaMessage(input: {
     .returning();
   const asset = assetRows[0]!;
 
-  try {
-    const waMediaId = await uploadGraphMedia(credentials!, input.file);
-    await db
-      .update(schema.mediaAsset)
-      .set({ waMediaId, updatedAt: new Date() })
-      .where(eq(schema.mediaAsset.id, assetId));
-
-    const mediaPayload: Record<string, unknown> = { id: waMediaId };
-    if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
-    if (kind === "document" && input.file.fileName) {
-      mediaPayload.filename = input.file.fileName;
-    }
-    const waMessageId = await callGraphSend(credentials!, {
-      messaging_product: "whatsapp",
-      ...target.destinatario,
-      type: kind,
-      [kind]: mediaPayload,
-    });
-
-    const messageId = await persistOutbound({
-      organizationId: input.organizationId,
-      conversationId: input.conversationId,
-      waMessageId,
+  const { messageId } = await enviarYRegistrar({
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+    fila: {
       type: kind,
       text: null,
-      status: "pending",
       origin: "operator",
       mediaAssetId: assetId,
       media: asset,
-    });
-    return { messageId };
-  } catch (err) {
-    let sendErr: SendError;
-    if (err instanceof SendError) {
-      sendErr = err;
-    } else if (err instanceof MetaApiError && err.isAuthError) {
-      // Mismo criterio que el texto: SOLO 401/código 190 (fix 2026-08-04).
-      await markReconnectRequired(input.organizationId);
-      sendErr = new SendError(
-        "reconnect_required",
-        "El token de WhatsApp expiró: reconecta el número en Configuración"
-      );
-    } else {
-      sendErr = new SendError(
-        "upload_failed",
-        "No se pudo subir el adjunto a WhatsApp"
-      );
-    }
-    // El contenido NO se pierde: mensaje failed con el asset ya en disco.
-    sendErr.messageId = await persistOutbound({
-      organizationId: input.organizationId,
-      conversationId: input.conversationId,
-      waMessageId: null,
-      type: kind,
-      text: null,
-      status: "failed",
-      error: sendErr.message,
-      origin: "operator",
-      mediaAssetId: assetId,
-      media: asset,
-    });
-    throw sendErr;
-  }
+    },
+    estadoAlAceptar: "pending",
+    enviar: async () => {
+      try {
+        const waMediaId = await uploadGraphMedia(credentials!, input.file);
+        await db
+          .update(schema.mediaAsset)
+          .set({ waMediaId, updatedAt: new Date() })
+          .where(eq(schema.mediaAsset.id, assetId));
+
+        const mediaPayload: Record<string, unknown> = { id: waMediaId };
+        if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
+        if (kind === "document" && input.file.fileName) {
+          mediaPayload.filename = input.file.fileName;
+        }
+        return await callGraphSend(credentials!, {
+          messaging_product: "whatsapp",
+          ...target.destinatario,
+          type: kind,
+          [kind]: mediaPayload,
+        });
+      } catch (err) {
+        if (err instanceof SendError) throw err;
+        if (err instanceof MetaApiError && err.isAuthError) {
+          // Mismo criterio que el texto: SOLO 401/código 190 (fix 2026-08-04).
+          await markReconnectRequired(input.organizationId);
+          throw new SendError(
+            "reconnect_required",
+            "El token de WhatsApp expiró: reconecta el número en Configuración"
+          );
+        }
+        throw new SendError("upload_failed", "No se pudo subir el adjunto a WhatsApp");
+      }
+    },
+  });
+  return { messageId };
 }
 
 export type LocationInput = {
@@ -606,6 +515,7 @@ export async function sendStructured(
       "Este canal no admite ubicaciones ni contactos; manda el texto"
     );
   }
+  const credentials = target.credentials;
 
   const payload =
     input.kind === "location"
@@ -618,12 +528,8 @@ export async function sendStructured(
           })),
         };
 
-  const waMessageId = await callGraphSend(target.credentials, {
-    messaging_product: "whatsapp",
-    ...target.destinatario,
-    ...payload,
-  });
-
+  // 041: el contenido se guarda ANTES de llamar a Graph, igual que el adjunto de
+  // archivo, para que la burbuja fallida también muestre qué se quiso mandar.
   const db = getDb();
   const assetRows = await db
     .insert(schema.mediaAsset)
@@ -637,16 +543,23 @@ export async function sendStructured(
     .returning();
   const asset = assetRows[0]!;
 
-  const messageId = await persistOutbound({
+  const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
-    waMessageId,
-    type: input.kind,
-    text: null,
-    status: "pending",
-    origin: "operator",
-    mediaAssetId: asset.id,
-    media: asset,
+    fila: {
+      type: input.kind,
+      text: null,
+      origin: "operator",
+      mediaAssetId: asset.id,
+      media: asset,
+    },
+    estadoAlAceptar: "pending",
+    enviar: () =>
+      callGraphSend(credentials, {
+        messaging_product: "whatsapp",
+        ...target.destinatario,
+        ...payload,
+      }),
   });
   return { messageId };
 }
@@ -674,7 +587,11 @@ export async function callGraphSend(
         );
       }
       if (err.status === 0 || err.status >= 500) {
-        throw new SendError("meta_unavailable", "Meta no está disponible ahora");
+        // 041: un tiempo agotado es ambiguo (pudo haber salido) y su texto lo dice.
+        throw new SendError(
+          "meta_unavailable",
+          err.ambiguous ? err.message : "Meta no está disponible ahora"
+        );
       }
       throw new SendError("meta_error", err.message);
     }
@@ -728,7 +645,7 @@ async function callInstagramSend(
       if (err.status === 0 || err.status >= 500) {
         throw new SendError(
           "meta_unavailable",
-          "Instagram no está disponible en este momento; intenta de nuevo"
+          err.ambiguous ? err.message : "Instagram no está disponible en este momento; intenta de nuevo"
         );
       }
       throw new SendError("meta_error", err.message);
@@ -783,7 +700,7 @@ async function callMessengerSend(
       if (err.status === 0 || err.status >= 500) {
         throw new SendError(
           "meta_unavailable",
-          "Messenger no está disponible en este momento; intenta de nuevo"
+          err.ambiguous ? err.message : "Messenger no está disponible en este momento; intenta de nuevo"
         );
       }
       throw new SendError("meta_error", err.message);
@@ -820,7 +737,7 @@ async function callTiktokSend(target: SendTarget, text: string): Promise<string>
       if (err.status === 0 || err.status >= 500) {
         throw new SendError(
           "meta_unavailable",
-          "TikTok no está disponible en este momento; intenta de nuevo"
+          err.ambiguous ? err.message : "TikTok no está disponible en este momento; intenta de nuevo"
         );
       }
       throw new SendError("meta_error", err.message);

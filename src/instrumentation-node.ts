@@ -160,3 +160,16 @@ export async function seedPlatformData(): Promise<void> {
     console.error("[boot] no se pudo sembrar el catálogo de plataforma:", err instanceof Error ? err.message : err);
   }
 }
+
+/**
+ * 041 — La barredera de envíos sin confirmar y de estados huérfanos. Del núcleo: corre siempre.
+ * Import dinámico y a prueba de fallos: nunca tumba el arranque.
+ */
+export function resumeOutboxSweeper(): void {
+  void import("@/server/inbox/outbox-sweeper")
+    .then(({ startOutboxSweeper, tickOutbox }) => {
+      startOutboxSweeper();
+      void tickOutbox();
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar la barredera de envíos:", err));
+}

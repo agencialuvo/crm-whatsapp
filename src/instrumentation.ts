@@ -12,6 +12,7 @@ export async function register(): Promise<void> {
       resumeAutomations,
       resumeDispatch,
       resumeMetaAds,
+      resumeOutboxSweeper,
       seedPlatformData,
     } =
       await import("./instrumentation-node");
@@ -22,5 +23,6 @@ export async function register(): Promise<void> {
     resumeDispatch();
     resumeAutomations();
     resumeMetaAds();
+    resumeOutboxSweeper();
   }
 }

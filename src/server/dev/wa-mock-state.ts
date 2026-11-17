@@ -75,6 +75,12 @@ type WaMockState = {
    */
   phoneWebhooks: Record<string, string>;
   counter: number;
+  /**
+   * 041 — Cómo responde el mock al ENVÍO de un mensaje (`POST {phone}/messages`):
+   * `estadoprimero` manda el webhook `delivered` ANTES de responder (la carrera del estado
+   * temprano), `fallo` rechaza con un error de Meta, `colgado` no responde.
+   */
+  modoEnvio: "normal" | "estadoprimero" | "fallo" | "colgado";
 };
 
 const globalForMock = globalThis as unknown as { __waMockState?: WaMockState };
@@ -87,6 +93,7 @@ function freshState(): WaMockState {
     wabaSubscriptions: {},
     phoneWebhooks: {},
     counter: 0,
+    modoEnvio: "normal",
   };
 }
 
@@ -96,6 +103,7 @@ export function getWaMockState(): WaMockState {
   }
   // Un proceso de `next dev` que ya tenía el estado viejo en memoria.
   globalForMock.__waMockState.phoneWebhooks ??= {};
+  globalForMock.__waMockState.modoEnvio ??= "normal";
   return globalForMock.__waMockState;
 }
 

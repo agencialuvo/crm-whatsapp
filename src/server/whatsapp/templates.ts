@@ -9,14 +9,13 @@ import { newId } from "@/lib/db/ids";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
 import { destinatarioMeta } from "@/lib/meta/destinatario";
 import { scoped } from "@/lib/db/tenant";
-import { publish } from "@/server/events/bus";
 import {
   getCredentialsByOrg,
   getCredentialsByWabaId,
   markReconnectRequired,
 } from "@/server/whatsapp/credentials";
 import { callGraphSend, SendError } from "@/server/inbox/send";
-import { serializeMessage } from "@/server/inbox/ingest";
+import { enviarYRegistrar } from "@/server/inbox/outbox";
 import type { WebhookValue } from "@/server/inbox/webhook";
 
 /** Errores tipados del servicio de plantillas → HTTP en la capa de API. */
@@ -366,54 +365,36 @@ export async function sendTemplate(input: {
     );
   }
 
-  const waMessageId = await callGraphSend(creds, {
-    messaging_product: "whatsapp",
-    ...destinatario,
-    type: "template",
-    template: {
-      name: template.name,
-      language: { code: template.language },
-      ...(variableCount > 0
-        ? {
-            components: [
-              {
-                type: "body",
-                parameters: values.map((text) => ({ type: "text", text })),
-              },
-            ],
-          }
-        : {}),
-    },
-  });
-
-  const inserted = await db
-    .insert(schema.message)
-    .values({
-      id: newId("message"),
-      organizationId: input.organizationId,
-      conversationId: input.conversationId,
-      waMessageId,
-      direction: "out",
+  // 041: la fila existe antes de llamar a Graph; un fallo deja una burbuja `failed` con el motivo.
+  const { messageId } = await enviarYRegistrar({
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+    fila: {
       type: "template",
       text: renderBody(template.body, values),
-      status: "pending",
       origin: "template",
-    })
-    .returning();
-  const message = inserted[0]!;
-
-  await db
-    .update(schema.conversation)
-    .set({ lastMessageAt: new Date(), updatedAt: new Date() })
-    .where(eq(schema.conversation.id, input.conversationId));
-
-  publish(input.organizationId, {
-    type: "message.new",
-    data: {
-      conversationId: input.conversationId,
-      message: serializeMessage(message),
     },
+    estadoAlAceptar: "pending",
+    enviar: () =>
+      callGraphSend(creds, {
+        messaging_product: "whatsapp",
+        ...destinatario,
+        type: "template",
+        template: {
+          name: template.name,
+          language: { code: template.language },
+          ...(variableCount > 0
+            ? {
+                components: [
+                  {
+                    type: "body",
+                    parameters: values.map((text) => ({ type: "text", text })),
+                  },
+                ],
+              }
+            : {}),
+        },
+      }),
   });
-
-  return { messageId: message.id };
+  return { messageId };
 }

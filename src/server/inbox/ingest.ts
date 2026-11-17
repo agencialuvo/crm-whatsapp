@@ -16,7 +16,7 @@ import {
   resolveIdentity,
   type ResolvedIdentity,
 } from "@/server/inbox/identity";
-import { applyStatusUpdate } from "@/server/inbox/status";
+import { applyStatusUpdate, reclaimOrphanStatus } from "@/server/inbox/status";
 import {
   anuncioDeWhatsapp,
   type AnuncioDeOrigen,
@@ -389,6 +389,11 @@ async function ingestManualEcho(
   const asset = mediaInput
     ? await attachMediaAsset(organizationId, message.id, mediaInput)
     : null;
+
+  // 041: el acuse de un mensaje escrito desde el teléfono puede llegar antes que su eco.
+  await reclaimOrphanStatus(organizationId, echo.id).catch((err) =>
+    console.warn(`[webhook] no se pudo reclamar el estado de ${echo.id}:`, err)
+  );
 
   // Solo lastMessageAt: un mensaje del negocio NUNCA abre la ventana de 24 h.
   await db
