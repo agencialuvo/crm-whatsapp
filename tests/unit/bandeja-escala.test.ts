@@ -155,6 +155,22 @@ describe("la lista", () => {
       expect(ids(out)).toEqual(["cv_b", "cv_a"]);
     });
 
+    it("con una búsqueda activa, una fila que ya está (coincidía por el TEXTO de un mensaje) no se retira porque su nombre no coincida", () => {
+      const f = { ...DEFAULT_FILTERS, q: "tinte" };
+      const out = applyDelta(rowsOf([a]), [{ ...a, unreadCount: 3 }], f, 2, false);
+      expect(ids(out)).toEqual(["cv_a"]);
+    });
+
+    it("con una búsqueda activa, una fila NUEVA solo entra si el nombre o teléfono coinciden (el texto lo decide el servidor)", () => {
+      const f = { ...DEFAULT_FILTERS, q: "tinte" };
+      expect(ids(applyDelta(rowsOf([a]), [b], f, 2, false))).toEqual(["cv_a"]);
+    });
+
+    it("la búsqueda no relaja los demás filtros de una fila ya presente", () => {
+      const f = { ...DEFAULT_FILTERS, q: "tinte", filter: "unread" as const };
+      expect(ids(applyDelta(rowsOf([a]), [{ ...a, unreadCount: 0 }], f, 2, false))).toEqual([]);
+    });
+
     it("una que deja de cumplir el filtro se retira (leída, con «No leídas» puesto)", () => {
       const f = { ...DEFAULT_FILTERS, filter: "unread" as const };
       const out = applyDelta(rowsOf([a]), [{ ...a, unreadCount: 0 }], f, 2, false);

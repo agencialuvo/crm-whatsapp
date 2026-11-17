@@ -70,7 +70,10 @@ export function applyDelta(
   for (const dto of changed) {
     const current = next.get(dto.id);
     if (current && at < current.at) continue; // el parche local es más nuevo
-    if (!matchesFilters(dto, filters)) {
+    // La búsqueda también mira el TEXTO de los mensajes, que el cliente no tiene: una fila que ya está en la
+    // lista por esa vía no se retira porque su nombre no coincida (sí se retira por etapa/canal/no leídas).
+    const f = current && filters.q.trim() ? { ...filters, q: "" } : filters;
+    if (!matchesFilters(dto, f)) {
       next.delete(dto.id);
       continue;
     }

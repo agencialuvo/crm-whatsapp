@@ -31,3 +31,22 @@ export function busquedaDeContacto(
       : undefined
   );
 }
+
+/** Mínimo de caracteres para buscar DENTRO de los mensajes: con menos, casi todo hilo coincide y se barrería la tabla. */
+export const MIN_CONTENT_CHARS = 3;
+
+/**
+ * Coincidencia con el TEXTO de algún mensaje de la conversación (misma normalización que el nombre: sin
+ * acentos ni mayúsculas, comodines de LIKE escapados). `EXISTS` y no JOIN: un hilo con diez mensajes que
+ * coinciden cuenta UNA vez, y la lista conserva su paginación por cursor sin `DISTINCT`.
+ */
+export function busquedaEnMensajes(conversationId: AnyColumn, q: string | null | undefined): SQL | undefined {
+  const texto = q?.trim();
+  if (!texto || texto.length < MIN_CONTENT_CHARS) return undefined;
+  const like = normalizeText(texto).replace(/[\\%_]/g, "\\$&");
+  return sql`exists (
+    select 1 from message m
+    where m.conversation_id = ${conversationId}
+      and lower(translate(m.text, ${UNACCENT_FROM}, ${UNACCENT_TO})) like ${`%${like}%`}
+  )`;
+}

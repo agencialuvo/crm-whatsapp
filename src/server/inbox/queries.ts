@@ -8,7 +8,7 @@ import {
   type ListCursor,
   type ThreadCursor,
 } from "@/lib/inbox-cursor";
-import { busquedaDeContacto } from "@/server/search-sql";
+import { busquedaDeContacto, busquedaEnMensajes } from "@/server/search-sql";
 import { replyWindow } from "@/server/inbox/window";
 import { capabilitiesFor, windowMsFor } from "@/server/channels/capabilities";
 import { serializeMessage } from "@/server/inbox/ingest";
@@ -102,7 +102,11 @@ export type ListFilters = {
 /** `q` y `stage`: lo que acota qué conversaciones se cuentan en los chips de cada bandeja. */
 function filtrosBase(f: ListFilters): (SQL | undefined)[] {
   return [
-    busquedaDeContacto(schema.contact.name, schema.contact.phone, f.q),
+    // Nombre, teléfono O el texto de cualquier mensaje del hilo (una sola condición: `or`).
+    or(
+      busquedaDeContacto(schema.contact.name, schema.contact.phone, f.q),
+      busquedaEnMensajes(schema.conversation.id, f.q)
+    ),
     f.stage && f.stage !== "all"
       ? sql`exists (
           select 1 from lead l join pipeline_stage s on s.id = l.stage_id

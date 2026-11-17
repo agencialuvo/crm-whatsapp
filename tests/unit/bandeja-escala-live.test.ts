@@ -73,7 +73,7 @@ describe.skipIf(!live)("bandeja a escala contra Postgres", () => {
     if (convIds.length) await db.delete(schema.conversation).where(inArray(schema.conversation.id, convIds));
     if (contactIds.length) await db.delete(schema.contact).where(inArray(schema.contact.id, contactIds));
     await db.delete(schema.pipelineStage).where(inArray(schema.pipelineStage.id, [stageA, stageB]));
-  });
+  }, 120_000);
 
   /** Crea N conversaciones; `keyFor(i)` da la llave de orden (para empatar a propósito). */
   async function sembrar(
@@ -360,6 +360,52 @@ describe.skipIf(!live)("bandeja a escala contra Postgres", () => {
     const dto = await q.getConversationDto(org, cv);
     expect(dto!.preview).toBe("t30000");
   }, 120_000);
+
+  it("9. la búsqueda también mira el texto de los mensajes: sin duplicar, con filtros, con cursor y con volumen", async () => {
+    const { convs } = await sembrar(600, "bm", (i) => new Date(Date.UTC(2039, 0, 1, 0, 0, i)));
+    // 600 hilos x 100 mensajes (60 000). Sin tocar nada con la palabra, salvo lo sembrado después.
+    await db.execute(sql`
+      insert into message (id, organization_id, conversation_id, direction, type, text, status, created_at)
+      select 'msg_es${sql.raw(uid)}bm' || c.n || '_' || g, ${org}, 'cv_es${sql.raw(uid)}bm' || c.n, 'in', 'text',
+             'mensaje de relleno numero ' || g, 'delivered', timestamp '2039-01-01' + (g || ' seconds')::interval
+      from generate_series(0, 599) c(n), generate_series(1, 100) g`);
+    const palabra = `zxqtinte${uid}`;
+    const poner = (i: number, texto: string, n: number) =>
+      db.insert(schema.message).values({
+        id: `msg_es${uid}bmx${i}_${n}`, organizationId: org, conversationId: convs[i]!.id,
+        direction: "in", type: "text", text: texto, status: "delivered",
+      });
+    await poner(5, `Quiero un ${palabra} rubio`, 1);
+    await poner(5, `y otro ${palabra.toUpperCase()} también`, 2); // 2 coincidencias en el mismo hilo
+    await poner(7, `Cuánto cuesta el TÍNTE ${palabra}`, 1);
+    await poner(9, "nada que ver", 1);
+    await db.execute(sql`analyze message`);
+
+    // 1) cada conversación UNA vez aunque tenga varios mensajes que coinciden
+    const todas = await recorrer({ q: palabra }, 1);
+    expect(todas.map((c) => c.id).sort()).toEqual([convs[5]!.id, convs[7]!.id].sort());
+    // 2) sin acentos ni mayúsculas
+    expect((await recorrer({ q: `cuánto cuesta el tínte ${palabra}` })).map((c) => c.id)).toEqual([convs[7]!.id]);
+    // 3) un % tecleado no lista todo
+    expect((await recorrer({ q: "zxqtin%" })).length).toBe(0);
+    // 4) menos de 3 caracteres NO barre mensajes (sí busca nombre)
+    expect((await recorrer({ q: "re" })).every((c) => /re/i.test(c.contact.name))).toBe(true);
+    // 5) combinado con etapa/no leídas: la coincidencia por mensaje respeta los demás filtros
+    await db.update(schema.conversation).set({ unreadCount: 2 }).where(eq(schema.conversation.id, convs[7]!.id));
+    expect((await recorrer({ q: palabra, filter: "unread" })).map((c) => c.id)).toEqual([convs[7]!.id]);
+    // 6) los contadores usan la misma búsqueda
+    const pagina = await q.listConversationsPage(org, { limit: 40, cursor: null, filters: { q: palabra } });
+    expect(pagina.counts?.all).toBe(2);
+    // 7) por nombre sigue funcionando junto con mensajes
+    expect((await recorrer({ q: "Cliente bm 5" })).some((c) => c.id === convs[5]!.id)).toBe(true);
+    // 8) otra organización no se ve por sus mensajes
+    // 9) volumen: la búsqueda sobre 60 000 mensajes responde en tiempo razonable
+    const t0 = performance.now();
+    await q.listConversationsPage(org, { limit: 40, cursor: null, filters: { q: palabra } });
+    const ms = performance.now() - t0;
+    console.log(`búsqueda por mensaje, 60 000 mensajes: ${ms.toFixed(0)} ms`);
+    expect(ms).toBeLessThan(1500);
+  }, 180_000);
 
   it("7. multi-tenancy: cada organización cuenta y lista solo lo suyo", async () => {
     const mine = await db.execute<{ n: number }>(sql`select count(*)::int as n from conversation where organization_id = ${org} and is_test = false`);

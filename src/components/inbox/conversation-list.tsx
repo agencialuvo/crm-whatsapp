@@ -235,7 +235,7 @@ export function ConversationList({
           <Search className="h-4 w-4 shrink-0 text-text-3" strokeWidth={1.7} />
           <input
             ref={inputRef}
-            placeholder="Buscar por nombre o teléfono…"
+            placeholder="Buscar nombre, teléfono o mensaje…"
             aria-label="Buscar conversación"
             defaultValue=""
             onChange={(e) => {

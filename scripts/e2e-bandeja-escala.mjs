@@ -117,6 +117,10 @@ try {
            'Mensaje ' || g, 'delivered', now() - ((400 - g) || ' minutes')::interval - interval '1 day',
            now() - ((400 - g) || ' minutes')::interval - interval '1 day'
     from generate_series(1, 400) g`;
+  // Una palabra que SOLO vive en el texto de dos mensajes del hilo largo (con acento y mayúsculas distintas).
+  const PALABRA = `zxqtínte${[...RUN].map((d) => "abcdefghij"[Number(d)]).join("")}`;
+  await sql`update message set text = 'Quiero un ' || ${PALABRA} || ' rubio' where id = ${"msg_hilo" + RUN + "0100"}`;
+  await sql`update message set text = 'otro ' || upper(${PALABRA}) || ' más' where id = ${"msg_hilo" + RUN + "0200"}`;
   console.log("\n== API: la primera página, los contadores y los cursores ==");
   r = await api(`/api/conversations?q=${encodeURIComponent(PREFIJO)}`);
   ok("40 conversaciones y un cursor", r.json?.conversations?.length === 40 && Boolean(r.json?.nextCursor), `n=${r.json?.conversations?.length}`);
@@ -172,7 +176,7 @@ try {
   await page.getByRole("button", { name: "Configurar más tarde" }).click({ timeout: 8000 }).catch(() => {});
   const lista = page.getByTestId("conversation-list");
   const filas = () => lista.locator("li").count();
-  const buscar = page.getByPlaceholder("Buscar por nombre o teléfono…");
+  const buscar = page.getByPlaceholder("Buscar nombre, teléfono o mensaje…");
   /** Busca una conversación por su nombre y la abre, esperando a que la lista sea ESA (no la de la búsqueda anterior). */
   const seleccionar = async (nombre) => {
     await buscar.fill(nombre);
@@ -213,6 +217,24 @@ try {
   const ocho = await espera(async () => (await filas()) === 8, 15000);
   ok("«No leídas» deja las 8 sin leer", Boolean(ocho), `filas=${await filas()}`);
   await page.getByRole("button", { name: /^Todas/ }).click();
+  await espera(async () => (await filas()) === 40, 15000);
+
+  console.log("\n== Búsqueda por el texto de los mensajes ==");
+  r = await api(`/api/conversations?q=${encodeURIComponent(PALABRA.toUpperCase().replace("Í", "I"))}`);
+  ok("la API encuentra la conversación por una palabra de sus mensajes, UNA vez (sin importar acentos ni mayúsculas)",
+    r.json?.conversations?.length === 1 && r.json.conversations[0].id === hiloId, JSON.stringify(r.json?.conversations?.map((c) => c.id)));
+  ok("los contadores respetan la búsqueda por mensaje", r.json?.counts?.all === 1, JSON.stringify(r.json?.counts));
+  await buscar.click();
+  await buscar.fill("");
+  await buscar.pressSequentially(PALABRA, { delay: 40 });
+  const unica = await espera(async () => {
+    const n = await lista.locator("[data-testid=conv-name]").allTextContents();
+    return n.length === 1 && n[0] === HILO;
+  }, 20000);
+  ok("el operador teclea la palabra y la lista deja solo el hilo que la contiene", Boolean(unica));
+  ok("el input conserva el foco mientras la lista se actualiza", await buscar.evaluate((el) => el === document.activeElement));
+  await page.screenshot({ path: `${SALIDA}/05-busqueda-mensaje.png` });
+  await buscar.fill("");
   await espera(async () => (await filas()) === 40, 15000);
 
   console.log("\n== El hilo: páginas hacia arriba sin que salte la posición ==");
