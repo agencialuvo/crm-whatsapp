@@ -128,6 +128,8 @@ export type StageDto = {
   name: string;
   position: number;
   kind: "open" | "won" | "lost";
+  /** 044 — Papel en el avance automático del lead (null = ninguna regla la toca). */
+  autoRole?: AutoStageRole | null;
 };
 
 /** Un dato de la ficha. Escalar a propósito: ver `server/bot/ficha`. */
@@ -187,6 +189,11 @@ export const LOSS_REASON_LABEL: Record<LossReason, string> = {
 
 /** Quién provocó un movimiento de etapa. */
 export type StageChangeSource = "dueno" | "bot" | "sistema" | "migracion";
+
+/** 044 — Papel de una etapa en el avance automático del lead. */
+export type AutoStageRole = "new" | "conversation" | "interested" | "client";
+/** 044 — Qué regla automática movió un lead. */
+export type AutoStageRule = "first_reply" | "booking" | "sale";
 
 /* ============================================================
  * Fuente del prospecto
@@ -255,4 +262,47 @@ export type MessagesPageDto = {
   /** Cursor para pedir lo anterior; `null` si no hay más. */
   nextBefore: string | null;
   serverTime: string;
+};
+
+/* ============================================================
+ * 044 — Tablero del Pipeline
+ * ============================================================ */
+
+/** Una tarjeta del tablero. */
+export type BoardLeadDto = {
+  id: string;
+  stageId: string;
+  position: number;
+  lastActivityAt: string | null;
+  contact: { id: string; name: string; phone: string | null };
+  channel: Channel;
+  conversationId: string | null;
+  amountCents: number | null;
+  currency: string | null;
+  priority: PriorityValue | null;
+  /** La regla automática que movió el lead a su etapa actual (si fue la última), para decirlo en el cajón. */
+  lastAutoRule: AutoStageRule | null;
+};
+
+/** Totales de una columna, con los filtros aplicados (los calcula el servidor). */
+export type StageTotalsDto = {
+  count: number;
+  /** Suma en centavos de lo sumable (la moneda del negocio). */
+  sumCents: number;
+  withoutAmount: number;
+  otherCurrency: number;
+};
+
+export type BoardStageDto = StageDto & {
+  autoRole: AutoStageRole | null;
+  totals: StageTotalsDto;
+  leads: BoardLeadDto[];
+  nextCursor: string | null;
+};
+
+export type BoardFiltersDto = {
+  q?: string;
+  priority?: PriorityValue | "sin";
+  tag?: string;
+  channel?: Channel;
 };

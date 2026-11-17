@@ -14,6 +14,10 @@ export type EventHandlers = {
   onConversationUpdated?: (data: { conversation: unknown }) => void;
   /** 042 — Se marcó leída una conversación (el contador quedó en `unreadCount`). */
   onConversationRead?: (data: { conversationId: string; unreadCount: number }) => void;
+  /** 044 — Un lead se movió, nació o cambió (el tablero pide un delta agrupado). */
+  onPipelineLead?: (data: { leadId: string; stageId: string; fromStageId: string | null }) => void;
+  /** 044 — Se renumeró el orden de estas columnas del tablero. */
+  onPipelineReordered?: (data: { stageIds: string[] }) => void;
   /** 026 */
   onConversationDeleted?: (data: {
     conversationId: string;
@@ -70,6 +74,8 @@ export function useEvents(handlers: EventHandlers): void {
     listen("conversation.deleted", (d) =>
       handlersRef.current.onConversationDeleted?.(d as never)
     );
+    listen("pipeline.lead", (d) => handlersRef.current.onPipelineLead?.(d as never));
+    listen("pipeline.reordered", (d) => handlersRef.current.onPipelineReordered?.(d as never));
     listen("lab.run", (d) => handlersRef.current.onLabRun?.(d as never));
     listen("booking.updated", (d) =>
       handlersRef.current.onBookingUpdated?.(d as never)

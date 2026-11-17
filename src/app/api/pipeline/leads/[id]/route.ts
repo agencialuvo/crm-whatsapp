@@ -19,6 +19,10 @@ const patchSchema = z.object({
    * querer si el tablero venía desfasado—. Sin `stageId` no se mueve nada.
    */
   stageId: z.string().min(1).optional(),
+  /**
+   * 044 — ÍNDICE destino dentro de la columna (0 = arriba). El servidor renumera la columna en la misma
+   * transacción; el cliente ya no calcula posiciones. Con `stageId` igual al actual, reordena dentro de la columna.
+   */
   position: z.number().int().min(0).optional(),
   /**
    * Obligatorio al ENTRAR a una etapa perdida. No se valida aquí sino en la
@@ -93,6 +97,11 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
       )
       .returning();
     if (!updated[0]) return apiError(404, "not_found", "Lead no encontrado");
+    // 044: el monto y la prioridad también viajan al tablero de los demás.
+    publish(session.organizationId, {
+      type: "pipeline.lead",
+      data: { leadId: updated[0].id, stageId: updated[0].stageId, fromStageId: null },
+    });
     return Response.json({ lead: updated[0] });
   }
 

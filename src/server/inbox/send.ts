@@ -334,6 +334,8 @@ export async function sendText(input: {
   organizationId: string;
   text: string;
   aiGenerated?: boolean;
+  /** 044 — Lo manda un flujo de automatización (no cuenta como primera respuesta). */
+  automatico?: boolean;
 }): Promise<SendResult> {
   const target = await prepareSend(
     input.conversationId,
@@ -362,6 +364,7 @@ export async function sendText(input: {
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    automatico: input.automatico,
     fila: {
       type: "text",
       text,
@@ -400,6 +403,7 @@ export async function sendMediaMessage(input: {
   organizationId: string;
   file: { data: Buffer; mimeType: string; fileName?: string };
   caption?: string;
+  automatico?: boolean;
 }): Promise<SendResult> {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
   const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
@@ -440,6 +444,7 @@ export async function sendMediaMessage(input: {
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    automatico: input.automatico,
     fila: {
       type: kind,
       text: null,

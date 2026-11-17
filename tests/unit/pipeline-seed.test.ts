@@ -7,14 +7,19 @@ import { aiMockCompletion } from "@/server/dev/ai-mock";
  * trabajan con `id` y `kind`, nunca con nombres.
  */
 describe("etapas sembradas para los negocios nuevos", () => {
-  it("son Nuevo, Contactado, Citado, Convertido (ganada) y No interesado (perdida), en ese orden", () => {
+  it("son Nuevo, En conversación, Interesado, Cliente (ganada) y No interesado (perdida), con su papel automático", () => {
     expect(SEED_STAGES).toEqual([
-      { name: "Nuevo", kind: "open" },
-      { name: "Contactado", kind: "open" },
-      { name: "Citado", kind: "open" },
-      { name: "Convertido", kind: "won" },
-      { name: "No interesado", kind: "lost" },
+      { name: "Nuevo", kind: "open", autoRole: "new" },
+      { name: "En conversación", kind: "open", autoRole: "conversation" },
+      { name: "Interesado", kind: "open", autoRole: "interested" },
+      { name: "Cliente", kind: "won", autoRole: "client" },
+      { name: "No interesado", kind: "lost", autoRole: null },
     ]);
+  });
+
+  it("cada papel automático aparece una sola vez (lo exige el índice único)", () => {
+    const roles = SEED_STAGES.map((s) => s.autoRole).filter(Boolean);
+    expect(new Set(roles).size).toBe(roles.length);
   });
 
   it("hay exactamente una ganada y una perdida (las anclas que el sistema exige)", () => {

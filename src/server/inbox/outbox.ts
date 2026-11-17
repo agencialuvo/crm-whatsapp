@@ -6,6 +6,7 @@ import { publish } from "@/server/events/bus";
 import { serializeMessage } from "@/server/inbox/ingest";
 import { SendError } from "@/server/inbox/send-error";
 import { reclaimOrphanStatus } from "@/server/inbox/status";
+import { avanzarPorRespuesta } from "@/server/leads/auto-stage";
 
 /**
  * 041 — El registro de todo lo que sale por la bandeja.
@@ -189,6 +190,8 @@ export async function enviarYRegistrar(input: {
   estadoAlAceptar: "pending" | "sent";
   enviar: () => Promise<string>;
   confirmar?: OpcionesConfirmar;
+  /** 044 — Lo envía un flujo de automatización: NO cuenta como «primera respuesta» del operador/IA. */
+  automatico?: boolean;
 }): Promise<{ messageId: string; waMessageId: string }> {
   const registrada = await registrarIntento(
     input.organizationId,
@@ -206,6 +209,9 @@ export async function enviarYRegistrar(input: {
     throw err;
   }
   await confirmarEnvio(registrada, waMessageId, input.estadoAlAceptar, input.confirmar);
+  // 044: la primera respuesta humana o de la IA avanza el lead de «Nuevo» a «En conversación». Tras el
+  // envío confirmado y sin poder fallar hacia arriba (el mensaje ya salió).
+  if (!input.automatico) await avanzarPorRespuesta(input.organizationId, input.conversationId);
   return { messageId: registrada.id, waMessageId };
 }
 

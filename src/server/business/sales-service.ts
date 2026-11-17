@@ -30,6 +30,7 @@ import { businessTimezone, type ResolvedPeriod } from "@/server/analytics/period
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
 import { catalogStaffMaps, staffGivesItem } from "@/server/business/catalog-staff";
 import { publish } from "@/server/events/bus";
+import { advanceLeadForContact } from "@/server/leads/auto-stage";
 import {
   birthdayUsedInYear,
   getBirthdayCampaign,
@@ -588,6 +589,17 @@ export async function registerServiceSale(
     return { sale, commissionPercentage: percentage, commissionSource: source, loyalty };
   });
 
+  // 044: una venta vinculada al contacto lo lleva a «Cliente» (incluso un salto directo desde «Nuevo» si el
+  // pago es inmediato). Si el contacto no tiene lead, no se crea uno. Si el lead no tenía monto, toma el de la venta.
+  if (result.sale.contactId) {
+    await advanceLeadForContact({
+      organizationId,
+      contactId: result.sale.contactId,
+      rule: "sale",
+      amountCents: input.amountCents,
+    });
+  }
+
   // Después del commit (contrato del bus): la agenda abierta se refresca sola.
   if (input.bookingId) {
     publish(organizationId, { type: "booking.updated", data: { bookingId: input.bookingId } });
@@ -1127,9 +1139,22 @@ export async function updateSale(
       before: beforeSnap,
       after: afterSnap,
     });
-    return { id, changed: true };
+    return {
+      id,
+      changed: true,
+      // 044: el nuevo cliente de la venta también avanza a «Cliente».
+      newContactId: nextContactId && nextContactId !== current.contactId ? nextContactId : null,
+    };
   });
-  return result;
+  if ("newContactId" in result && result.newContactId) {
+    await advanceLeadForContact({
+      organizationId,
+      contactId: result.newContactId,
+      rule: "sale",
+      amountCents: input.amountCents,
+    });
+  }
+  return { id: result.id, changed: result.changed };
 }
 
 /** Anular una venta (un cobro mal registrado). La cita, si la hubo, queda como estaba. */

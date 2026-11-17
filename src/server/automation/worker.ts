@@ -38,9 +38,10 @@ export function defaultDeps(): Deps {
     loadTarget: queue.loadTarget,
     templateStatus: queue.templateStatus,
     // Nunca de IA (`aiGenerated`): lo escribió el dueño del negocio, no el agente.
-    sendText: (input) => sendText(input),
-    sendTemplate: (input) => sendTemplate(input),
-    sendMedia: (input) => sendMediaMessage(input),
+    // 044: lo que envía un flujo NO es la «primera respuesta» de un operador: no avanza el lead de etapa.
+    sendText: (input) => sendText({ ...input, automatico: true }),
+    sendTemplate: (input) => sendTemplate({ ...input, automatico: true }),
+    sendMedia: (input) => sendMediaMessage({ ...input, automatico: true }),
     loadMedia: loadMediaFile,
     isOptedOut,
     recentAutomaticSends: queue.recentAutomaticSends,

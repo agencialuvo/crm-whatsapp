@@ -40,7 +40,7 @@ export const MIN_CONTENT_CHARS = 3;
  * acentos ni mayúsculas, comodines de LIKE escapados). `EXISTS` y no JOIN: un hilo con diez mensajes que
  * coinciden cuenta UNA vez, y la lista conserva su paginación por cursor sin `DISTINCT`.
  */
-export function busquedaEnMensajes(conversationId: AnyColumn, q: string | null | undefined): SQL | undefined {
+export function busquedaEnMensajes(conversationId: AnyColumn | SQL, q: string | null | undefined): SQL | undefined {
   const texto = q?.trim();
   if (!texto || texto.length < MIN_CONTENT_CHARS) return undefined;
   const like = normalizeText(texto).replace(/[\\%_]/g, "\\$&");

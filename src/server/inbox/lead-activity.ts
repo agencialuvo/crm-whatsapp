@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { publish } from "@/server/events/bus";
 import { recordLeadCreated } from "@/server/leads/stage-history";
 import type { StageChangeSource } from "@/lib/types";
 
@@ -72,8 +73,10 @@ export async function createLeadForContact(input: {
     stageId = firstStage[0].id;
   }
 
-  const maxPos = await db
-    .select({ max: sql<number>`coalesce(max(${schema.lead.position}), -1)` })
+  // 044: un lead nuevo entra ARRIBA de su columna (`min − 1`, sin renumerar nada): con paginación por cursor,
+  // abajo quedaría sepultado en la última página. El siguiente reordenamiento lo normaliza a 0…n−1.
+  const minPos = await db
+    .select({ min: sql<number | null>`min(${schema.lead.position})` })
     .from(schema.lead)
     .where(
       and(
@@ -81,6 +84,7 @@ export async function createLeadForContact(input: {
         eq(schema.lead.stageId, stageId)
       )
     );
+  const arriba = minPos[0]?.min === null || minPos[0]?.min === undefined ? 0 : Number(minPos[0].min) - 1;
 
   const inserted = await db
     .insert(schema.lead)
@@ -89,7 +93,7 @@ export async function createLeadForContact(input: {
       organizationId: input.organizationId,
       contactId: input.contactId,
       stageId,
-      position: (maxPos[0]?.max ?? -1) + 1,
+      position: arriba,
       lastActivityAt: input.at ?? null,
     })
     .onConflictDoNothing({ target: [schema.lead.contactId] })
@@ -104,6 +108,11 @@ export async function createLeadForContact(input: {
   // segundo que alguien agregue lo olvidaría. Y va tras comprobar `creado`
   // porque `onConflictDoNothing` no devuelve fila cuando otro webhook
   // simultáneo ganó la carrera — ese ya anotó el suyo.
+  publish(input.organizationId, {
+    type: "pipeline.lead",
+    data: { leadId: creado.id, stageId: creado.stageId, fromStageId: null },
+  });
+
   await recordLeadCreated({
     organizationId: input.organizationId,
     leadId: creado.id,

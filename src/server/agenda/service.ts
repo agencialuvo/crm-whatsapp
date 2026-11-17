@@ -22,7 +22,7 @@ import {
   markConnectorAuthError,
 } from "@/server/agenda/connectors";
 import { ConnectorError } from "@/server/agenda/connectors/types";
-import { moveLeadToStage } from "@/server/leads/stage-history";
+import { advanceLeadForContact } from "@/server/leads/auto-stage";
 import {
   onBookingClosed,
   onBookingConfirmed,
@@ -245,13 +245,11 @@ export async function createSessionBooking(input: {
 
   // Efectos secundarios: ninguno puede revertir la cita.
   const delivered = await deliverMeeting(booking, settings, contactName);
-  await advanceLeadStage(
-    input.organizationId,
-    contactId,
-    input.source === "ai" ? "bot" : "dueno"
-  ).catch((err) => {
-    console.warn(`[agenda] avance de etapa falló: ${err}`);
-  });
+  // 044: agendar una cita lleva al lead a «Interesado» (solo desde Nuevo / En conversación, nunca hacia atrás;
+  // una cita de prueba no mueve nada). Reemplaza al antiguo «avanza una etapa» sin mirar cuál era.
+  if (!isTest) {
+    await advanceLeadForContact({ organizationId: input.organizationId, contactId, rule: "booking" });
+  }
 
   publish(input.organizationId, {
     type: "booking.updated",
@@ -814,59 +812,6 @@ async function getContactName(
     )
     .limit(1);
   return rows[0]?.name ?? "";
-}
-
-/**
- * El lead avanza a la siguiente etapa abierta al agendar — solo hacia adelante,
- * nunca retrocede.
- *
- * Pasa por `moveLeadToStage`, la única puerta que puede escribir `stage_id`:
- * mover el lead y registrar el movimiento en la bitácora son la misma
- * operación. Escribir el UPDATE aquí no truena, solo hace que las gráficas
- * mientan meses después — y hay un test de vigilancia que lo impide.
- */
-async function advanceLeadStage(
-  organizationId: string,
-  contactId: string,
-  source: "bot" | "dueno"
-): Promise<void> {
-  const db = getDb();
-  const leads = await db
-    .select({ id: schema.lead.id, stageId: schema.lead.stageId })
-    .from(schema.lead)
-    .where(
-      scoped(
-        schema.lead.organizationId,
-        organizationId,
-        eq(schema.lead.contactId, contactId)
-      )
-    )
-    .limit(1);
-  const lead = leads[0];
-  if (!lead) return;
-
-  const stages = await db
-    .select({
-      id: schema.pipelineStage.id,
-      position: schema.pipelineStage.position,
-      kind: schema.pipelineStage.kind,
-    })
-    .from(schema.pipelineStage)
-    .where(scoped(schema.pipelineStage.organizationId, organizationId))
-    .orderBy(asc(schema.pipelineStage.position));
-
-  const currentIdx = stages.findIndex((s) => s.id === lead.stageId);
-  if (currentIdx < 0) return;
-  const nextOpen = stages.find((s, i) => i > currentIdx && s.kind === "open");
-  if (!nextOpen) return; // ya está en la última etapa abierta (o en un ancla)
-
-  await moveLeadToStage({
-    organizationId,
-    leadId: lead.id,
-    toStageId: nextOpen.id,
-    source,
-    extra: { lastActivityAt: new Date() },
-  });
 }
 
 /** Citas que ocupan agenda de verdad. */

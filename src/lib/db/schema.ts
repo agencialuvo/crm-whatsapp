@@ -984,9 +984,20 @@ export const pipelineStage = pgTable(
     kind: text("kind", { enum: ["open", "won", "lost"] })
       .notNull()
       .default("open"),
+    /**
+     * 044 — Qué papel juega esta etapa en el avance AUTOMÁTICO del lead (primer mensaje → conversación,
+     * cita → interesado, venta → cliente). NULL = el dueño la puso a propósito y ninguna regla la toca.
+     * Única por organización: las reglas necesitan UNA etapa de destino, y el nombre no sirve (es del negocio).
+     */
+    autoRole: text("auto_role", { enum: ["new", "conversation", "interested", "client"] }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [index("stage_org_pos_idx").on(t.organizationId, t.position)]
+  (t) => [
+    index("stage_org_pos_idx").on(t.organizationId, t.position),
+    uniqueIndex("stage_org_auto_role_uq")
+      .on(t.organizationId, t.autoRole)
+      .where(sql`${t.autoRole} is not null`),
+  ]
 );
 
 /**
@@ -1061,7 +1072,9 @@ export const lead = pgTable(
   },
   (t) => [
     uniqueIndex("lead_contact_uq").on(t.contactId),
-    index("lead_org_stage_idx").on(t.organizationId, t.stageId, t.position),
+    // 044: la página de una columna (orden estable por posición y id) y los deltas del tablero.
+    index("lead_board_idx").on(t.organizationId, t.stageId, t.position, t.id),
+    index("lead_org_updated_idx").on(t.organizationId, t.updatedAt),
   ]
 );
 
@@ -1131,6 +1144,8 @@ export const leadStageEvent = pgTable(
       ],
     }),
     lossNote: text("loss_note"),
+    /** 044 — Si lo movió una regla automática: cuál (`first_reply` | `booking` | `sale`). NULL = lo movió alguien. */
+    autoRule: text("auto_rule", { enum: ["first_reply", "booking", "sale"] }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [

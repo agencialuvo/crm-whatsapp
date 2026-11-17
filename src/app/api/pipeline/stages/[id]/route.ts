@@ -4,6 +4,7 @@ import { apiError, parseBody, withAuth } from "@/lib/api";
 import { canConfigure } from "@/lib/auth/roles";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
+import { checkStageRole } from "@/server/leads/stage-roles";
 import { relocateLeadsFromStage } from "@/server/leads/stage-history";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,8 @@ type Params = { params: Promise<{ id: string }> };
 const patchSchema = z.object({
   name: z.string().trim().min(1).max(60).optional(),
   position: z.number().int().min(0).optional(),
+  /** 044 — Papel en el avance automático; `null` lo quita. */
+  autoRole: z.enum(["new", "conversation", "interested", "client"]).nullable().optional(),
 });
 
 export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
@@ -24,9 +27,20 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   if (!body.ok) return body.response;
 
   const db = getDb();
+  if (body.data.autoRole !== undefined) {
+    const found = await db
+      .select({ id: schema.pipelineStage.id, kind: schema.pipelineStage.kind })
+      .from(schema.pipelineStage)
+      .where(scoped(schema.pipelineStage.organizationId, session.organizationId, eq(schema.pipelineStage.id, id)))
+      .limit(1);
+    if (!found[0]) return apiError(404, "not_found", "Etapa no encontrada");
+    const problem = await checkStageRole(session.organizationId, found[0], body.data.autoRole);
+    if (problem) return apiError(problem.status, problem.code, problem.message);
+  }
   const updated = await db
     .update(schema.pipelineStage)
     .set({
+      ...(body.data.autoRole !== undefined ? { autoRole: body.data.autoRole } : {}),
       ...(body.data.name !== undefined ? { name: body.data.name } : {}),
       ...(body.data.position !== undefined
         ? { position: body.data.position }

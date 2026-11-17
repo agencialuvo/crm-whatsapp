@@ -8,12 +8,17 @@ import { pickInitialPlan } from "@/server/business/plan-selection";
  * Etapas sembradas del pipeline (US2) para los negocios NUEVOS. Los existentes conservan las suyas: nada del
  * sistema compara nombres de etapa (el motor de automatizaciones y el agente trabajan con `id` y `kind`).
  */
-export const SEED_STAGES: { name: string; kind: "open" | "won" | "lost" }[] = [
-  { name: "Nuevo", kind: "open" },
-  { name: "Contactado", kind: "open" },
-  { name: "Citado", kind: "open" },
-  { name: "Convertido", kind: "won" },
-  { name: "No interesado", kind: "lost" },
+export const SEED_STAGES: {
+  name: string;
+  kind: "open" | "won" | "lost";
+  /** 044 — Papel en el avance automático (primer mensaje → conversación, cita → interesado, venta → cliente). */
+  autoRole: "new" | "conversation" | "interested" | "client" | null;
+}[] = [
+  { name: "Nuevo", kind: "open", autoRole: "new" },
+  { name: "En conversación", kind: "open", autoRole: "conversation" },
+  { name: "Interesado", kind: "open", autoRole: "interested" },
+  { name: "Cliente", kind: "won", autoRole: "client" },
+  { name: "No interesado", kind: "lost", autoRole: null },
 ];
 
 /** Sector con el que nace un negocio si el registro no dice otro. */
@@ -36,6 +41,7 @@ async function seedOrganization(
       name: s.name,
       position: i,
       kind: s.kind,
+      autoRole: s.autoRole,
     }))
   );
 

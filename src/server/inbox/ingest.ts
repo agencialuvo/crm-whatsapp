@@ -23,6 +23,7 @@ import {
 } from "@/server/attribution/referral";
 import { registrarAnuncioDeOrigen } from "@/server/attribution/store";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
+import { avanzarPorRespuesta } from "@/server/leads/auto-stage";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
 import { onInboundOptOut } from "@/server/automation/opt-out";
 import { onInboundReply } from "@/server/automation/reply";
@@ -400,6 +401,9 @@ async function ingestManualEcho(
     .update(schema.conversation)
     .set({ lastMessageAt: waTimestamp, updatedAt: new Date() })
     .where(eq(schema.conversation.id, conversation.id));
+
+  // 044: un operador que responde desde la app del teléfono también es «primera respuesta».
+  await avanzarPorRespuesta(organizationId, conversation.id);
 
   // Pausa automática de la IA, idempotente y atómica (solo si no hay handoff).
   const paused = await db

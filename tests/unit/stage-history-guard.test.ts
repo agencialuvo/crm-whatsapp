@@ -74,4 +74,33 @@ describe("guardarraíl: una sola puerta escribe la etapa del lead", () => {
     const bloques = bloquesDeUpdate(code);
     expect(bloques.some((b) => /\bstageId\s*:/.test(b))).toBe(true);
   });
+
+  it("044: solo la puerta y el orden de columna escriben la posición de un lead que ya existe", () => {
+    // La renumeración vive en `server/leads/column-order.ts` (SQL crudo, dentro de la transacción de la
+    // puerta). Un `update(schema.lead).set({ position })` en otro sitio dejaría la columna con empates.
+    const infractores: string[] = [];
+    for (const file of archivosTs(SRC)) {
+      if (file.endsWith(PUERTA)) continue;
+      const code = readFileSync(file, "utf8");
+      if (!code.includes("update(schema.lead)")) continue;
+      for (const bloque of bloquesDeUpdate(code)) {
+        if (/\bposition\s*:/.test(bloque)) {
+          infractores.push(path.relative(SRC, file));
+          break;
+        }
+      }
+    }
+    expect(infractores).toEqual([]);
+  });
+
+  it("044: el papel automático de una etapa solo lo escribe la ruta de etapas (nada del flujo del lead)", () => {
+    const infractores: string[] = [];
+    for (const file of archivosTs(SRC)) {
+      const rel = path.relative(SRC, file).split(path.sep).join("/");
+      if (rel.startsWith("app/api/pipeline/stages/") || rel === "server/auth/on-signup.ts" || rel === "lib/db/schema.ts") continue;
+      const code = readFileSync(file, "utf8");
+      if (/update\(schema\.pipelineStage\)[\s\S]{0,300}autoRole\s*:/.test(code)) infractores.push(rel);
+    }
+    expect(infractores).toEqual([]);
+  });
 });

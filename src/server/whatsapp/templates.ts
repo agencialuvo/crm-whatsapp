@@ -284,6 +284,8 @@ export async function sendTemplate(input: {
   conversationId: string;
   templateId: string;
   variables?: string[];
+  /** 044 — Lo manda un flujo de automatización (no cuenta como primera respuesta). */
+  automatico?: boolean;
 }): Promise<{ messageId: string }> {
   const db = getDb();
 
@@ -369,6 +371,7 @@ export async function sendTemplate(input: {
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    automatico: input.automatico,
     fila: {
       type: "template",
       text: renderBody(template.body, values),

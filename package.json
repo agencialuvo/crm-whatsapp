@@ -26,6 +26,7 @@
     "test:e2e:meta-ads": "node --env-file=.env scripts/e2e-meta-ads.mjs",
     "test:e2e:bandeja-envio": "node --env-file=.env scripts/e2e-bandeja-envio.mjs",
     "test:e2e:bandeja-escala": "node --env-file=.env scripts/e2e-bandeja-escala.mjs",
+    "test:e2e:pipeline-tablero": "node --env-file=.env scripts/e2e-pipeline-tablero.mjs",
     "eval:silencios": "esbuild scripts/eval-silencios.ts --bundle --platform=node --format=esm --outfile=.tmp-eval-silencios.mjs --alias:@=./src --log-level=warning && node --env-file=.env .tmp-eval-silencios.mjs",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",

@@ -26,6 +26,10 @@ export type SseEvent =
       type: "conversation.deleted";
       data: { conversationId: string; contactId: string; contactDeleted: boolean };
     }
+  /** 044 — un lead cambió de etapa, nació o cambió de monto/prioridad: el tablero pide un delta, no se recarga. */
+  | { type: "pipeline.lead"; data: { leadId: string; stageId: string; fromStageId: string | null } }
+  /** 044 — se renumeró el orden de estas columnas: el tablero las vuelve a pedir. */
+  | { type: "pipeline.reordered"; data: { stageIds: string[] } }
   /** 015 — algo cambió en la agenda: la pantalla de Citas se refresca sola. */
   | { type: "booking.updated"; data: { bookingId: string } }
   /** Una notificación nueva para el equipo: la campanita se refresca sola. */

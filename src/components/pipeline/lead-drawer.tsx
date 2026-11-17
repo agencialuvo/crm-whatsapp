@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PriorityPicker } from "./priority-picker";
 import type { BoardLead } from "./pipeline-client";
+import { AUTO_RULE_LABEL } from "@/lib/lead-auto-stage";
 
 /**
  * El trato, abierto, sin salir del tablero.
@@ -270,6 +271,11 @@ export function LeadDrawer({
                 );
               })}
             </div>
+            {lead.lastAutoRule && (
+              <p className="mt-2 text-xs text-text-3">
+                Movido automáticamente: {AUTO_RULE_LABEL[lead.lastAutoRule]}.
+              </p>
+            )}
           </section>
 
           {/* Qué se sabe */}
