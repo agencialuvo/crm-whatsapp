@@ -1,4 +1,6 @@
 import { Hourglass } from "lucide-react";
+import Link from "next/link";
+import { billingEnabled } from "@/lib/mercadopago/config";
 import type { SubscriptionAccess } from "@/server/saas/enforcement";
 
 /** Días de aviso antes de que termine la prueba. */
@@ -13,10 +15,16 @@ export function AvisoSuscripcion({ access }: { access: SubscriptionAccess | null
   if (!access) return null;
   const termino = access.status === "trial_expired" || (access.status === "past_due" && access.statusReason === "trial_ended");
   const porTerminar = access.status === "trialing" && access.daysLeft !== null && access.daysLeft <= AVISO_DIAS;
-  if (!termino && !porTerminar) return null;
-  const mensaje = termino
-    ? "Tu prueba terminó. Contacta a quien administra la plataforma para activar tu plan."
-    : `Tu prueba termina en ${access.daysLeft} ${access.daysLeft === 1 ? "día" : "días"}. Contacta a quien administra la plataforma para activar tu plan.`;
+  // 046: un cobro rechazado da unos días de gracia: se avisa, no se bloquea.
+  const enGracia = access.graceEndsAt !== null;
+  if (!termino && !porTerminar && !enGracia) return null;
+  const paga = billingEnabled();
+  const como = paga ? "Elige tu plan en Suscripción." : "Contacta a quien administra la plataforma para activar tu plan.";
+  const mensaje = enGracia
+    ? `No pudimos cobrar tu plan. Actualiza tu medio de pago en Mercado Pago antes del ${access.graceEndsAt!.toLocaleDateString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric" })} para no perder el acceso.`
+    : termino
+      ? `Tu prueba terminó. ${como}`
+      : `Tu prueba termina en ${access.daysLeft} ${access.daysLeft === 1 ? "día" : "días"}. ${como}`;
   return (
     <div
       role="status"
@@ -25,6 +33,11 @@ export function AvisoSuscripcion({ access }: { access: SubscriptionAccess | null
     >
       <Hourglass className="h-4 w-4 shrink-0" strokeWidth={1.7} />
       <span className="min-w-0 flex-1">{mensaje}</span>
+      {paga && (
+        <Link href="/ajustes/suscripcion" className="font-medium underline">
+          Ver suscripción
+        </Link>
+      )}
     </div>
   );
 }

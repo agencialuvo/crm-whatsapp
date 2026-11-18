@@ -1,4 +1,5 @@
-import { expireTrials } from "@/server/saas/subscription";
+import { reconcileBilling } from "@/server/billing/reconcile";
+import { closeCancelledPeriods, expireTrials } from "@/server/saas/subscription";
 
 /**
  * 045 — El temporizador del vencimiento de pruebas (ver `expireTrials`).
@@ -30,6 +31,10 @@ export async function tickSubscriptions(now = new Date()): Promise<number> {
       if (n < 200) break;
     }
     if (total > 0) console.log(`[saas] ${total} prueba(s) vencida(s) pasaron a past_due`);
+    // 046: las canceladas que ya cumplieron su periodo pagado, y la red de seguridad del cobro (solo con la bandera).
+    const closed = await closeCancelledPeriods(now);
+    if (closed > 0) console.log(`[saas] ${closed} suscripción(es) cancelada(s) cumplieron su periodo`);
+    await reconcileBilling(now);
     return total;
   } catch (err) {
     console.error("[saas] el vencimiento de pruebas falló:", err instanceof Error ? err.message : err);

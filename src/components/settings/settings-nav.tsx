@@ -30,7 +30,9 @@ export function SettingsNav({
   tiktok = false,
   salon = false,
   sector = false,
+  suscripcion = false,
 }: {
+  suscripcion?: boolean;
   salon?: boolean;
   sector?: boolean;
   agenda?: boolean;
@@ -40,7 +42,7 @@ export function SettingsNav({
   tiktok?: boolean;
 }) {
   const pathname = usePathname();
-  const sections = settingsSections({ agenda, atribucion, instagram, messenger, tiktok, salon, sector });
+  const sections = settingsSections({ agenda, atribucion, instagram, messenger, tiktok, salon, sector, suscripcion });
   // Los enlaces con ancla (`/ajustes/perfil#seguridad`) comparten pantalla: cuál está
   // activo lo dice el `#` de la dirección, que Next no avisa al navegar con pushState.
   const [hash, setHash] = useState("");

@@ -18,6 +18,7 @@ import {
   checkDispatch,
   checkDatabase,
   checkMediaDir,
+  checkMercadoPago,
   checkWhatsApp,
   evaluateComposeEnv,
   evaluateEnv,
@@ -82,6 +83,7 @@ if (!env) {
   }
   section("IA (opcional)", [checkAi(env)]);
   section("Cerebro externo (opcional)", [checkDispatch(process.env)]);
+  section("Cobro con Mercado Pago (opcional)", await checkMercadoPago(process.env));
 }
 
 const s = summarize(all);

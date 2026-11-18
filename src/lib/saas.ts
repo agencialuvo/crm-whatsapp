@@ -16,7 +16,10 @@ export type SubEventType =
   | "trial_extended"
   | "period_changed"
   | "expired"
-  | "assigned";
+  | "assigned"
+  | "renewed"
+  | "payment_failed"
+  | "refunded";
 
 export type SubAction =
   | "assign"
@@ -62,6 +65,12 @@ export type SubFacts = {
   cancelAtPeriodEnd: boolean;
   statusReason?: string | null;
   convertedAt?: Date | null;
+  /** 046 — `mercadopago` = la pasarela cobra; null/undefined = cobro manual. */
+  billingProvider?: string | null;
+  /** 046 — Monto mensual pactado con la pasarela (manda sobre el precio del plan). */
+  billedAmountCents?: number | null;
+  billedCurrency?: string | null;
+  pendingPlanId?: string | null;
 };
 
 export const isTrialPlan = (p: Pick<PlanFacts, "trialDays"> | null | undefined): boolean =>
@@ -320,6 +329,8 @@ export type EventFacts = {
   type: SubEventType;
   occurredAt: Date;
   approximate: boolean;
+  /** 046 — Quién produjo el evento (separa conversiones por cobro automático de las manuales). */
+  source?: "signup" | "admin" | "system" | "payment";
 };
 
 export type StatusCounts = { active: number; trialing: number; pastDue: number; canceled: number; paused: number };
@@ -349,6 +360,8 @@ export type ConversionMetrics = {
   medianDaysToConvert: number | null;
   /** Filas aproximadas de la migración que NO cuentan. */
   excludedApproximate: number;
+  /** 046 — Conversiones del cobro automático y de una activación manual. */
+  convertedBy: { payment: number; manual: number };
   byMonth: ConversionMonth[];
 };
 
@@ -404,16 +417,19 @@ export function mrrOf(orgs: readonly OrgFacts[], now: Date, baseCurrency = "PEN"
     if (!o.sub || !o.plan) continue;
     const eff = effectiveStatus(o.sub, o.plan, now).status;
     if (isTrialPlan(o.plan)) continue; // una prueba no es ingreso
+    // 046: el precio PACTADO con la pasarela manda sobre el del plan (cambiar el precio de un plan no toca a quien ya paga).
+    const amount = o.sub.billedAmountCents ?? o.plan.priceMonthlyCents;
+    const currency = o.sub.billedCurrency ?? o.plan.currency;
     if (eff === "active") {
-      if (o.plan.currency !== baseCurrency) {
+      if (currency !== baseCurrency) {
         mixed = true;
         continue;
       }
-      mrr += o.plan.priceMonthlyCents;
+      mrr += amount;
       active++;
-      if (o.sub.cancelAtPeriodEnd) churning += o.plan.priceMonthlyCents;
-    } else if (eff === "past_due" && o.plan.priceMonthlyCents > 0 && o.plan.currency === baseCurrency) {
-      atRisk += o.plan.priceMonthlyCents;
+      if (o.sub.cancelAtPeriodEnd) churning += amount;
+    } else if (eff === "past_due" && amount > 0 && currency === baseCurrency) {
+      atRisk += amount;
     }
   }
   return {
@@ -450,6 +466,7 @@ export function conversionOf(orgs: readonly OrgFacts[], events: readonly EventFa
   let converted = 0;
   let inProgress = 0;
   let lost = 0;
+  const convertedBy = { payment: 0, manual: 0 };
   const days: number[] = [];
   const months = new Map<string, { started: number; converted: number; lost: number }>();
 
@@ -462,6 +479,8 @@ export function conversionOf(orgs: readonly OrgFacts[], events: readonly EventFa
     m.started++;
     if (conv) {
       converted++;
+      if (conv.source === "payment") convertedBy.payment++;
+      else convertedBy.manual++;
       m.converted++;
       days.push(Math.max(0, (conv.occurredAt.getTime() - start.occurredAt.getTime()) / DAY_MS));
     } else {
@@ -495,6 +514,7 @@ export function conversionOf(orgs: readonly OrgFacts[], events: readonly EventFa
     totalRate: started > 0 ? converted / started : null,
     medianDaysToConvert: median(days),
     excludedApproximate: excluded,
+    convertedBy,
     byMonth,
   };
 }
@@ -593,8 +613,17 @@ export const ACTION_LABEL: Record<SubAction, string> = {
 export function availableActions(
   status: EffectiveStatus | null,
   trialPlan: boolean,
-  statusReason?: string | null
+  statusReason?: string | null,
+  billingProvider?: string | null
 ): SubAction[] {
+  const base = baseActions(status, trialPlan, statusReason);
+  if (!billingProvider) return base;
+  // 046: con la pasarela cobrando, activar/asignar darían un doble cobro o un estado contradictorio.
+  // Una cancelada no se reactiva con la misma suscripción de la pasarela (hay que contratar de nuevo).
+  return base.filter((a) => a !== "activate" && a !== "assign" && !(a === "reactivate" && status === "canceled"));
+}
+
+function baseActions(status: EffectiveStatus | null, trialPlan: boolean, statusReason?: string | null): SubAction[] {
   if (status === null) return ["assign"];
   switch (status) {
     case "trialing":
@@ -635,3 +664,161 @@ export function matchesStatusFilter(
   if (filter === "past_due") return status === "past_due" && !pruebaVencida;
   return status === filter;
 }
+
+
+/* ---------- 046 · Cobro automático ---------- */
+
+/** Lo que Mercado Pago dijo (ya consultado a su API, nunca el cuerpo del webhook). */
+export type PaymentEvent =
+  | { kind: "payment_approved"; plan: PlanFacts }
+  | { kind: "payment_rejected" }
+  | { kind: "preapproval_authorized" }
+  | { kind: "preapproval_cancelled" }
+  | { kind: "preapproval_paused" }
+  | { kind: "payment_refunded" };
+
+export type PaymentDecision =
+  | { noop: true; reason: string }
+  | {
+      noop: false;
+      eventType: SubEventType;
+      status: SubStatus;
+      /** null = no cambia el plan. */
+      planId: string | null;
+      planName: string | null;
+      periodStart: Date | null;
+      periodEnd: Date | null;
+      cancelAtPeriodEnd: boolean | null;
+      statusReason: string | null;
+      isConversion: boolean;
+      /** Se aplicó el cambio de plan programado (hay que limpiar `pending_plan_id`). */
+      clearPendingPlan: boolean;
+      needsReview: boolean;
+    };
+
+const noop = (reason: string): PaymentDecision => ({ noop: true, reason });
+
+/**
+ * Qué hace un cobro (o un cambio de la suscripción en la pasarela) sobre la suscripción. Es la tabla de la
+ * spec 046; pura, para probarla sin base. Los eventos atrasados o repetidos son `noop` (idempotencia).
+ */
+export function decidePayment(ctx: { event: PaymentEvent; from: SubFacts | null; current: PlanFacts | null; now: Date }): PaymentDecision {
+  const { event, from, current, now } = ctx;
+  if (!from) return noop("no_subscription");
+  const status = from.status;
+  const paymentFailed = status === "past_due" && from.statusReason === "payment_failed";
+
+  switch (event.kind) {
+    case "payment_approved": {
+      const plan = event.plan;
+      const wasTrial = status === "trialing" || from.statusReason === "trial_ended" || isTrialPlan(current);
+      const isConversion = !from.convertedAt && wasTrial;
+      // Un pago adelantado no pierde días: se extiende desde el fin vigente si aún no venció.
+      const continuing = (status === "active" || paymentFailed) && from.currentPeriodEnd.getTime() > now.getTime();
+      const base = continuing ? from.currentPeriodEnd : now;
+      const changesPlan = plan.id !== current?.id;
+      const eventType: SubEventType = isConversion ? "converted" : status === "active" ? "renewed" : "reactivated";
+      return {
+        noop: false,
+        eventType,
+        status: "active",
+        planId: changesPlan ? plan.id : null,
+        planName: plan.name,
+        periodStart: continuing ? from.currentPeriodEnd : now,
+        periodEnd: addDays(base, PAID_PERIOD_DAYS),
+        cancelAtPeriodEnd: false,
+        statusReason: "paid",
+        isConversion,
+        clearPendingPlan: !!from.pendingPlanId,
+        // Pagó mientras estaba suspendida/cancelada: la pasarela manda, pero alguien debe mirarlo.
+        needsReview: status === "paused" || status === "canceled",
+      };
+    }
+    case "payment_rejected": {
+      if (status !== "active") return noop("rejected_not_active");
+      return {
+        noop: false,
+        eventType: "payment_failed",
+        status: "past_due",
+        planId: null,
+        planName: current?.name ?? null,
+        periodStart: null,
+        periodEnd: null,
+        cancelAtPeriodEnd: null,
+        statusReason: "payment_failed",
+        isConversion: false,
+        clearPendingPlan: false,
+        needsReview: false,
+      };
+    }
+    case "preapproval_authorized":
+      return noop("authorized_waits_for_payment");
+    case "preapproval_cancelled": {
+      const common = { planId: null, planName: current?.name ?? null, periodStart: null, isConversion: false, clearPendingPlan: false, needsReview: false } as const;
+      if (status === "active") {
+        if (from.currentPeriodEnd.getTime() > now.getTime()) {
+          if (from.cancelAtPeriodEnd) return noop("already_cancelling");
+          return { noop: false, eventType: "status_changed", status: "active", periodEnd: null, cancelAtPeriodEnd: true, statusReason: "mp_cancelled", ...common };
+        }
+        return { noop: false, eventType: "status_changed", status: "canceled", periodEnd: null, cancelAtPeriodEnd: null, statusReason: "mp_cancelled", ...common };
+      }
+      if (paymentFailed) {
+        return { noop: false, eventType: "status_changed", status: "canceled", periodEnd: null, cancelAtPeriodEnd: null, statusReason: "payment_failed", ...common };
+      }
+      return noop("cancelled_not_applicable");
+    }
+    case "preapproval_paused": {
+      if (status !== "active") return noop("paused_not_active");
+      return {
+        noop: false,
+        eventType: "status_changed",
+        status: "paused",
+        planId: null,
+        planName: current?.name ?? null,
+        periodStart: null,
+        periodEnd: null,
+        cancelAtPeriodEnd: null,
+        statusReason: "mp_paused",
+        isConversion: false,
+        clearPendingPlan: false,
+        needsReview: false,
+      };
+    }
+    case "payment_refunded":
+      return {
+        noop: false,
+        eventType: "refunded",
+        status,
+        planId: null,
+        planName: current?.name ?? null,
+        periodStart: null,
+        periodEnd: null,
+        cancelAtPeriodEnd: null,
+        statusReason: from.statusReason ?? null,
+        isConversion: false,
+        clearPendingPlan: false,
+        needsReview: true,
+      };
+  }
+}
+
+/** Cambio de plan iniciado por el cliente (sin prorrateo): subir rige ya, bajar al próximo corte. */
+export function planChangeMode(currentPriceCents: number, nextPriceCents: number): "immediate" | "scheduled" | "same" {
+  if (nextPriceCents === currentPriceCents) return "same";
+  return nextPriceCents > currentPriceCents ? "immediate" : "scheduled";
+}
+
+/** Fin de la gracia tras un cobro rechazado: no se bloquea mientras `now ≤ fin del periodo + gracia`. */
+export function paymentGraceEndsAt(sub: Pick<SubFacts, "status" | "statusReason" | "currentPeriodEnd">, graceDays: number): Date | null {
+  if (sub.status !== "past_due" || sub.statusReason !== "payment_failed") return null;
+  return addDays(sub.currentPeriodEnd, graceDays);
+}
+
+export const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  pending: "Pendiente",
+  rejected: "Rechazado",
+  approved: "Aprobado",
+  refunded: "Reembolsado",
+  charged_back: "Contracargo",
+  cancelled: "Cancelado",
+};

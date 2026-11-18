@@ -583,3 +583,40 @@ export function summarize(results: CheckResult[]) {
   const fail = count("fail");
   return { ok: count("ok"), fail, warn: count("warn"), skip: count("skip"), exitCode: fail > 0 ? 1 : 0 };
 }
+
+/* ---------- Cobro con Mercado Pago (opcional, 046) ---------- */
+
+export type MercadoPagoDeps = { whoAmI?: () => Promise<{ id: number | string; site_id?: string }> };
+
+/**
+ * Con `MERCADOPAGO=on` exige el token y el secreto del webhook, y hace UNA llamada de solo lectura
+ * (`GET /users/me`) para comprobar que el token sirve. Apagado: no toca nada. Jamás imprime el token.
+ */
+export async function checkMercadoPago(source: Record<string, string | undefined>, deps: MercadoPagoDeps = {}): Promise<CheckResult[]> {
+  const on = ["on", "1", "true", "si", "sí", "yes"].includes((source.MERCADOPAGO ?? "").trim().toLowerCase());
+  if (!on) {
+    return [{ status: "skip", label: "MERCADOPAGO", detail: "apagado: los planes se gestionan a mano desde el panel de Super Admin", fix: "para cobrar con Mercado Pago: MERCADOPAGO=on, MP_ACCESS_TOKEN y MP_WEBHOOK_SECRET (guía en .env.example)" }];
+  }
+  const out: CheckResult[] = [];
+  const token = source.MP_ACCESS_TOKEN?.trim();
+  const secret = source.MP_WEBHOOK_SECRET?.trim();
+  const placeholder = (v: string | undefined) => !v || v.startsWith(PLACEHOLDER_PREFIX);
+  if (placeholder(token)) {
+    out.push({ status: "fail", label: "MP_ACCESS_TOKEN", detail: "MERCADOPAGO=on pero no hay token", fix: "mercadopago.com.pe/developers → Tus integraciones → Credenciales, y ponlo en .env" });
+  } else {
+    out.push({ status: "ok", label: "MP_ACCESS_TOKEN", detail: "definido" });
+  }
+  if (placeholder(secret)) {
+    out.push({ status: "fail", label: "MP_WEBHOOK_SECRET", detail: "sin la clave secreta del webhook no se acepta ningún aviso de pago", fix: "Tus integraciones → Webhooks → Clave secreta, y ponla en .env" });
+  } else {
+    out.push({ status: "ok", label: "MP_WEBHOOK_SECRET", detail: "definido" });
+  }
+  if (out.some((r) => r.status === "fail")) return out;
+  try {
+    const who = await (deps.whoAmI ?? (async () => (await import("@/lib/mercadopago/client")).mp.whoAmI()))();
+    out.push({ status: "ok", label: "Mercado Pago", detail: `token válido · cuenta ${who.id}${who.site_id ? ` (${who.site_id})` : ""}` });
+  } catch (err) {
+    out.push({ status: "fail", label: "Mercado Pago", detail: `no se pudo validar el token: ${err instanceof Error ? err.message : "error"}`, fix: "revisa MP_ACCESS_TOKEN (¿de prueba o de producción?) y MP_API_BASE" });
+  }
+  return out;
+}

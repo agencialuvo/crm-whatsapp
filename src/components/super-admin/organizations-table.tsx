@@ -69,7 +69,7 @@ export function OrganizationsTable({
           </thead>
           <tbody>
             {table.rows.map((o) => {
-              const acciones = availableActions(o.status, o.isTrialPlan, o.statusReason);
+              const acciones = availableActions(o.status, o.isTrialPlan, o.statusReason, o.managedByProvider ? o.billingProvider : null);
               return (
                 <tr key={o.id} data-testid="org-row" data-org-id={o.id} className="border-b last:border-b-0">
                   <td className="px-3 py-2.5">
@@ -85,6 +85,11 @@ export function OrganizationsTable({
                     <span data-testid="org-plan">{o.planName ?? "—"}</span>
                     {o.planActive === false && <span className="ml-1.5 text-xs text-text-3">(anterior)</span>}
                     {o.priceMonthlyCents ? <div className="text-xs text-text-3">{formatMoneyCents(o.priceMonthlyCents, "PEN", "es-PE")}/mes</div> : null}
+                    {o.billingProvider === "mercadopago" && (
+                      <div className="text-xs text-text-3" data-testid="org-billing">
+                        Mercado Pago
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2.5" data-testid="org-status">
                     <StatusBadge status={o.status} reason={o.statusReason} />

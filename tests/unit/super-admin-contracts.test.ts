@@ -52,6 +52,7 @@ describe("minimización de datos", () => {
     ownerEmail: "ana@luna.pe",
     plan: { id: "plan_demo", name: "Demo", slug: "demo", priceMonthlyCents: 0, currency: "PEN", trialDays: 14, active: true },
     sub: { status: "trialing", currentPeriodEnd: new Date("2026-11-15T00:00:00Z"), cancelAtPeriodEnd: false, statusReason: null, convertedAt: null },
+    billing: { mpStatus: null, lastPaymentAt: null, nextPaymentAt: null, pendingPlanId: null },
   };
 
   it("una fila del directorio tiene EXACTAMENTE los campos de la lista blanca (nada de teléfonos, tokens ni mensajes)", () => {

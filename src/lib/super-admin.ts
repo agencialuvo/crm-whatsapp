@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SUB_ACTIONS, type EffectiveStatus, type SubEventType } from "@/lib/saas";
+import type { PaymentDto } from "@/server/billing/dto";
 
 /**
  * 045 — Contratos del panel de Super Admin: lo comparten el servidor (rutas) y la UI.
@@ -61,6 +62,14 @@ export type OrganizationRowDto = {
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   createdAt: string;
+  /** 046 — `mercadopago` si la pasarela cobra esta suscripción; null = cobro manual. */
+  billingProvider: string | null;
+  /** true = la pasarela tiene una suscripción VIGENTE (autorizada/pausada): activar/asignar a mano se bloquea. */
+  managedByProvider: boolean;
+  mpStatus: string | null;
+  lastPaymentAt: string | null;
+  nextPaymentAt: string | null;
+  pendingPlanName: string | null;
 };
 
 export const ORGANIZATION_ROW_FIELDS = [
@@ -79,6 +88,12 @@ export const ORGANIZATION_ROW_FIELDS = [
   "currentPeriodEnd",
   "cancelAtPeriodEnd",
   "createdAt",
+  "billingProvider",
+  "managedByProvider",
+  "mpStatus",
+  "lastPaymentAt",
+  "nextPaymentAt",
+  "pendingPlanName",
 ] as const;
 
 export type SubscriptionEventDto = {
@@ -110,6 +125,8 @@ export type OrganizationDetailDto = {
   organization: OrganizationRowDto;
   events: SubscriptionEventDto[];
   audit: AuditEntryDto[];
+  /** 046 — Cobros de la pasarela (solo metadatos). */
+  payments: PaymentDto[];
 };
 
 export const AUDIT_ACTIONS = ["grant", "revoke", ...SUB_ACTIONS] as const;

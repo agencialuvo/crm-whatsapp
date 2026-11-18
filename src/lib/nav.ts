@@ -218,7 +218,10 @@ export function settingsSections({
   tiktok = false,
   salon = false,
   sector = false,
+  suscripcion = false,
 }: {
+  /** 046 — «Suscripción» existe solo con el cobro con Mercado Pago encendido (`MERCADOPAGO`). */
+  suscripcion?: boolean;
   /** «Tipo de negocio» existe solo si la organización tiene perfil de sector (módulo SaaS). */
   sector?: boolean;
   /** 031 — «Marketing» (campaña de cumpleaños y tarjeta de fidelización) existe solo con la bandera SALON. */
@@ -255,6 +258,7 @@ export function settingsSections({
   ];
   if (atribucion) negocio.push({ href: "/ajustes/anuncios", label: "Anuncios" });
   if (sector) negocio.push({ href: "/ajustes/sector", label: "Tipo de negocio" });
+  if (suscripcion) negocio.push({ href: "/ajustes/suscripcion", label: "Suscripción" });
 
   // Marketing (retención y recompra): solo con el módulo del salón, igual que la fidelización que ya tenía.
   const marketing: SettingsLink[] = salon

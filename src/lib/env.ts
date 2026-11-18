@@ -70,6 +70,13 @@ export const envSchema = z.object({
   // /suscripcion-inactiva y su API responde 403 SUBSCRIPTION_INACTIVE (los mensajes entrantes se siguen guardando).
   // Enciéndelo SOLO en la instancia SaaS multi-negocio, nunca en una instalación propia sin plan asignado.
   SAAS_ENFORCE: z.string().optional(),
+  // 046: cobro automatico con Mercado Pago (conector opcional de la plataforma, apagado por defecto).
+  // Se leen en src/lib/mercadopago/config.ts; aqui solo se declaran para que `pnpm doctor` las vea.
+  MERCADOPAGO: z.string().optional(),
+  MP_ACCESS_TOKEN: z.string().optional(),
+  MP_WEBHOOK_SECRET: z.string().optional(),
+  MP_API_BASE: z.string().optional(),
+  PAYMENT_GRACE_DAYS: z.string().optional(),
   // 015: bases de los conectores. Solo se sobreescriben para apuntar a los
   // mocks en el self-test; en producción se usan las reales.
   ZOOM_BASE_URL: z.string().url().default("https://api.zoom.us/v2"),

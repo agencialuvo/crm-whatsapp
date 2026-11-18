@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ACTION_LABEL, availableActions, STATUS_LABEL, type EffectiveStatus, type SubAction, type SubEventType } from "@/lib/saas";
+import { formatMoneyCents } from "@/lib/money";
+import { ACTION_LABEL, availableActions, PAYMENT_STATUS_LABEL, STATUS_LABEL, type EffectiveStatus, type SubAction, type SubEventType } from "@/lib/saas";
 import type { OrganizationDetailDto, OrganizationRowDto } from "@/lib/super-admin";
 import { Button } from "@/components/ui/button";
 import { DialogCloseButton } from "@/components/ui/dialog-close";
@@ -17,6 +18,9 @@ const EVENT_LABEL: Record<SubEventType, string> = {
   period_changed: "Corte modificado",
   expired: "La prueba venció",
   assigned: "Plan asignado",
+  renewed: "Cobro mensual aprobado",
+  payment_failed: "Cobro rechazado",
+  refunded: "Reembolso o contracargo",
 };
 
 const SOURCE_LABEL = { signup: "alta", admin: "panel", system: "sistema", payment: "cobro" } as const;
@@ -63,7 +67,7 @@ export function OrganizationDrawer({
   }, [org.id, refreshKey]);
 
   const current = detail?.organization ?? org;
-  const acciones = availableActions(current.status, current.isTrialPlan, current.statusReason);
+  const acciones = availableActions(current.status, current.isTrialPlan, current.statusReason, current.managedByProvider ? current.billingProvider : null);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-overlay" onClick={onClose} data-testid="organization-drawer">
@@ -83,6 +87,11 @@ export function OrganizationDrawer({
         <p className="mt-1 text-xs text-text-3">
           {current.currentPeriodEnd ? `Corte: ${cuando(current.currentPeriodEnd)}` : "Sin fecha de corte"}
           {current.status === "trialing" && current.daysLeft !== null ? ` · ${current.daysLeft} día(s) de prueba` : ""}
+        </p>
+        <p className="mt-1 text-xs text-text-3" data-testid="drawer-billing">
+          {current.billingProvider === "mercadopago"
+            ? `Cobro: Mercado Pago${current.mpStatus ? ` (${current.mpStatus})` : ""}${current.lastPaymentAt ? ` · último pago ${cuando(current.lastPaymentAt)}` : ""}${current.nextPaymentAt ? ` · próximo ${cuando(current.nextPaymentAt)}` : ""}${current.pendingPlanName ? ` · cambia a ${current.pendingPlanName} al corte` : ""}`
+            : "Cobro: manual"}
         </p>
 
         <div className="mt-4 flex flex-wrap gap-2">
@@ -116,6 +125,28 @@ export function OrganizationDrawer({
             </li>
           ))}
         </ul>
+
+        {detail && detail.payments.length > 0 && (
+          <>
+            <h4 className="kicker mb-2 mt-6">Cobros</h4>
+            <ul className="space-y-2" data-testid="payment-list">
+              {detail.payments.map((p) => (
+                <li key={p.id} className="rounded-md border bg-card px-3 py-2 text-xs" data-testid="payment-item">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-medium">
+                      {PAYMENT_STATUS_LABEL[p.status] ?? p.status} · {formatMoneyCents(p.amountCents, p.currency, "es-PE")}
+                    </span>
+                    <span className="shrink-0 text-text-3">{cuando(p.paidAt ?? p.debitDate ?? p.createdAt)}</span>
+                  </div>
+                  <p className="text-text-3">
+                    {p.planName ?? ""}
+                    {p.message ? ` · ${p.message}` : ""}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
 
         {detail && detail.audit.length > 0 && (
           <>

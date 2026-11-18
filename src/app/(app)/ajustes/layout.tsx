@@ -3,6 +3,7 @@ import { getSessionOrNull } from "@/lib/auth/session";
 import { getSectorSetup } from "@/server/business/sector-setup";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { SettingsNav } from "@/components/settings/settings-nav";
+import { billingEnabled } from "@/lib/mercadopago/config";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { atribucionEnabled } from "@/server/attribution/flag";
 import { salonEnabled } from "@/server/business/flag";
@@ -39,6 +40,7 @@ export default async function SettingsLayout({
           tiktok={isChannelEnabled("tiktok")}
           salon={salonEnabled()}
           sector={sector}
+          suscripcion={billingEnabled()}
         />
         <div id={SETTINGS_SCROLL_ID} className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
           {children}

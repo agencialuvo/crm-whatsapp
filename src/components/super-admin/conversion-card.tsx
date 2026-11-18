@@ -23,6 +23,11 @@ export function ConversionCard({ metrics }: { metrics: Metrics }) {
         {pct(c.closedRate)}
       </p>
       <p className="text-xs text-text-3">de las pruebas ya cerradas (convirtieron + perdidas). Total sobre las que iniciaron: {pct(c.totalRate)}</p>
+      {c.converted > 0 && (
+        <p className="mt-1 text-xs text-text-3" data-testid="conv-by-source">
+          Por cobro de Mercado Pago: {c.convertedBy.payment} · activadas a mano: {c.convertedBy.manual}
+        </p>
+      )}
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm" data-testid="conversion-counts">
         <dt className="text-text-3">Iniciaron prueba</dt>
         <dd className="text-right tabular-nums" data-testid="conv-started">{c.started}</dd>

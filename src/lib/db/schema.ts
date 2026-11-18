@@ -689,12 +689,26 @@ export const subscription = pgTable(
     statusReason: text("status_reason"),
     statusChangedAt: timestamp("status_changed_at"),
 
+    /** 046 — Cobro automático. null = cobro manual (como en 045). Solo la puerta de `saas/subscription.ts` lo escribe. */
+    billingProvider: text("billing_provider", { enum: ["mercadopago"] }),
+    mpPreapprovalId: text("mp_preapproval_id"),
+    mpPayerId: text("mp_payer_id"),
+    mpStatus: text("mp_status"),
+    /** Monto mensual realmente acordado con la pasarela (precio pactado: no cambia si cambia el del plan). */
+    billedAmountCents: integer("billed_amount_cents"),
+    billedCurrency: text("billed_currency"),
+    /** Cambio a un plan más barato programado para el próximo corte. */
+    pendingPlanId: text("pending_plan_id").references(() => plan.id),
+    lastPaymentAt: timestamp("last_payment_at"),
+    nextPaymentAt: timestamp("next_payment_at"),
+
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("subscription_org_uq").on(t.organizationId),
     index("subscription_status_idx").on(t.status),
+    uniqueIndex("subscription_mp_preapproval_uq").on(t.mpPreapprovalId).where(sql`${t.mpPreapprovalId} is not null`),
   ]
 );
 
@@ -723,6 +737,9 @@ export const subscriptionEvent = pgTable(
         "period_changed",
         "expired",
         "assigned",
+        "renewed",
+        "payment_failed",
+        "refunded",
       ],
     }).notNull(),
     fromStatus: text("from_status"),
@@ -740,6 +757,8 @@ export const subscriptionEvent = pgTable(
     reason: text("reason"),
     /** true = fila SEMBRADA en la migración, no observada: cuenta en los totales pero no en la conversión. */
     approximate: boolean("approximate").notNull().default(false),
+    /** 046 — El id del cobro de la pasarela que originó el evento (cruza historia y cobros). */
+    providerRef: text("provider_ref"),
     occurredAt: timestamp("occurred_at").notNull().defaultNow(),
   },
   (t) => [
@@ -2755,5 +2774,97 @@ export const notifications = pgTable(
   (t) => [
     index("notifications_org_created_idx").on(t.organizationId, t.createdAt),
     index("notifications_org_unread_idx").on(t.organizationId, t.isRead),
+  ]
+);
+
+
+/**
+ * 046 — Cada intento de contratar un plan con la pasarela. Su id es el `external_reference` (opaco): organización
+ * y plan se leen de AQUÍ, nunca del texto que viaja por Mercado Pago. Las tablas `billing_*` las escribe solo
+ * `src/server/billing/` (una prueba de vigilancia lo comprueba).
+ */
+export const billingCheckout = pgTable(
+  "billing_checkout",
+  {
+    id: text("id").primaryKey(), // prefix: 'bck'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => plan.id),
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: text("status", { enum: ["pending", "authorized", "paid", "failed", "abandoned", "replaced"] })
+      .notNull()
+      .default("pending"),
+    mpPreapprovalId: text("mp_preapproval_id"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    payerEmail: text("payer_email"),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    expiresAt: timestamp("expires_at").notNull(),
+    completedAt: timestamp("completed_at"),
+  },
+  (t) => [
+    index("bck_org_created_idx").on(t.organizationId, t.createdAt),
+    uniqueIndex("bck_mp_preapproval_uq").on(t.mpPreapprovalId).where(sql`${t.mpPreapprovalId} is not null`),
+  ]
+);
+
+/**
+ * 046 — Un cobro de la pasarela. `mp_authorized_payment_id` UNIQUE es la clave de idempotencia; el estado solo
+ * avanza (pending → rejected → approved → refunded|charged_back). `applied_at` marca que la puerta ya lo aplicó.
+ */
+export const billingPayment = pgTable(
+  "billing_payment",
+  {
+    id: text("id").primaryKey(), // prefix: 'bpy'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    planId: text("plan_id"),
+    planName: text("plan_name"),
+    mpPreapprovalId: text("mp_preapproval_id").notNull(),
+    mpAuthorizedPaymentId: text("mp_authorized_payment_id").notNull(),
+    mpPaymentId: text("mp_payment_id"),
+    status: text("status", { enum: ["pending", "rejected", "approved", "refunded", "charged_back", "cancelled"] }).notNull(),
+    statusDetail: text("status_detail"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    retryAttempt: integer("retry_attempt").notNull().default(0),
+    debitDate: timestamp("debit_date"),
+    paidAt: timestamp("paid_at"),
+    appliedAt: timestamp("applied_at"),
+    needsReview: boolean("needs_review").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("bpy_authorized_payment_uq").on(t.mpAuthorizedPaymentId),
+    index("bpy_org_created_idx").on(t.organizationId, t.createdAt),
+  ]
+);
+
+/** 046 — La bandeja de entrada de los webhooks de la pasarela: idempotencia por `x-request-id` y reproceso. */
+export const billingWebhookEvent = pgTable(
+  "billing_webhook_event",
+  {
+    id: text("id").primaryKey(), // prefix: 'bwh'
+    requestId: text("request_id").notNull(),
+    topic: text("topic").notNull(),
+    resourceId: text("resource_id").notNull(),
+    action: text("action"),
+    liveMode: boolean("live_mode"),
+    status: text("status", { enum: ["received", "processed", "ignored", "orphan", "failed"] }).notNull().default("received"),
+    organizationId: text("organization_id"),
+    attempts: integer("attempts").notNull().default(0),
+    error: text("error"),
+    receivedAt: timestamp("received_at").notNull().defaultNow(),
+    processedAt: timestamp("processed_at"),
+  },
+  (t) => [
+    uniqueIndex("bwh_request_uq").on(t.requestId),
+    index("bwh_status_received_idx").on(t.status, t.receivedAt),
   ]
 );

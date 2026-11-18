@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
-import { effectiveStatus, type EffectiveStatus } from "@/lib/saas";
+import { effectiveStatus, paymentGraceEndsAt, type EffectiveStatus } from "@/lib/saas";
+import { paymentGraceDays } from "@/lib/mercadopago/config";
 
 /**
  * 045 — Cumplimiento de la suscripción (`SAAS_ENFORCE`, APAGADO por defecto).
@@ -33,6 +34,8 @@ export type SubscriptionAccess = {
   planName: string | null;
   currentPeriodEnd: Date | null;
   statusReason: string | null;
+  /** 046: fin de la gracia tras un cobro rechazado (mientras dure, no se bloquea). */
+  graceEndsAt: Date | null;
 };
 
 const BLOCKING: readonly EffectiveStatus[] = ["trial_expired", "past_due", "canceled", "paused"];
@@ -58,12 +61,16 @@ export async function getSubscriptionAccess(organizationId: string, now = new Da
     .limit(1);
   let value: SubscriptionAccess;
   if (!row) {
-    value = { status: null, blocked: false, daysLeft: null, planName: null, currentPeriodEnd: null, statusReason: null };
+    value = { status: null, blocked: false, daysLeft: null, planName: null, currentPeriodEnd: null, statusReason: null, graceEndsAt: null };
   } else {
     const eff = effectiveStatus(row.sub, row.plan, now);
+    const graceEndsAt = paymentGraceEndsAt(row.sub, paymentGraceDays());
+    const inGrace = graceEndsAt !== null && now.getTime() <= graceEndsAt.getTime();
     value = {
       status: eff.status,
-      blocked: BLOCKING.includes(eff.status),
+      // 046: un cobro rechazado da unos días de gracia (aviso, sin corte) antes de bloquear.
+      blocked: BLOCKING.includes(eff.status) && !inGrace,
+      graceEndsAt: inGrace ? graceEndsAt : null,
       daysLeft: eff.daysLeft,
       planName: row.plan.name,
       currentPeriodEnd: row.sub.currentPeriodEnd,

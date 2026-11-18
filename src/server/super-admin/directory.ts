@@ -9,6 +9,7 @@ import type {
   SubscriptionEventDto,
 } from "@/lib/super-admin";
 import { normalizeText } from "@/lib/search";
+import { listPayments } from "@/server/billing/queries";
 
 /**
  * 045 — Lecturas CROSS-TENANT del panel de Super Admin.
@@ -19,7 +20,12 @@ import { normalizeText } from "@/lib/search";
  * dueño (nombre y correo), plan, estado y fechas. Nunca conversaciones, contactos, mensajes ni credenciales.
  */
 
-export type OrgRecord = OrgFacts & { name: string; ownerName: string | null; ownerEmail: string | null };
+export type OrgRecord = OrgFacts & {
+  name: string;
+  ownerName: string | null;
+  ownerEmail: string | null;
+  billing: { mpStatus: string | null; lastPaymentAt: Date | null; nextPaymentAt: Date | null; pendingPlanId: string | null };
+};
 
 const toPlan = (p: typeof schema.plan.$inferSelect): PlanFacts => ({
   id: p.id,
@@ -64,6 +70,10 @@ export async function loadOrganizations(): Promise<OrgRecord[]> {
           cancelAtPeriodEnd: r.sub.cancelAtPeriodEnd,
           statusReason: r.sub.statusReason,
           convertedAt: r.sub.convertedAt,
+          billingProvider: r.sub.billingProvider,
+          billedAmountCents: r.sub.billedAmountCents,
+          billedCurrency: r.sub.billedCurrency,
+          pendingPlanId: r.sub.pendingPlanId,
         }
       : null;
     return {
@@ -74,6 +84,12 @@ export async function loadOrganizations(): Promise<OrgRecord[]> {
       sub,
       ownerName: r.ownerName,
       ownerEmail: r.ownerEmail,
+      billing: {
+        mpStatus: r.sub?.mpStatus ?? null,
+        lastPaymentAt: r.sub?.lastPaymentAt ?? null,
+        nextPaymentAt: r.sub?.nextPaymentAt ?? null,
+        pendingPlanId: r.sub?.pendingPlanId ?? null,
+      },
     };
   });
 }
@@ -86,13 +102,14 @@ export async function loadConversionEvents(): Promise<EventFacts[]> {
       type: schema.subscriptionEvent.type,
       occurredAt: schema.subscriptionEvent.occurredAt,
       approximate: schema.subscriptionEvent.approximate,
+      source: schema.subscriptionEvent.source,
     })
     .from(schema.subscriptionEvent)
     .where(inArray(schema.subscriptionEvent.type, ["trial_started", "converted"]));
   return rows;
 }
 
-export function toRow(o: OrgRecord, now: Date): OrganizationRowDto {
+export function toRow(o: OrgRecord, now: Date, planNames: ReadonlyMap<string, string> = new Map()): OrganizationRowDto {
   const eff = o.sub ? effectiveStatus(o.sub, o.plan, now) : null;
   return {
     id: o.orgId,
@@ -110,6 +127,12 @@ export function toRow(o: OrgRecord, now: Date): OrganizationRowDto {
     currentPeriodEnd: o.sub?.currentPeriodEnd.toISOString() ?? null,
     cancelAtPeriodEnd: o.sub?.cancelAtPeriodEnd ?? false,
     createdAt: o.createdAt.toISOString(),
+    billingProvider: o.sub?.billingProvider ?? null,
+    managedByProvider: o.sub?.billingProvider === "mercadopago" && (o.billing.mpStatus === "authorized" || o.billing.mpStatus === "paused"),
+    mpStatus: o.billing.mpStatus,
+    lastPaymentAt: o.billing.lastPaymentAt?.toISOString() ?? null,
+    nextPaymentAt: o.billing.nextPaymentAt?.toISOString() ?? null,
+    pendingPlanName: o.billing.pendingPlanId ? (planNames.get(o.billing.pendingPlanId) ?? null) : null,
   };
 }
 
@@ -138,7 +161,13 @@ export async function listOrganizations(filters: DirectoryFilters = {}, now = ne
       return true;
     })
     .slice(0, filters.limit ?? 5000);
-  return rows.map((o) => toRow(o, now));
+  const names = await planNameMap();
+  return rows.map((o) => toRow(o, now, names));
+}
+
+async function planNameMap(): Promise<Map<string, string>> {
+  const rows = await getDb().select({ id: schema.plan.id, name: schema.plan.name }).from(schema.plan);
+  return new Map(rows.map((r) => [r.id, r.name]));
 }
 
 export async function listPlans(): Promise<PlanDto[]> {
@@ -182,7 +211,7 @@ export async function getOrganizationDetail(organizationId: string, now = new Da
     .limit(50);
 
   return {
-    organization: toRow(org, now),
+    organization: toRow(org, now, await planNameMap()),
     events: events.map(
       ({ e, actorName }): SubscriptionEventDto => ({
         id: e.id,
@@ -199,6 +228,7 @@ export async function getOrganizationDetail(organizationId: string, now = new Da
         occurredAt: e.occurredAt.toISOString(),
       })
     ),
+    payments: await listPayments(organizationId),
     audit: audit.map(
       (a): AuditEntryDto => ({
         id: a.id,

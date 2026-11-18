@@ -2,6 +2,7 @@ import { apiError, parseBody } from "@/lib/api";
 import { auditIp, withSuperAdmin } from "@/lib/auth/super-admin";
 import type { SubAction } from "@/lib/saas";
 import { subscriptionActionSchema } from "@/lib/super-admin";
+import { propagateAdminAction } from "@/server/billing/change";
 import { invalidateSubscriptionAccess } from "@/server/saas/enforcement";
 import { applySubscriptionAction } from "@/server/saas/subscription";
 import { getOrganizationDetail } from "@/server/super-admin/directory";
@@ -20,7 +21,12 @@ export const POST = withSuperAdmin(async (admin, req, ctx: Params) => {
   const body = await parseBody(req, subscriptionActionSchema);
   if (!body.ok) return body.response;
   const d = body.data;
+  // 046: si la suscripción la cobra Mercado Pago, primero se le propaga la acción (la matriz de la spec); si la
+  // pasarela falla o la acción no cabe, no cambia nada localmente.
+  const prop = await propagateAdminAction({ organizationId: id, action: d.action as SubAction, planId: d.planId });
+  if (!prop.ok) return apiError(prop.status, prop.code, prop.message);
   const result = await applySubscriptionAction({
+    providerStatus: prop.providerStatus,
     organizationId: id,
     action: d.action as SubAction,
     planId: d.planId,

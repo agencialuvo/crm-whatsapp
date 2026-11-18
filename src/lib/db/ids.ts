@@ -26,6 +26,9 @@ const prefixes = {
   subscription: "sub",
   // 045 — Super Admin
   subscriptionEvent: "sev",
+  billingCheckout: "bck",
+  billingPayment: "bpy",
+  billingWebhookEvent: "bwh",
   superAdminAudit: "saa",
   businessCategory: "bcat",
   businessProfile: "bpro",

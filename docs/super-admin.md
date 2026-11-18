@@ -57,6 +57,10 @@ Acciones del panel, cada una con **motivo obligatorio** (queda en la historia y 
 - **Conversión Demo → pago**: se calcula sobre la historia de suscripciones (`subscription_event`). La tasa **cerrada** es `convirtieron / (convirtieron + perdidas)`: las pruebas todavía en curso no la deprimen. Las suscripciones anteriores al seguimiento no cuentan (no se vio cuándo empezó su prueba).
 - **MRR estimado**: la suma de los precios de lista de las suscripciones `active` de planes de pago (en soles). Es una estimación: no sabe de descuentos ni cortesías hasta que exista el cobro real.
 
+## Cobro automático (Mercado Pago)
+
+Con `MERCADOPAGO=on` el cobro mensual lo mueve Mercado Pago ([guía](mercadopago.md)): el directorio marca «Mercado Pago» bajo el plan, el cajón muestra los cobros y la conversión se desglosa por origen. Sobre una suscripción que cobra Mercado Pago, **suspender, cancelar y cambiar de plan se propagan a la pasarela** (si falla, no cambia nada), y **activar o asignar a mano dan 409** para evitar un doble cobro.
+
 ## Bloquear a quien no está al día: `SAAS_ENFORCE`
 
 Por defecto **nada se bloquea**: solo se muestra el aviso «Tu prueba termina en N días». Con `SAAS_ENFORCE=true`, una organización con la prueba vencida, suspendida o cancelada ve «Tu suscripción no está activa» en vez de la app y su API responde `403 SUBSCRIPTION_INACTIVE`. Los **mensajes entrantes siguen guardándose** (no se pierde nada del cliente) y el agente de IA y las automatizaciones **no se pausan** en este paso.

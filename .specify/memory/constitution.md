@@ -1,7 +1,8 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Versión: 1.3.0 → 1.4.0
+Versión: 1.4.0 → 1.5.0 (ver «Enmienda 1.5.0» más abajo)
+Versión anterior del informe: 1.3.0 → 1.4.0
 
 Cambios:
   - Principio II "Soberanía / Self-Hosted" → EXPANDIDO: la lista cerrada de
@@ -17,6 +18,15 @@ Cambios:
   - "Restricciones de Plataforma y Seguridad": sin cambio — su regla de
     aislamiento tras adaptadores dedicados ya cubre a los conectores.
   - Governance: sin cambio.
+
+Enmienda 1.5.0 (2026-11-17, aprobada por el dueño en la spec 046): el billing de la
+PLATAFORMA (cobro de los planes SaaS con Mercado Pago) entra SOLO como conector
+opcional del operador, bajo las mismas cinco condiciones; nunca como dependencia del
+núcleo ni de las instalaciones de un solo negocio. Salvedad a la condición 4: aquí "el
+negocio" es el operador de la plataforma, así que las credenciales son SUYAS y viven en
+variables de entorno del servidor (nunca al cliente ni a logs), no las de cada tenant.
+Apagado por defecto (MERCADOPAGO), con mock y camino infeliz, y su fallo jamás bloquea
+la operación core. Bump: MINOR (1.4.0 → 1.5.0).
 
 Bump: MINOR (1.3.0 → 1.4.0) — expansión material de un principio; no elimina ni
 redefine nada de forma incompatible: una instancia default sigue cumpliendo
@@ -334,4 +344,4 @@ práctica, convención o preferencia; ante un conflicto, gana la constitución.
 - **Propagación**: al enmendar la constitución se revisan y, si procede, se actualizan
   las plantillas dependientes (plan, spec, tasks).
 
-**Version**: 1.4.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-08-26
+**Version**: 1.5.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-11-17
