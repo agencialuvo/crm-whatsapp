@@ -338,6 +338,31 @@ export async function checkMediaDir(dir: string): Promise<CheckResult> {
   };
 }
 
+/**
+ * 048 — El conector de Cloudflare R2 (opcional, apagado por defecto). Con la bandera encendida comprueba las cuatro
+ * variables y que el bucket responda; apagado no hace nada: los archivos viven en MEDIA_DIR.
+ */
+export async function checkR2(
+  source: Record<string, string | undefined>,
+  deps: { probe?: () => Promise<{ status: "off" | "incomplete" | "ok" | "fail"; bucket?: string; detail?: string }> } = {}
+): Promise<CheckResult[]> {
+  const on = ["on", "1", "true", "si", "sí", "yes"].includes((source.R2_STORAGE ?? "").trim().toLowerCase());
+  if (!on) {
+    return [{ status: "skip", label: "R2_STORAGE", detail: "apagado: los archivos de Medios viven en MEDIA_DIR", fix: "para guardarlos en Cloudflare R2: R2_STORAGE=on más R2_ENDPOINT, R2_BUCKET_NAME, R2_ACCESS_KEY_ID y R2_SECRET_ACCESS_KEY (guía en docs/almacenamiento-r2.md)" }];
+  }
+  const faltan = ["R2_ENDPOINT", "R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"].filter((k) => {
+    const v = source[k]?.trim();
+    return !v || v.startsWith(PLACEHOLDER_PREFIX);
+  });
+  if (faltan.length > 0) {
+    return [{ status: "fail", label: "R2", detail: `R2_STORAGE=on pero faltan: ${faltan.join(", ")} (mientras tanto los archivos nuevos van a MEDIA_DIR)`, fix: "Cloudflare → R2 → tu bucket y Manage API tokens; ponlas en .env" }];
+  }
+  const probe = deps.probe ?? (async () => (await import("@/server/storage/health")).probeR2());
+  const r = await probe();
+  if (r.status === "ok") return [{ status: "ok", label: "R2", detail: `el bucket ${r.bucket} responde` }];
+  return [{ status: "fail", label: "R2", detail: `no se pudo hablar con el bucket${r.bucket ? ` ${r.bucket}` : ""}: ${r.detail ?? "error"}`, fix: "revisa R2_ENDPOINT (sin el nombre del bucket), las llaves y que el token tenga Object Read & Write sobre ese bucket" }];
+}
+
 /* ---------- WhatsApp (Meta) ---------- */
 
 export type StoredWhatsApp = {

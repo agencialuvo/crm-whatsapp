@@ -139,12 +139,12 @@ describe.skipIf(!live)("cumplimiento y multimedia contra Postgres", () => {
 
   function deps() {
     const sent: string[] = [];
-    const media: { mimeType: string; bytes: number; fileName: string; caption?: string }[] = [];
+    const media: { mediaId: string; caption?: string }[] = [];
     const d: import("@/server/automation/engine").Deps = {
       ...worker.defaultDeps(),
       sendText: vi.fn(async (i: { text: string }) => (sent.push(i.text), { messageId: "msg_fake" })),
       sendTemplate: vi.fn(async () => ({ messageId: "msg_fake" })),
-      sendMedia: vi.fn(async (i) => (media.push({ mimeType: i.file.mimeType, bytes: i.file.data.byteLength, fileName: i.file.fileName, caption: i.caption }), { messageId: "msg_media" })),
+      sendMedia: vi.fn(async (i) => (media.push({ mediaId: i.mediaId, caption: i.caption }), { messageId: "msg_media" })),
       waMessageIdOf: async () => null,
     };
     return { d, sent, media };
@@ -489,14 +489,13 @@ describe.skipIf(!live)("cumplimiento y multimedia contra Postgres", () => {
       await drain(flowId, contactId, d);
 
       expect(media).toHaveLength(1);
-      expect(media[0]).toMatchObject({ mimeType: "image/png", bytes: PNG.byteLength, caption: "Hola Cliente Cumpl" });
-      expect(media[0]!.fileName).toMatch(/\.png$/);
+      expect(media[0]).toMatchObject({ mediaId: m.id, caption: "Hola Cliente Cumpl" });
       expect((await runsOf(flowId, contactId))[0]!.status).toBe("completed");
       const [log] = await logsOf(flowId, contactId);
       expect(log).toMatchObject({ status: "success" });
       expect(log!.metadata).toMatchObject({
         step: { stepType: "send_media", stepName: "Promo" },
-        payload: { mode: "media", mediaId: m.id, mimeType: "image/png", caption: "Hola Cliente Cumpl" },
+        payload: { mode: "media", mediaId: m.id, mimeType: "image/png", bytes: PNG.byteLength, caption: "Hola Cliente Cumpl" },
       });
     });
 
@@ -616,7 +615,7 @@ describe.skipIf(!live)("cumplimiento y multimedia contra Postgres", () => {
         const { d, media } = deps();
         await drain(flow.id, contactId, d);
         expect(media).toHaveLength(1);
-        expect(media[0]).toMatchObject({ caption: "Mira", mimeType: "image/png" });
+        expect(media[0]).toMatchObject({ caption: "Mira", mediaId: m.id });
       });
 
       it("no se puede borrar un medio que un flujo envía; sí cuando ya no lo usa", async () => {

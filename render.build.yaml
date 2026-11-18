@@ -72,6 +72,18 @@ services:
       # Registro público de propietarios: exige correo (SMTP) para el código de verificación.
       - key: ALLOW_SIGNUP
         value: "true"
+      # 048: Medios en Cloudflare R2 (OPCIONAL: sin R2_STORAGE=on los archivos viven en el disco /data).
+      # Se llenan a mano en el panel; ver docs/almacenamiento-r2.md (incluye el CORS del bucket).
+      - key: R2_STORAGE
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

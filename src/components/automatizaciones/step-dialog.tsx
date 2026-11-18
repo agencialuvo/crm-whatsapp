@@ -208,8 +208,12 @@ export function StepDialog({
     [isBookingFlow]
   );
   const mediaOptions = useMemo<SearchSelectOption[]>(
-    () => media.map((m) => ({ value: m.id, label: `${m.nombre} · ${m.tipo === "video" ? "Video" : "Imagen"}` })),
-    [media]
+    // 048: lo que WhatsApp no manda (AVIF, un video antiguo de más de 16 MB) no se ofrece: fallaría al enviarse.
+    () =>
+      media
+        .filter((m) => !m.noEnviable || m.id === mediaId)
+        .map((m) => ({ value: m.id, label: `${m.nombre} · ${m.tipo === "video" ? "Video" : m.tipo === "document" ? "PDF" : "Imagen"}` })),
+    [media, mediaId]
   );
   const chosenMedia = media.find((m) => m.id === mediaId);
   const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
@@ -661,7 +665,7 @@ export function StepDialog({
           </>
         ) : stepType === "send_media" ? (
           <>
-            <Field label="Archivo" required htmlFor="step-media" error={errors.mediaId} hint="Imágenes y videos de tu biblioteca de Medios.">
+            <Field label="Archivo" required htmlFor="step-media" error={errors.mediaId} hint="Imágenes, videos (hasta 16 MB) y PDF de tu biblioteca de Medios.">
               <SearchSelect
                 id="step-media"
                 value={mediaId}
@@ -685,7 +689,11 @@ export function StepDialog({
             </Field>
             {chosenMedia && (
               <div className="overflow-hidden rounded-md border bg-subtle">
-                {chosenMedia.tipo === "video" ? (
+                {chosenMedia.tipo === "document" ? (
+                  <a href={chosenMedia.ruta} target="_blank" rel="noreferrer" className="block px-3 py-4 text-sm font-semibold underline">
+                    PDF · {chosenMedia.nombre}
+                  </a>
+                ) : chosenMedia.tipo === "video" ? (
                   <video src={chosenMedia.ruta} controls preload="metadata" className="max-h-56 w-full bg-black" aria-label={`Vista previa de ${chosenMedia.nombre}`} />
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element

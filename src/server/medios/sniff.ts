@@ -73,10 +73,24 @@ export function detectarFormato(buf: Uint8Array, opts: { svg?: boolean } = {}): 
   if (buf.length >= 12 && ascii(buf, 0, 4) === "RIFF" && ascii(buf, 8, 12) === "WEBP") {
     return formato("webp");
   }
+  if (buf.length >= 5 && ascii(buf, 0, 5) === "%PDF-") return formato("pdf");
   if (buf.length >= 12 && ascii(buf, 4, 8) === "ftyp") {
     const marca = ascii(buf, 8, 12).toLowerCase();
     if (marca === "avif" || marca === "avis") return formato("avif");
     if (MARCAS_MP4.has(marca)) return formato("mp4");
+  }
+  return null;
+}
+
+/**
+ * 048 — Aviso (no bloqueo) sobre el códec de un MP4: WhatsApp solo admite H.264 (`avc1`) y AAC (`mp4a`). Busca la
+ * etiqueta en el propio archivo (≤16 MB): no hay `ffprobe`. Devuelve el aviso o `null` si parece en orden; el rechazo
+ * final lo decide Meta.
+ */
+export function revisarCodecsMp4(buf: Uint8Array): string | null {
+  const texto = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength).toString("latin1");
+  if (!texto.includes("avc1") && !texto.includes("avc3")) {
+    return "Este video no parece estar en H.264. WhatsApp solo admite MP4 con H.264 y AAC: puede que no se envíe.";
   }
   return null;
 }

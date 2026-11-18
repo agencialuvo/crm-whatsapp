@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic";
 /** Módulo Medios — la biblioteca de la organización, lo más nuevo primero. */
 export const GET = withAuth(async (session, req: Request) => {
   const tipo = new URL(req.url).searchParams.get("tipo");
-  if (tipo !== null && tipo !== "image" && tipo !== "video") {
-    return apiError(422, "invalid_query", "tipo debe ser image o video");
+  if (tipo !== null && tipo !== "image" && tipo !== "video" && tipo !== "document") {
+    return apiError(422, "invalid_query", "tipo debe ser image, video o document");
   }
   return Response.json({ medios: await listarMedios(session.organizationId, tipo ?? undefined) });
 });
@@ -49,7 +49,7 @@ export const POST = withAuth(async (session, req: Request) => {
     return apiError(413, "too_large", "Esta forma de subir admite hasta 50 MB; para un archivo mayor manda los bytes directos en el cuerpo.");
   }
   if (declarado > MAX_SUBIDA_BYTES) {
-    return apiError(413, "too_large", "El archivo es demasiado grande (el máximo es 5 GB, para MP4).");
+    return apiError(413, "too_large", "El archivo es demasiado grande (el máximo es 16 MB).");
   }
 
   try {
@@ -90,7 +90,7 @@ export const POST = withAuth(async (session, req: Request) => {
     return Response.json({ medio }, { status: 201 });
   } catch (err) {
     if (err instanceof MedioError) {
-      return apiError(err.code === "too_large" ? 413 : 422, err.code, err.message);
+      return apiError(err.code === "too_large" ? 413 : err.code === "unavailable" ? 503 : 422, err.code, err.message);
     }
     throw err;
   }

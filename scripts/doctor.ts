@@ -19,6 +19,7 @@ import {
   checkDatabase,
   checkMediaDir,
   checkMercadoPago,
+  checkR2,
   checkWhatsApp,
   evaluateComposeEnv,
   evaluateEnv,
@@ -71,6 +72,7 @@ if (!env) {
   const db = await checkDatabase(env.DATABASE_URL);
   section("Base de datos", [db]);
   section("Adjuntos", [await checkMediaDir(env.MEDIA_DIR)]);
+  section("Medios en Cloudflare R2 (opcional)", await checkR2(process.env));
   if (db.status === "ok") {
     section("WhatsApp", await checkWhatsApp());
     await getSql()

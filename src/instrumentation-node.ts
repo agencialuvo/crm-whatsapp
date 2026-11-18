@@ -186,3 +186,16 @@ export function resumeSubscriptionSweeper(): void {
     })
     .catch((err) => console.error("[boot] no se pudo iniciar el vencimiento de pruebas:", err));
 }
+
+/**
+ * 048 — Mantenimiento de Medios: subidas directas sin confirmar y caché vencida del `media_id` de WhatsApp. Del núcleo:
+ * corre siempre. Import dinámico y a prueba de fallos: nunca tumba el arranque.
+ */
+export function resumeMediaMaintenance(): void {
+  void import("@/server/medios/mantenimiento")
+    .then(({ startMediaMaintenance, tickMediaMaintenance }) => {
+      startMediaMaintenance();
+      void tickMediaMaintenance();
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar el mantenimiento de Medios:", err));
+}

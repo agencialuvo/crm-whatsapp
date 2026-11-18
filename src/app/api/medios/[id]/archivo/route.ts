@@ -1,7 +1,8 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { medioPublico, rutaDeMedio } from "@/server/medios/store";
+import { lecturaDe, medioPublico } from "@/server/medios/store";
+import { objectStore } from "@/server/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,23 @@ export async function GET(req: Request, ctx: Params) {
   const medio = await medioPublico(id);
   if (!medio) return new Response("No encontrado", { status: 404 });
 
-  const archivo = rutaDeMedio(medio.organizationId, medio.id);
+  const lectura = lecturaDe(medio);
+  const descargar = new URL(req.url).searchParams.has("descargar");
+  const nombre = `${medio.name.replace(/[^\w.-]+/g, "_") || "medio"}.${medio.mimeType.split("/")[1]?.replace("jpeg", "jpg").replace("svg+xml", "svg") ?? "bin"}`;
+
+  // 048: un archivo en R2 NO pasa por este servidor: se redirige a una URL firmada de 10 min y los bytes salen de R2
+  // directo al visitante. El enlace público (el id) no caduca; lo que vence es la firma interna.
+  if (lectura.donde === "r2") {
+    const r2 = objectStore();
+    if (!r2) return new Response("El almacenamiento no está disponible", { status: 503 });
+    const url = await r2
+      .signRead(lectura.clave, { fileName: nombre, download: descargar, contentType: medio.mimeType, ttlSeconds: 600 })
+      .catch(() => null);
+    if (!url) return new Response("El almacenamiento no está disponible", { status: 503 });
+    return new Response(null, { status: 302, headers: { location: url, "cache-control": "private, max-age=300" } });
+  }
+
+  const archivo = lectura.ruta;
   let tam: number;
   try {
     tam = (await stat(archivo)).size;
@@ -45,8 +62,6 @@ export async function GET(req: Request, ctx: Params) {
     return new Response("El archivo no está en el volumen", { status: 410 });
   }
 
-  const descargar = new URL(req.url).searchParams.has("descargar");
-  const nombre = `${medio.name.replace(/[^\w.-]+/g, "_") || "medio"}.${medio.mimeType.split("/")[1]?.replace("jpeg", "jpg").replace("svg+xml", "svg") ?? "bin"}`;
   const disposicion = `${descargar ? "attachment" : "inline"}; filename="${nombre}"`;
 
   const rango = req.headers.get("range");

@@ -282,7 +282,7 @@ export const BRANCH_ACTION_LABELS: Record<BranchAction, string> = {
 
 /** Lo que resuelve nombres de etiquetas y etapas en las tarjetas (por id: el motor nunca compara nombres). */
 /** Un archivo de la biblioteca de Medios, lo justo para elegirlo y mostrarlo en un bloque `send_media`. */
-export type MediaOption = { id: string; nombre: string; tipo: "image" | "video"; ruta: string };
+export type MediaOption = { id: string; nombre: string; tipo: "image" | "video" | "document"; ruta: string; noEnviable?: boolean };
 
 export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOption[]; media?: readonly MediaOption[] };
 

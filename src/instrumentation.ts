@@ -11,6 +11,7 @@ export async function register(): Promise<void> {
       encryptLegacySecrets,
       resumeAutomations,
       resumeDispatch,
+      resumeMediaMaintenance,
       resumeMetaAds,
       resumeOutboxSweeper,
       resumeSubscriptionSweeper,
@@ -26,5 +27,6 @@ export async function register(): Promise<void> {
     resumeMetaAds();
     resumeOutboxSweeper();
     resumeSubscriptionSweeper();
+    resumeMediaMaintenance();
   }
 }

@@ -35,11 +35,16 @@ describe("límites de peso por formato", () => {
     expect(validarMedio("a.avif", "image/avif", 1.5 * MB + 1)).toMatchObject({ ok: false, code: "too_large" });
   });
 
-  it("MP4 llega hasta 5 GB", () => {
-    const GB = 1024 * MB;
-    expect(validarMedio("v.mp4", "video/mp4", 5 * GB).ok).toBe(true);
-    expect(validarMedio("v.mp4", "video/mp4", 5 * GB + 1)).toMatchObject({ ok: false, code: "too_large" });
-    expect(validarMedio("v.mp4", "video/mp4", 5 * GB + 1)).toMatchObject({ message: expect.stringContaining("5,0 GB") });
+  it("MP4 llega hasta 16 MB (el tope duro de WhatsApp, 048)", () => {
+    expect(validarMedio("v.mp4", "video/mp4", 16 * MB).ok).toBe(true);
+    expect(validarMedio("v.mp4", "video/mp4", 16 * MB + 1)).toMatchObject({ ok: false, code: "too_large" });
+    expect(validarMedio("v.mp4", "video/mp4", 16 * MB + 1)).toMatchObject({ message: expect.stringContaining("16 MB") });
+  });
+
+  it("PDF llega hasta 16 MB y es un documento (048)", () => {
+    const ok = validarMedio("ficha.pdf", "application/pdf", 16 * MB);
+    expect(ok).toMatchObject({ ok: true, formato: { tipo: "document", ext: "pdf" } });
+    expect(validarMedio("ficha.pdf", "application/pdf", 16 * MB + 1)).toMatchObject({ ok: false, code: "too_large" });
   });
 
   it("el aviso dice el archivo, su peso y el máximo de ESE formato", () => {
@@ -59,12 +64,12 @@ describe("límites de peso por formato", () => {
 });
 
 describe("formatos admitidos", () => {
-  it("rechaza SVG, GIF, HTML, PDF y video que no sea mp4", () => {
+  it("rechaza SVG, GIF, HTML, otros documentos y video que no sea mp4", () => {
     for (const [n, m] of [
       ["a.svg", "image/svg+xml"],
       ["a.gif", "image/gif"],
       ["a.html", "text/html"],
-      ["a.pdf", "application/pdf"],
+      ["a.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
       ["a.mov", "video/quicktime"],
       ["a.webm", "video/webm"],
     ] as const) {

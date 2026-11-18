@@ -1469,6 +1469,8 @@ export const mediaAsset = pgTable(
     payload: jsonb("payload"),
     /** Ruta relativa dentro de MEDIA_DIR; NULL si aún no descargado o no aplica. */
     storagePath: text("storage_path"),
+    /** 048: el adjunto saliente ES un medio de la biblioteca (sin copia propia): el binario se sirve de allí. */
+    libraryItemId: text("library_item_id"),
     fetchStatus: text("fetch_status", {
       enum: ["available", "pending", "failed"],
     })
@@ -1499,7 +1501,7 @@ export const mediaLibraryItem = pgTable(
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    kind: text("kind", { enum: ["image", "video"] }).notNull(),
+    kind: text("kind", { enum: ["image", "video", "document"] }).notNull(),
     mimeType: text("mime_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
     source: text("source", { enum: ["upload", "url"] }).notNull(),
@@ -1507,11 +1509,45 @@ export const mediaLibraryItem = pgTable(
     sourceUrl: text("source_url"),
     /** Quién lo subió; se conserva el nombre aunque el usuario se borre. */
     createdBy: text("created_by"),
+    /** 048: dónde vive el binario. `local` = MEDIA_DIR (siempre fue así); `r2` = Cloudflare R2 (conector opcional). */
+    storage: text("storage", { enum: ["local", "r2"] }).notNull().default("local"),
+    /** 048: la clave del objeto en R2; NULL en `local` (la ruta se deriva de la organización y el id). */
+    storageKey: text("storage_key"),
+    /** 048: `pending` = la subida directa se firmó pero aún no se confirmó (no se lista ni se envía). */
+    status: text("status", { enum: ["pending", "ready"] }).notNull().default("ready"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
     index("media_library_item_org_idx").on(t.organizationId, t.createdAt),
     check("media_library_item_size_pos", sql`${t.sizeBytes} > 0`),
+  ]
+);
+
+/**
+ * 048 — El `media_id` de WhatsApp de un medio de la biblioteca, por número. Un `media_id` solo vale para el
+ * `phone_number_id` que lo subió y Meta lo borra a los 30 días: se guarda 25 (margen de seguridad). Una fila por
+ * (medio, número); reconectar otro número deja la fila vieja sin uso (no coincide) y la poda la borra.
+ */
+export const whatsappMediaCache = pgTable(
+  "whatsapp_media_cache",
+  {
+    id: text("id").primaryKey(), // prefix: 'wmc'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    mediaItemId: text("media_item_id")
+      .notNull()
+      .references(() => mediaLibraryItem.id, { onDelete: "cascade" }),
+    phoneNumberId: text("phone_number_id").notNull(),
+    waMediaId: text("wa_media_id").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
+    expiresAt: timestamp("expires_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("whatsapp_media_cache_item_phone_uq").on(t.mediaItemId, t.phoneNumberId),
+    index("whatsapp_media_cache_org_exp_idx").on(t.organizationId, t.expiresAt),
   ]
 );
 

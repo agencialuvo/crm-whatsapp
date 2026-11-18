@@ -95,8 +95,8 @@ export type LogInput = {
 
 /** El archivo de un `send_media` ya leído de la biblioteca, o por qué no se pudo. */
 export type MediaFile =
-  | { ok: true; data: Buffer; mimeType: string; fileName: string }
-  | { ok: false; reason: "not_found" | "file_missing" | "too_large" };
+  | { ok: true; mimeType: string; fileName: string; bytes: number }
+  | { ok: false; reason: "not_found" | "file_missing" | "too_large" | "unsupported" };
 
 export type Deps = {
   now(): Date;
@@ -118,10 +118,11 @@ export type Deps = {
   sendMedia(input: {
     organizationId: string;
     conversationId: string;
-    file: { data: Buffer; mimeType: string; fileName: string };
+    /** 048: el id del medio de la biblioteca; el envío resuelve su `media_id` de WhatsApp (caché por número). */
+    mediaId: string;
     caption?: string;
   }): Promise<{ messageId: string }>;
-  /** El archivo de un medio de la biblioteca. */
+  /** Los metadatos de un medio de la biblioteca (no sus bytes). */
   loadMedia(organizationId: string, mediaId: string): Promise<MediaFile>;
   /** Cumplimiento (037): ¿el contacto pidió no recibir mensajes automáticos? */
   isOptedOut(organizationId: string, contactId: string): Promise<boolean>;
@@ -482,7 +483,14 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       const mediaId = (cfgResult.data as { mediaId: string }).mediaId;
       const loaded = await deps.loadMedia(row.organizationId, mediaId);
       if (!loaded.ok) {
-        const error = loaded.reason === "not_found" ? "media_not_found" : loaded.reason === "too_large" ? "media_too_large" : "media_file_missing";
+        const error =
+          loaded.reason === "not_found"
+            ? "media_not_found"
+            : loaded.reason === "too_large"
+              ? "media_too_large"
+              : loaded.reason === "unsupported"
+                ? "media_unsupported_format"
+                : "media_file_missing";
         return await fail(error, { mediaId });
       }
       mediaFile = loaded;
@@ -554,13 +562,13 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         conversationId: target.conversationId,
         mediaId: mc.mediaId,
         mimeType: mediaFile.mimeType,
-        bytes: mediaFile.data.byteLength,
+        bytes: mediaFile.bytes,
         caption: caption ?? null,
       };
       sent = await deps.sendMedia({
         organizationId: row.organizationId,
         conversationId: target.conversationId,
-        file: { data: mediaFile.data, mimeType: mediaFile.mimeType, fileName: mediaFile.fileName },
+        mediaId: mc.mediaId,
         ...(caption ? { caption } : {}),
       });
     } else if (decision.kind === "text") {

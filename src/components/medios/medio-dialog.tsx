@@ -101,16 +101,29 @@ export function MedioDialog({
           {medio.tipo === "video" ? (
             <video
               key={medio.id}
-              src={medio.ruta}
+              src={medio.urlFirmada ?? medio.ruta}
               controls
               playsInline
               className="max-h-[45vh] max-w-full rounded bg-black"
             />
+          ) : medio.tipo === "document" ? (
+            <a
+              key={medio.id}
+              href={medio.ruta}
+              target="_blank"
+              rel="noreferrer"
+              className="flex h-40 w-full max-w-sm flex-col items-center justify-center gap-2 rounded border bg-subtle text-sm font-semibold underline"
+            >
+              <span className="text-3xl" aria-hidden>
+                PDF
+              </span>
+              Abrir «{medio.nombre}»
+            </a>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={medio.id}
-              src={medio.ruta}
+              src={medio.urlFirmada ?? medio.ruta}
               alt={medio.nombre}
               className="max-h-[45vh] max-w-full rounded object-contain"
             />

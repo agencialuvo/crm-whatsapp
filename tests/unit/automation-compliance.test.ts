@@ -269,7 +269,7 @@ function setup(over: {
     sendText: vi.fn(async () => ({ messageId: "msg_1" })),
     sendTemplate: vi.fn(async () => ({ messageId: "msg_2" })),
     sendMedia: vi.fn(async (_input: Parameters<Deps["sendMedia"]>[0]) => ({ messageId: "msg_media" })),
-    loadMedia: vi.fn(async (): Promise<MediaFile> => over.media ?? { ok: true, data: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "promo.png" }),
+    loadMedia: vi.fn(async (): Promise<MediaFile> => over.media ?? { ok: true, bytes: 9, mimeType: "image/png", fileName: "promo.png" }),
     isOptedOut: vi.fn(async () => over.optedOut ?? false),
     recentAutomaticSends: vi.fn(async () => over.sent ?? []),
     defer: vi.fn(async () => undefined),
@@ -394,7 +394,7 @@ describe("motor — send_media", () => {
     expect(t.deps.sendMedia).toHaveBeenCalledWith({
       organizationId: "org_1",
       conversationId: "cv_1",
-      file: { data: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "promo.png" },
+      mediaId: "med_1",
       caption: "Hola Ana, mira esto",
     });
     expect(t.deps.sendText).not.toHaveBeenCalled();

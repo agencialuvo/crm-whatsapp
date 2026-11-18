@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, Copy, ImageIcon, Loader2, Play, Search, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, FileText, ImageIcon, Loader2, Play, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,7 @@ import {
 } from "@/lib/medios";
 import { cn } from "@/lib/utils";
 
-type Filtro = "todos" | "image" | "video";
+type Filtro = "todos" | "image" | "video" | "document";
 
 /** Un archivo en camino: subiéndose, o rechazado (antes o después de enviarlo). */
 type Envio = {
@@ -222,6 +222,7 @@ export function MediosClient() {
                 ["todos", "Todos"],
                 ["image", "Imágenes"],
                 ["video", "Videos"],
+                ["document", "PDF"],
               ] as const
             ).map(([valor, etiqueta]) => (
               <button
@@ -409,7 +410,7 @@ export function MediosClient() {
                     <>
                       {/* #t=0.1: pinta un fotograma como miniatura sin reproducir. */}
                       <video
-                        src={`${m.ruta}#t=0.1`}
+                        src={`${m.urlFirmada ?? m.ruta}#t=0.1`}
                         preload="metadata"
                         muted
                         playsInline
@@ -422,9 +423,18 @@ export function MediosClient() {
                         </span>
                       </span>
                     </>
+                  ) : m.tipo === "document" ? (
+                    <span className="flex h-full w-full items-center justify-center text-text-3">
+                      <FileText className="h-12 w-12" aria-hidden />
+                    </span>
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={m.ruta} alt="" loading="lazy" className="h-full w-full object-cover" />
+                    <img src={m.urlFirmada ?? m.ruta} alt="" loading="lazy" className="h-full w-full object-cover" />
+                  )}
+                  {m.noEnviable && (
+                    <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+                      No se envía por WhatsApp
+                    </span>
                   )}
                 </span>
                 <span className="block px-2.5 py-2">

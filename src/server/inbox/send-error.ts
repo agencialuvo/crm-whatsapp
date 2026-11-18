@@ -14,6 +14,8 @@ export class SendError extends Error {
     | "upload_failed";
   /** 008/041: la fila del mensaje (`failed`) cuando el fallo ocurrió TRAS el intento de envío. */
   messageId?: string;
+  /** 048: el código y el detalle que Meta devolvió (solo en `meta_error`), para decidir si un media_id venció. */
+  metaError?: { code: number | null; details: unknown };
 
   constructor(code: SendError["code"], message: string) {
     super(message);

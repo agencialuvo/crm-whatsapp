@@ -1,8 +1,8 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Versión: 1.4.0 → 1.5.0 (ver «Enmienda 1.5.0» más abajo)
-Versión anterior del informe: 1.3.0 → 1.4.0
+Versión: 1.5.0 → 1.6.0 (ver «Enmienda 1.6.0» más abajo)
+Versión anterior del informe: 1.4.0 → 1.5.0
 
 Cambios:
   - Principio II "Soberanía / Self-Hosted" → EXPANDIDO: la lista cerrada de
@@ -18,6 +18,15 @@ Cambios:
   - "Restricciones de Plataforma y Seguridad": sin cambio — su regla de
     aislamiento tras adaptadores dedicados ya cubre a los conectores.
   - Governance: sin cambio.
+
+Enmienda 1.6.0 (2026-11-18, aprobada por el dueño en la spec 048): el almacenamiento de
+objetos (Cloudflare R2, API S3) deja de estar PROHIBIDO sin matices y pasa a ser un
+**conector opcional permitido** bajo las mismas cinco condiciones: bandera `R2_STORAGE`
+apagada por defecto (sin ella la subida directa responde 404), adaptador `ObjectStore`
+con contrato (`src/server/storage/`, único lugar que importa `@aws-sdk` y lee `R2_*`),
+camino sin dependencia = el disco local `MEDIA_DIR`, credenciales solo del servidor
+(las URLs firmadas que ve el cliente vencen y no contienen el secreto) y CI con un almacén
+en memoria apagado y encendido. El núcleo NO depende de R2. Bump: MINOR (1.5.0 → 1.6.0).
 
 Enmienda 1.5.0 (2026-11-17, aprobada por el dueño en la spec 046): el billing de la
 PLATAFORMA (cobro de los planes SaaS con Mercado Pago) entra SOLO como conector
@@ -116,8 +125,9 @@ dependencias externas en runtime es CERRADA:
      5. **Verificables apagados y encendidos**: la CI ejercita ambas
         configuraciones y cada conector externo tiene mock con camino infeliz.
 - **PROHIBIDO como dependencia del núcleo** (todo lo que el producto necesite
-  para operar sin banderas): almacenamiento de objetos externo (S3/R2),
-  servicios de email, billing (Stripe u otro) y cualquier servicio de terceros.
+  para operar sin banderas): servicios de email, billing (Stripe u otro) y
+  cualquier servicio de terceros. El almacenamiento de objetos (S3/R2) NO es del
+  núcleo: solo entra como conector opcional (1.6.0, spec 048).
   Un servicio de terceros solo puede entrar como conector opcional bajo las
   cinco condiciones anteriores.
 - El instalador solo necesita: un VPS con Coolify o Docker, un dominio, credenciales
@@ -344,4 +354,4 @@ práctica, convención o preferencia; ante un conflicto, gana la constitución.
 - **Propagación**: al enmendar la constitución se revisan y, si procede, se actualizan
   las plantillas dependientes (plan, spec, tasks).
 
-**Version**: 1.5.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-11-17
+**Version**: 1.6.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-11-18

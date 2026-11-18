@@ -142,3 +142,26 @@ describe("sandbox del Laboratorio en el envío de adjuntos", () => {
     expect(graphRequest).not.toHaveBeenCalled();
   });
 });
+
+/* ---------- 048: el rechazo de Meta por un media_id vencido llega con su código ---------- */
+
+describe("callGraphSend conserva el código de Meta para el reintento del media_id", () => {
+  it("un 131052 sale como meta_error CON su código y se reconoce como media vencido", async () => {
+    const { MetaApiError } = await import("@/lib/meta/client");
+    const { isStaleMediaError } = await import("@/lib/media-cache");
+    graphRequest.mockRejectedValueOnce(new MetaApiError("Media download error", { status: 400, code: 131052 }));
+    const { callGraphSend } = await import("@/server/inbox/send");
+    const err = await callGraphSend({ organizationId: "org_1", phoneNumberId: "pn_1", token: "t" } as never, {}).catch((e) => e);
+    expect(err).toMatchObject({ name: "SendError", code: "meta_error", metaError: { code: 131052 } });
+    expect(isStaleMediaError({ code: err.metaError.code, details: err.metaError.details, message: err.message })).toBe(true);
+  });
+
+  it("un rechazo cualquiera (número inválido) NO se confunde con media vencido", async () => {
+    const { MetaApiError } = await import("@/lib/meta/client");
+    const { isStaleMediaError } = await import("@/lib/media-cache");
+    graphRequest.mockRejectedValueOnce(new MetaApiError("(#131030) Recipient phone number not in allowed list", { status: 400, code: 131030 }));
+    const { callGraphSend } = await import("@/server/inbox/send");
+    const err = await callGraphSend({ organizationId: "org_1", phoneNumberId: "pn_1", token: "t" } as never, {}).catch((e) => e);
+    expect(isStaleMediaError({ code: err.metaError.code, details: err.metaError.details, message: err.message })).toBe(false);
+  });
+});

@@ -185,7 +185,7 @@ function setup(
     timezone: vi.fn(async () => "UTC"),
     contactFacts: vi.fn(async () => over.facts ?? { tagIds: [], stageId: null }),
     sendMedia: vi.fn(async () => ({ messageId: "msg_media" })),
-    loadMedia: vi.fn(async () => ({ ok: true as const, data: Buffer.from("x"), mimeType: "image/png", fileName: "a.png" })),
+    loadMedia: vi.fn(async () => ({ ok: true as const, bytes: 1, mimeType: "image/png", fileName: "a.png" })),
     isOptedOut: vi.fn(async () => false),
     recentAutomaticSends: vi.fn(async () => [] as Date[]),
     defer: vi.fn(async () => {}),

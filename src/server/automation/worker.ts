@@ -1,4 +1,4 @@
-import { sendMediaMessage, sendText } from "@/server/inbox/send";
+import { sendLibraryMedia, sendText } from "@/server/inbox/send";
 import { sendTemplate } from "@/server/whatsapp/templates";
 import { businessTimezone } from "@/server/analytics/period";
 import { processRow, type Deps, type Row } from "@/server/automation/engine";
@@ -41,7 +41,7 @@ export function defaultDeps(): Deps {
     // 044: lo que envía un flujo NO es la «primera respuesta» de un operador: no avanza el lead de etapa.
     sendText: (input) => sendText({ ...input, automatico: true }),
     sendTemplate: (input) => sendTemplate({ ...input, automatico: true }),
-    sendMedia: (input) => sendMediaMessage({ ...input, automatico: true }),
+    sendMedia: (input) => sendLibraryMedia({ ...input, automatico: true }),
     loadMedia: loadMediaFile,
     isOptedOut,
     recentAutomaticSends: queue.recentAutomaticSends,

@@ -12,7 +12,7 @@
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
-export type MedioTipo = "image" | "video";
+export type MedioTipo = "image" | "video" | "document";
 
 export type FormatoMedio = {
   /** Extensión canónica, sin punto. */
@@ -24,23 +24,29 @@ export type FormatoMedio = {
   etiqueta: string;
   /** Solo se acepta cuando quien sube lo pide (iconos), nunca en la biblioteca general. */
   soloIcono?: boolean;
+  /** 048: WhatsApp no lo admite como adjunto (se puede guardar y usar en otros sitios, pero no enviar). */
+  noWhatsapp?: boolean;
 };
 
 /** Opciones de subida: `svg` admite SVG (solo el selector de iconos lo pide). */
 export type OpcionesFormato = { svg?: boolean };
 
-/** Imágenes estándar: hasta 3 MB. Modernas (webp/avif): hasta 1,5 MB. Video mp4: hasta 5 GB. */
+/** WhatsApp Cloud API no manda un video de más de 16 MB: es el tope duro de la biblioteca (048). */
+export const MAX_VIDEO_BYTES = 16 * MB;
+
+/** Imágenes estándar: hasta 3 MB. Modernas (webp/avif): hasta 1,5 MB. Video mp4 y PDF: hasta 16 MB (048). */
 export const FORMATOS_MEDIO: readonly FormatoMedio[] = [
   { ext: "jpg", mime: "image/jpeg", tipo: "image", maxBytes: 3 * MB, etiqueta: "JPG" },
   { ext: "png", mime: "image/png", tipo: "image", maxBytes: 3 * MB, etiqueta: "PNG" },
   { ext: "webp", mime: "image/webp", tipo: "image", maxBytes: 1.5 * MB, etiqueta: "WEBP" },
-  { ext: "avif", mime: "image/avif", tipo: "image", maxBytes: 1.5 * MB, etiqueta: "AVIF" },
-  { ext: "mp4", mime: "video/mp4", tipo: "video", maxBytes: 5 * GB, etiqueta: "MP4" },
+  { ext: "avif", mime: "image/avif", tipo: "image", maxBytes: 1.5 * MB, etiqueta: "AVIF", noWhatsapp: true },
+  { ext: "mp4", mime: "video/mp4", tipo: "video", maxBytes: MAX_VIDEO_BYTES, etiqueta: "MP4" },
+  { ext: "pdf", mime: "application/pdf", tipo: "document", maxBytes: 16 * MB, etiqueta: "PDF" },
   { ext: "svg", mime: "image/svg+xml", tipo: "image", maxBytes: 256 * 1024, etiqueta: "SVG", soloIcono: true },
 ];
 
 /** Lo que hay que mandarle a `<input type="file" accept>`. */
-export const ACCEPT_MEDIOS = ".jpg,.jpeg,.png,.webp,.avif,.mp4,image/jpeg,image/png,image/webp,image/avif,video/mp4";
+export const ACCEPT_MEDIOS = ".jpg,.jpeg,.png,.webp,.avif,.mp4,.pdf,image/jpeg,image/png,image/webp,image/avif,video/mp4,application/pdf";
 
 /** Lo mismo, solo imágenes (selector de imagen de los formularios). */
 export const ACCEPT_IMAGENES = ".jpg,.jpeg,.png,.webp,.avif,image/jpeg,image/png,image/webp,image/avif";
@@ -49,7 +55,7 @@ export const ACCEPT_IMAGENES = ".jpg,.jpeg,.png,.webp,.avif,image/jpeg,image/png
 export const ACCEPT_ICONOS = `${ACCEPT_IMAGENES},.svg,image/svg+xml`;
 
 /** Tope del cuerpo de una subida: el mayor de los límites más el sobre del multipart. */
-export const MAX_SUBIDA_BYTES = 5 * GB + 64 * 1024;
+export const MAX_SUBIDA_BYTES = 16 * MB + 64 * 1024;
 
 /**
  * Tope de una subida `multipart/form-data`, que el servidor tiene que cargar
@@ -76,7 +82,7 @@ export function resumenDeLimitesIcono(): string {
 
 /** Texto de ayuda con los límites, para la zona de subida. */
 export function resumenDeLimites(): string {
-  return "JPG y PNG hasta 3 MB · WEBP y AVIF hasta 1,5 MB · MP4 hasta 5 GB";
+  return "JPG y PNG hasta 3 MB · WEBP y AVIF hasta 1,5 MB · MP4 y PDF hasta 16 MB";
 }
 
 function extensionDe(nombre: string): string {
@@ -117,7 +123,7 @@ export function validarMedio(
     return {
       ok: false,
       code: "unsupported_type",
-      message: `«${nombre}» no es un formato válido. Se aceptan JPG, PNG, WEBP, AVIF${opts.svg ? ", SVG" : ""} y MP4.`,
+      message: `«${nombre}» no es un formato válido. Se aceptan JPG, PNG, WEBP, AVIF${opts.svg ? ", SVG" : ""}, MP4 y PDF.`,
     };
   }
   if (bytes <= 0) {
@@ -158,9 +164,21 @@ export type MedioDto = {
   mime: string;
   bytes: number;
   origen: "archivo" | "url";
+  /** 048: WhatsApp no lo puede enviar (AVIF, o un video antiguo de más de 16 MB). */
+  noEnviable: boolean;
   /** La URL de origen, cuando se trajo de un enlace. */
   urlOrigen: string | null;
   /** Ruta (relativa al origen) del archivo servido: `/api/medios/<id>/archivo`. */
   ruta: string;
+  /** 048: con R2, una URL firmada de lectura (vence; estable durante la hora) para la galería. Sin R2, null. */
+  urlFirmada: string | null;
   creadoEn: string;
 };
+
+/** 048: ¿este medio se puede mandar por WhatsApp? (formato que Meta no admite o video antiguo de más de 16 MB). */
+export function esEnviablePorWhatsapp(mime: string, bytes: number): boolean {
+  const f = FORMATOS_MEDIO.find((x) => x.mime === mime);
+  if (!f || f.noWhatsapp) return false;
+  if (f.tipo === "video" && bytes > MAX_VIDEO_BYTES) return false;
+  return true;
+}

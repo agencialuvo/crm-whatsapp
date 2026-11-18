@@ -34,6 +34,7 @@ const prefixes = {
   businessProfile: "bpro",
   // Módulo Medios — la biblioteca de imágenes y videos
   mediaLibraryItem: "med",
+  whatsappMediaCache: "wmc",
   // 015 — motor de agenda
   calendarSettings: "cal",
   booking: "bk",

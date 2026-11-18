@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
@@ -46,6 +46,8 @@ import {
 } from "@/server/channels/capabilities";
 import { isChannelEnabled } from "@/server/channels/enabled";
 import { SendError } from "@/server/inbox/send-error";
+import { isStaleMediaError, StaleMediaRetry, withStaleMediaRetry } from "@/lib/media-cache";
+import { invalidateWaMediaId, MediaArchivoAusente, resolveWaMediaId } from "@/server/whatsapp/media-cache";
 import { enviarYRegistrar } from "@/server/inbox/outbox";
 import {
   saveMediaFile,
@@ -489,6 +491,106 @@ export async function sendMediaMessage(input: {
   return { messageId };
 }
 
+/**
+ * 048 — Envía un medio de la BIBLIOTECA por su `media_id` de WhatsApp, sin copiar el archivo: la fila del adjunto
+ * (`media_asset`) solo apunta al medio (`library_item_id`), así un envío repetido no deja una copia en disco por mensaje.
+ *
+ * El `media_id` sale de la caché por número (`resolveWaMediaId`): vigente → se manda `{ id }` sin tocar el archivo ni la
+ * red de subida; vencido o ausente → se sube UNA vez y se guarda 25 días. Si Meta rechaza un id que veníamos
+ * reutilizando por «media vencido o inválido», se olvida, se sube de nuevo y se reintenta UNA sola vez (nunca un bucle).
+ */
+export async function sendLibraryMedia(input: {
+  conversationId: string;
+  organizationId: string;
+  mediaId: string;
+  caption?: string;
+  automatico?: boolean;
+}): Promise<SendResult> {
+  const db = getDb();
+  const m = schema.mediaLibraryItem;
+  const [item] = await db
+    .select()
+    .from(m)
+    .where(and(eq(m.organizationId, input.organizationId), eq(m.id, input.mediaId), eq(m.status, "ready")))
+    .limit(1);
+  if (!item) throw new SendError("meta_error", "El archivo ya no está en la biblioteca de Medios");
+  // Tipo y peso contra los límites de la Cloud API (antes de tocar red).
+  const kind = validateOutgoing(item.mimeType, item.sizeBytes);
+
+  const target = await prepareSend(input.conversationId, input.organizationId);
+  const { credentials } = target;
+  const sendCaps = capabilitiesFor(target.conversation.channel);
+  if (!sendCaps.outboundMedia) {
+    throw new SendError("meta_error", `Todavía no se pueden enviar adjuntos por ${sendCaps.label}; manda el texto`);
+  }
+
+  const ext = item.mimeType.split("/")[1]?.replace("jpeg", "jpg") ?? "";
+  const fileName = ext ? `${item.name}.${ext}` : item.name;
+  const assetRows = await db
+    .insert(schema.mediaAsset)
+    .values({
+      id: newId("mediaAsset"),
+      organizationId: input.organizationId,
+      kind,
+      mimeType: item.mimeType,
+      fileName,
+      fileSize: item.sizeBytes,
+      caption: input.caption ?? null,
+      storagePath: null,
+      libraryItemId: item.id,
+      fetchStatus: "available",
+    })
+    .returning();
+  const asset = assetRows[0]!;
+
+  const { messageId } = await enviarYRegistrar({
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+    automatico: input.automatico,
+    fila: { type: kind, text: null, origin: "operator", mediaAssetId: asset.id, media: asset },
+    estadoAlAceptar: "pending",
+    enviar: async () => {
+      const mandar = async (forceRefresh: boolean) => {
+        const r = await resolveWaMediaId(item, credentials!, { forceRefresh });
+        await db.update(schema.mediaAsset).set({ waMediaId: r.waMediaId, updatedAt: new Date() }).where(eq(schema.mediaAsset.id, asset.id));
+        const mediaPayload: Record<string, unknown> = { id: r.waMediaId };
+        if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
+        if (kind === "document") mediaPayload.filename = fileName;
+        try {
+          return await callGraphSend(credentials!, {
+            messaging_product: "whatsapp",
+            ...target.destinatario,
+            type: kind,
+            [kind]: mediaPayload,
+          });
+        } catch (err) {
+          // Un id que veníamos reutilizando y Meta ya no reconoce: se invalida y el llamador reintenta una vez.
+          const rechazo = err instanceof SendError ? err.metaError : undefined;
+          if (!forceRefresh && r.reused && err instanceof SendError && err.code === "meta_error" && isStaleMediaError({ code: rechazo?.code, details: rechazo?.details, message: err.message })) {
+            await invalidateWaMediaId(item, credentials!.phoneNumberId).catch(() => {});
+            throw new StaleMediaRetry();
+          }
+          throw err;
+        }
+      };
+      try {
+        return await withStaleMediaRetry(mandar);
+      } catch (err) {
+        if (err instanceof SendError) throw err;
+        if (err instanceof MediaArchivoAusente) {
+          throw new SendError("upload_failed", "El archivo ya no está en el almacenamiento de Medios");
+        }
+        if (err instanceof MetaApiError && err.isAuthError) {
+          await markReconnectRequired(input.organizationId);
+          throw new SendError("reconnect_required", "El token de WhatsApp expiró: reconecta el número en Configuración");
+        }
+        throw new SendError("upload_failed", "No se pudo subir el adjunto a WhatsApp");
+      }
+    },
+  });
+  return { messageId };
+}
+
 export type LocationInput = {
   latitude: number;
   longitude: number;
@@ -598,7 +700,7 @@ export async function callGraphSend(
           err.ambiguous ? err.message : "Meta no está disponible ahora"
         );
       }
-      throw new SendError("meta_error", err.message);
+      throw Object.assign(new SendError("meta_error", err.message), { metaError: { code: err.code, details: err.details } });
     }
     throw err;
   }

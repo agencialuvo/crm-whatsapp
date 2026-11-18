@@ -77,6 +77,13 @@ export const envSchema = z.object({
   MP_WEBHOOK_SECRET: z.string().optional(),
   MP_API_BASE: z.string().optional(),
   PAYMENT_GRACE_DAYS: z.string().optional(),
+  // 048: almacenamiento de Medios en Cloudflare R2 (conector opcional, apagado por defecto: sin el, el disco local).
+  // Se leen SOLO en src/server/storage/config.ts; aqui se declaran para que `pnpm doctor` las vea.
+  R2_STORAGE: z.string().optional(),
+  R2_ENDPOINT: z.string().optional(),
+  R2_BUCKET_NAME: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
   // 015: bases de los conectores. Solo se sobreescriben para apuntar a los
   // mocks en el self-test; en producción se usan las reales.
   ZOOM_BASE_URL: z.string().url().default("https://api.zoom.us/v2"),

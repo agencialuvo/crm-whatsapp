@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { eq } from "drizzle-orm";
 import { apiError, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
@@ -6,6 +7,8 @@ import {
   ensureAssetAvailable,
   readMediaFile,
 } from "@/server/whatsapp/media";
+import { lecturaDe } from "@/server/medios/store";
+import { objectStore } from "@/server/storage";
 import { mediaResponseHeaders } from "@/server/whatsapp/media-headers";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +45,32 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
   if (asset.kind === "location" || asset.kind === "contacts") {
     // Sin binario: el payload viaja en el DTO del mensaje.
     return apiError(404, "no_binary", "Este adjunto no tiene archivo");
+  }
+
+  // 048: un adjunto que ES un medio de la biblioteca no tiene copia propia: se sirve desde el medio (R2 → redirección
+  // firmada de 10 min, los bytes no pasan por aquí; disco → el archivo de la biblioteca).
+  if (asset.libraryItemId) {
+    const m = schema.mediaLibraryItem;
+    const [item] = await db
+      .select()
+      .from(m)
+      .where(scoped(m.organizationId, session.organizationId, eq(m.id, asset.libraryItemId)))
+      .limit(1);
+    if (!item) return apiError(410, "gone", "Ese archivo se eliminó de la biblioteca de Medios");
+    const l = lecturaDe(item);
+    if (l.donde === "r2") {
+      const url = await objectStore()
+        ?.signRead(l.clave, { contentType: item.mimeType, ttlSeconds: 600 })
+        .catch(() => null);
+      if (!url) return apiError(503, "unavailable", "El almacenamiento no está disponible");
+      return new Response(null, { status: 302, headers: { location: url, "cache-control": "private, max-age=300" } });
+    }
+    try {
+      const data = await readFile(l.ruta);
+      return new Response(new Uint8Array(data), { headers: mediaResponseHeaders(asset, data.byteLength) });
+    } catch {
+      return apiError(410, "gone", "El archivo no está en el volumen");
+    }
   }
 
   if (asset.fetchStatus !== "available") {
