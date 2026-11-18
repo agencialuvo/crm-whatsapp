@@ -388,6 +388,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
             onBack={() => router.push("/automatizaciones")}
             onHistory={() => setTab("historial")}
             onEditFlow={() => setEditingFlow(true)}
+            onDeleteFlow={() => setRemoveFlow(true)}
             onToggleActive={(v) => void toggleActive(v)}
             toggleDisabled={toggling || block !== null}
             active={flow.active}

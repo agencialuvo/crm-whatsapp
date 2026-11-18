@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Plus, Zap } from "lucide-react";
+import { ChevronRight, Plus, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
@@ -13,6 +13,7 @@ import { useDataTable } from "@/components/ui/use-data-table";
 import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
 import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { ConfirmDialog } from "@/components/negocio/modal";
 import { activationBlock, triggerLabel, type FlowListItem, type StageOption } from "@/lib/automation-dto";
 
 /** Lista vacía estable mientras los flujos cargan. */
@@ -34,6 +35,7 @@ export function AutomationsClient() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<FlowListItem | null>(null);
   const table = useDataTable(flows ?? NONE, { view: "automatizaciones" });
   const monitor = useAutomationStats(null);
 
@@ -73,6 +75,12 @@ export function AutomationsClient() {
     } finally {
       setToggling(null);
     }
+  }
+
+  // Eliminar desde la lista: el servidor borra el flujo con sus pasos, su cola y su historial (cascada).
+  async function removeFlow(flow: FlowListItem) {
+    await apiFetch(`/api/automations/${flow.id}`, { method: "DELETE" });
+    setFlows((prev) => prev?.filter((f) => f.id !== flow.id) ?? prev);
   }
 
   const newButton = (
@@ -163,7 +171,7 @@ export function AutomationsClient() {
                     Estado
                   </th>
                   <th scope="col" className="px-4 py-2.5">
-                    <span className="sr-only">Abrir</span>
+                    <span className="sr-only">Acciones</span>
                   </th>
                 </tr>
               </thead>
@@ -208,6 +216,15 @@ export function AutomationsClient() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={`Eliminar «${f.name}»`}
+                          title="Eliminar"
+                          onClick={() => setRemoving(f)}
+                        >
+                          <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           aria-label={`Abrir «${f.name}»`}
                           onClick={() => router.push(`/automatizaciones/${f.id}`)}
                         >
@@ -226,6 +243,21 @@ export function AutomationsClient() {
             label="Paginación de las automatizaciones"
           />
         </>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title="Eliminar flujo"
+          message={
+            <>
+              ¿Eliminar <strong>{removing.name}</strong>? Se borran también sus pasos, los mensajes pendientes y su historial de
+              ejecución. Esta acción no se puede deshacer.
+            </>
+          }
+          confirmLabel="Eliminar"
+          onClose={() => setRemoving(null)}
+          onConfirm={() => removeFlow(removing)}
+        />
       )}
 
       {creating && (

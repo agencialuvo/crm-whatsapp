@@ -5,7 +5,7 @@ import "./canvas.css";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { AlertTriangle, ArrowLeft, ArrowLeftRight, History, LayoutGrid, Loader2, Pencil, Save, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowLeftRight, History, LayoutGrid, Loader2, Pencil, Save, Trash2, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -50,6 +50,7 @@ export type FlowCanvasProps = {
   onBack: () => void;
   onHistory: () => void;
   onEditFlow: () => void;
+  onDeleteFlow: () => void;
   onToggleActive: (active: boolean) => void;
   toggleDisabled?: boolean;
   active: boolean;
@@ -79,7 +80,7 @@ export function FlowCanvas(props: FlowCanvasProps) {
   );
 }
 
-function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
+function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onDeleteFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
   const g = useFlowGraph(flowId);
   const { screenToFlowPosition, getViewport, setCenter } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
@@ -268,6 +269,9 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
                 </Button>
                 <Button variant="outline" size="sm" onClick={onEditFlow} title="Nombre y ajustes del disparador">
                   <Pencil className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Editar</span><span className="sr-only sm:hidden">Editar</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={onDeleteFlow} title="Eliminar este flujo">
+                  <Trash2 className="h-4 w-4 text-danger-text" aria-hidden /> <span className="hidden sm:inline">Eliminar</span><span className="sr-only sm:hidden">Eliminar</span>
                 </Button>
                 <Button variant="outline" size="sm" onClick={g.relayout} title="Reacomoda los bloques por niveles">
                   <LayoutGrid className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Ordenar</span><span className="sr-only sm:hidden">Ordenar</span>
