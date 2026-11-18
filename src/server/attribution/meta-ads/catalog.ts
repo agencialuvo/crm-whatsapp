@@ -13,6 +13,7 @@ import {
   type AdNode,
   type SpendRow,
 } from "@/lib/meta/ads";
+import { emitDeferredAdReferrals } from "@/server/automation/ad-referral-deferred";
 import { hasMetaAdsSettings } from "@/server/attribution/meta-ads/settings";
 
 /**
@@ -142,6 +143,12 @@ export async function claimDue(organizationId: string, limit: number, now: Date)
 
 export async function markSynced(organizationId: string, nodes: AdNode[], now: Date): Promise<void> {
   if (nodes.length === 0) return;
+  await markSyncedRows(organizationId, nodes, now);
+  // 047 — Con la jerarquía ya conocida, los flujos de conjunto/campaña que esperaban a este anuncio se evalúan. Nunca lanza.
+  await emitDeferredAdReferrals(organizationId, nodes.map((n) => n.adId));
+}
+
+async function markSyncedRows(organizationId: string, nodes: AdNode[], now: Date): Promise<void> {
   await getDb().transaction(async (tx) => {
     for (const n of nodes) {
       await tx
@@ -449,6 +456,8 @@ export async function upsertAccountAds(
       .returning({ id: schema.metaAd.id });
     n += res.length;
   }
+  // 047 — Idem `markSynced`: la jerarquía que trajo el listado puede resolver anuncios que esperaban a su conjunto/campaña.
+  await emitDeferredAdReferrals(organizationId, nodes.map((x) => x.adId));
   return n;
 }
 

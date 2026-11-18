@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Input } from "@/components/ui/input";
+import { useMemo } from "react";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
-import { apiFetch } from "@/components/negocio/api";
+import { AdTriggerPicker } from "@/components/automatizaciones/ad-trigger-picker";
 import { Field } from "@/components/negocio/fields";
-import type { AdFlowListDto } from "@/lib/ad-flow";
-import { BIRTHDAY_DEFAULT_HOUR } from "@/lib/automation";
+import { BIRTHDAY_DEFAULT_HOUR, adScopeOf, parseAdReferralConfig } from "@/lib/automation";
 import {
   BIRTHDAY_OFFSETS,
   CREATABLE_TRIGGERS,
@@ -42,23 +40,8 @@ export function TriggerInspector({
   const cfg = triggerConfig ?? {};
   const stageOptions = useMemo<SearchSelectOption[]>(() => stages.map((s) => ({ value: s.id, label: s.name })), [stages]);
 
-  // Los anuncios detectados (solo dueño/admin y con la atribución encendida): si no se pueden listar, texto libre.
-  const [ads, setAds] = useState<{ sourceId: string; headline: string | null }[]>([]);
-  useEffect(() => {
-    if (triggerType !== "ad_referral") return;
-    let alive = true;
-    apiFetch<AdFlowListDto>("/api/settings/ad-flows")
-      .then((r) => alive && setAds(r.items.map((i) => ({ sourceId: i.sourceId, headline: i.headline }))))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [triggerType]);
-  const sourceId = typeof cfg.sourceId === "string" ? cfg.sourceId : "";
-  const adOptions = useMemo<SearchSelectOption[]>(() => {
-    const list = !sourceId || ads.some((a) => a.sourceId === sourceId) ? ads : [...ads, { sourceId, headline: null }];
-    return list.map((a) => ({ value: a.sourceId, label: a.headline || a.sourceId, hint: a.headline ? a.sourceId : undefined }));
-  }, [ads, sourceId]);
+  // 047 — A qué reacciona el disparador de anuncio: cualquiera, un anuncio, un conjunto o una campaña (solo IDs).
+  const adCfg = parseAdReferralConfig(triggerConfig);
 
   const hint = (CREATABLE_TRIGGERS as readonly string[]).includes(triggerType) ? TRIGGER_HINTS[triggerType as keyof typeof TRIGGER_HINTS] : null;
   const hour = typeof cfg.hour === "number" ? cfg.hour : BIRTHDAY_DEFAULT_HOUR;
@@ -116,27 +99,12 @@ export function TriggerInspector({
       )}
 
       {triggerType === "ad_referral" && (
-        <Field label="Anuncio" htmlFor="trg-ad" hint="Vacío = cualquier anuncio.">
-          {adOptions.length > 0 ? (
-            <SearchSelect
-              id="trg-ad"
-              value={sourceId}
-              onChange={(v) => onChangeConfig(v ? { sourceId: v } : null)}
-              options={adOptions}
-              emptyLabel="Cualquier anuncio"
-              searchPlaceholder="Buscar anuncio…"
-              ariaLabel="Anuncio que activa el flujo"
-            />
-          ) : (
-            <Input
-              id="trg-ad"
-              value={sourceId}
-              maxLength={200}
-              placeholder="ID del anuncio (opcional)"
-              autoComplete="off"
-              onChange={(e) => onChangeConfig(e.target.value.trim() ? { sourceId: e.target.value.trim() } : null)}
-            />
-          )}
+        <Field label="Anuncio, conjunto o campaña" htmlFor="trg-ad" hint="Sin elegir, se activa con cualquier anuncio.">
+          <AdTriggerPicker
+            id="trg-ad"
+            value={adCfg}
+            onChange={(next) => onChangeConfig(adScopeOf(next).level === "any" ? null : { ...next })}
+          />
         </Field>
       )}
     </div>

@@ -15,6 +15,10 @@ import {
   type StepPatchInput,
   type StepType,
 } from "@/lib/automation-schemas";
+import type { PickerNode } from "@/lib/ad-picker";
+import { adScopeOf, parseAdReferralConfig } from "@/lib/automation";
+import { describeAdTrigger } from "@/lib/automation-dto";
+import { resolveOption } from "@/server/automation/ad-options";
 import { AutomationError } from "@/server/automation/http";
 import { syncEdges } from "@/server/automation/graph";
 import { existingTagIds } from "@/server/tags/store";
@@ -158,11 +162,80 @@ export async function assertTemplateOwned(organizationId: string, config: Record
   if (!row) throw new AutomationError("template_not_found", 422, "La plantilla elegida no existe");
 }
 
-/** Valida los ajustes contra el tipo del flujo y, si procede, contra las etapas de la organización. */
+/**
+ * 047 — Un `adsetId` o `campaignId` debe existir en el catálogo de ESTA organización (un ID mal pegado, o de otra
+ * cuenta, daría un flujo que nunca dispara). El `sourceId` (un anuncio) sigue permisivo como siempre: un anuncio puede
+ * llegar antes de que el catálogo lo conozca. No se vuelve a exigir cuando el alcance NO cambió (`current`): editar el
+ * nombre de un flujo cuya campaña ya no está en Meta no debe fallar.
+ */
+export async function assertAdScopeOwned(
+  organizationId: string,
+  value: Record<string, unknown> | null,
+  current?: Record<string, unknown> | null
+): Promise<void> {
+  const cfg = parseAdReferralConfig(value);
+  const { level, id } = adScopeOf(cfg);
+  if (level !== "adset" && level !== "campaign") return;
+  const before = adScopeOf(parseAdReferralConfig(current ?? null));
+  if (before.level === level && before.id === id) return;
+  const m = schema.metaAd;
+  const [row] = await getDb()
+    .select({ id: m.id })
+    .from(m)
+    .where(scoped(m.organizationId, organizationId, eq(m.status, "synced"), eq(level === "adset" ? m.adsetId : m.campaignId, id!)))
+    .limit(1);
+  if (!row) {
+    throw new AutomationError(
+      "unknown_ad_scope",
+      422,
+      level === "adset"
+        ? "Ese conjunto no está en tu catálogo de anuncios. Sincroniza desde Meta y elígelo de la lista."
+        : "Esa campaña no está en tu catálogo de anuncios. Sincroniza desde Meta y elígela de la lista."
+    );
+  }
+}
+
+/**
+ * 047 — El disparador de anuncio con los nombres VIVOS del catálogo, para la lista y el detalle. Una consulta por
+ * alcance distinto (pocos); nunca lanza: si el catálogo no se puede leer, el flujo se muestra con su ID.
+ */
+export async function adTriggerSummaries(
+  organizationId: string,
+  flows: readonly { id: string; triggerType: string; triggerConfig: unknown }[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const cache = new Map<string, PickerNode | null>();
+  for (const f of flows) {
+    if (f.triggerType !== "ad_referral") continue;
+    const cfg = parseAdReferralConfig(f.triggerConfig);
+    const { level, id } = adScopeOf(cfg);
+    let node: PickerNode | null = null;
+    if (level !== "any") {
+      const key = `${level}:${id}`;
+      if (!cache.has(key)) {
+        cache.set(key, await resolveOption(organizationId, level, id!).catch(() => null));
+      }
+      node = cache.get(key) ?? null;
+    }
+    out.set(f.id, describeAdTrigger(cfg, node));
+  }
+  return out;
+}
+
+async function withSummary<T extends { id: string; triggerType: string; triggerConfig: unknown }>(
+  organizationId: string,
+  flow: T
+): Promise<T & { triggerSummary: string | null }> {
+  const summary = (await adTriggerSummaries(organizationId, [flow])).get(flow.id) ?? null;
+  return { ...flow, triggerSummary: summary };
+}
+
+/** Valida los ajustes contra el tipo del flujo y, si procede, contra las etapas y el catálogo de la organización. */
 export async function resolveTriggerConfig(
   organizationId: string,
   triggerType: string,
-  raw: unknown
+  raw: unknown,
+  current?: Record<string, unknown> | null
 ): Promise<Record<string, unknown> | null> {
   if (!(FLOW_TRIGGER_TYPES as readonly string[]).includes(triggerType)) {
     throw new AutomationError("unsupported_trigger", 422, `El disparador «${triggerType}» aún no está disponible`);
@@ -170,6 +243,7 @@ export async function resolveTriggerConfig(
   const parsed = parseTriggerConfigFor(triggerType as FlowTriggerType, raw);
   if (!parsed.ok) throw new AutomationError("invalid_trigger_config", 422, parsed.message);
   await assertStageOwned(organizationId, parsed.value);
+  if (triggerType === "ad_referral") await assertAdScopeOwned(organizationId, parsed.value, current);
   return parsed.value;
 }
 
@@ -184,6 +258,7 @@ export async function listFlows(organizationId: string) {
       triggerType: f.triggerType,
       active: f.active,
       createdAt: f.createdAt,
+      triggerConfig: f.triggerConfig,
       // Nombres calificados a mano: dentro de la subconsulta Drizzle pinta las columnas SIN tabla y
       // `flow_id = id` compararía el paso consigo mismo (siempre 0).
       stepCount: sql<number>`(select count(*)::int from "automation_step" as "s" where "s"."flow_id" = "automation_flow"."id")`,
@@ -191,7 +266,9 @@ export async function listFlows(organizationId: string) {
     .from(f)
     .where(scoped(f.organizationId, organizationId))
     .orderBy(desc(f.createdAt), asc(f.id));
-  return rows;
+  // 047: el disparador de anuncio con los nombres vivos del catálogo (la config cruda no sale en la lista).
+  const summaries = await adTriggerSummaries(organizationId, rows);
+  return rows.map(({ triggerConfig: _config, ...r }) => ({ ...r, triggerSummary: summaries.get(r.id) ?? null }));
 }
 
 export async function createFlow(organizationId: string, input: FlowCreateInput) {
@@ -208,7 +285,7 @@ export async function createFlow(organizationId: string, input: FlowCreateInput)
       active: false,
     })
     .returning();
-  return serializeFlow(row!);
+  return withSummary(organizationId, serializeFlow(row!));
 }
 
 export async function getFlow(organizationId: string, id: string) {
@@ -219,7 +296,7 @@ export async function getFlow(organizationId: string, id: string) {
     .from(s)
     .where(scoped(s.organizationId, organizationId, eq(s.flowId, id)))
     .orderBy(...stepOrder());
-  return { flow: serializeFlow(flow), steps: steps.map((st, i) => serializeStep(st, i + 1)) };
+  return { flow: await withSummary(organizationId, serializeFlow(flow)), steps: steps.map((st, i) => serializeStep(st, i + 1)) };
 }
 
 export async function updateFlow(organizationId: string, id: string, patch: FlowPatchInput) {
@@ -231,7 +308,7 @@ export async function updateFlow(organizationId: string, id: string, patch: Flow
 
   if (patch.name !== undefined) set.name = patch.name;
   if (patch.triggerConfig !== undefined) {
-    set.triggerConfig = await resolveTriggerConfig(organizationId, flow.triggerType, patch.triggerConfig);
+    set.triggerConfig = await resolveTriggerConfig(organizationId, flow.triggerType, patch.triggerConfig, flow.triggerConfig as Record<string, unknown> | null);
   }
   if (patch.active !== undefined) {
     // Encender un flujo vacío no hace nada y confunde: se pide al menos un paso.
@@ -248,7 +325,7 @@ export async function updateFlow(organizationId: string, id: string, patch: Flow
     .where(scoped(f.organizationId, organizationId, eq(f.id, id)))
     .returning();
   if (!row) throw notFound();
-  return serializeFlow(row);
+  return withSummary(organizationId, serializeFlow(row));
 }
 
 /** Borra el flujo; sus pasos, su cola y su historial se van por la cascada de la base. */

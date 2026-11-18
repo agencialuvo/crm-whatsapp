@@ -28,6 +28,8 @@ export type AutomationEvent = {
   scheduledFor?: Date;
   /** Acota qué flujos reaccionan (p. ej. `stage_changed` con su etapa). Sin él, todos los activos. */
   matches?: (flow: FlowRef) => boolean;
+  /** La llave de idempotencia de un flujo concreto (047: por alcance en los flujos de conjunto/campaña). Por defecto, `dedupeKey`. */
+  dedupeKeyFor?: (flow: FlowRef) => string;
 };
 
 /** Devuelve cuántas ejecuciones nuevas arrancó (0 si no había flujos, no aplicaba o ya estaban arrancadas). */
@@ -49,7 +51,7 @@ export async function emitAutomationEvent(
       flowId: flow.id,
       contactId: event.contactId,
       scheduledFor: event.scheduledFor ?? now(),
-      dedupeKey: event.dedupeKey,
+      dedupeKey: event.dedupeKeyFor?.(flow) ?? event.dedupeKey,
       ...(event.bookingId ? { bookingId: event.bookingId } : {}),
       ...(event.context ? { context: event.context } : {}),
     });

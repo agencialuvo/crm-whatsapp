@@ -1,0 +1,1 @@
+CREATE INDEX "meta_ad_org_adset_idx" ON "meta_ad" USING btree ("organization_id","adset_id");

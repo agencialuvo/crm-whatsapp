@@ -190,6 +190,11 @@ export function AutomationsClient() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-3">
                         <Badge variant="secondary">{triggerLabel(f.triggerType)}</Badge>
+                        {f.triggerSummary && (
+                          <p className="mt-1 max-w-[260px] whitespace-normal text-[11px] leading-snug text-text-3" data-testid="flow-trigger-summary">
+                            {f.triggerSummary}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums">{f.stepCount}</td>
                       <td className="px-4 py-3">

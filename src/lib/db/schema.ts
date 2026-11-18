@@ -2574,6 +2574,8 @@ export const metaAd = pgTable(
     uniqueIndex("meta_ad_org_ad_uq").on(t.organizationId, t.adId),
     index("meta_ad_org_status_due_idx").on(t.organizationId, t.status, t.nextAttemptAt),
     index("meta_ad_org_campaign_idx").on(t.organizationId, t.campaignId),
+    // 047 — Listar y contar los anuncios de un conjunto, y resolver un disparador por conjunto.
+    index("meta_ad_org_adset_idx").on(t.organizationId, t.adsetId),
   ]
 );
 

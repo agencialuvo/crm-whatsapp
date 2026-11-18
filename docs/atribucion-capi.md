@@ -178,6 +178,14 @@ Cosas que conviene saber: el gasto es el de la zona horaria de la cuenta publici
 día de borde puede correrse); los costos por prospecto y por cita son gasto ÷ resultados del periodo, una aproximación
 coherente con el resto de Resultados, no una atribución causal; y Instagram y Messenger siguen sin esta jerarquía.
 
+### Automatizaciones por campaña, conjunto o anuncio (047)
+
+El disparador **«Llegó de un anuncio»** de las [automatizaciones](../specs/047-automatizaciones-selector-anuncios-jerarquico/spec.md) puede apuntar a **toda una campaña**, a **un conjunto** o a **un anuncio**. El selector es un árbol Campaña ▸ Conjunto ▸ Anuncio con miniaturas y sale del catálogo de esta sección, así que **necesita la cuenta publicitaria conectada** para ofrecer campañas y conjuntos; sin ella solo se puede elegir un anuncio (los que ya trajeron gente, o un ID pegado).
+
+- El flujo guarda **solo IDs**: si renombras una campaña, un conjunto o un anuncio en Meta, el flujo sigue funcionando y la pantalla muestra el nombre nuevo en cuanto el catálogo se sincroniza (cada 12 h, o al pulsar **Actualizar desde Meta** en el propio selector).
+- **El primer mensaje de un anuncio nuevo:** su campaña y su conjunto todavía no están en el catálogo. Los flujos de campaña/conjunto se activan cuando el catálogo lo resuelve (~1–2 minutos); los flujos por anuncio y «cualquier anuncio» siguen siendo inmediatos.
+- Un contacto que pasa a otro anuncio de la misma campaña **no** arranca dos veces el flujo de esa campaña.
+
 ## Cómo saber si está funcionando
 
 Ajustes → Anuncios → **Actividad**. Ahí está lo último que se reportó, con su

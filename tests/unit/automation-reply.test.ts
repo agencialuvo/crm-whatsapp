@@ -211,7 +211,8 @@ describe("textos de las pantallas", () => {
     expect(d.detail).toContain("Confirma → continuar con el siguiente paso");
     expect(d.detail).toContain("Dice que no → omitir el siguiente paso y continuar");
     expect(describeTrigger("ad_referral", null)).toBe("Cuando alguien llega de cualquier anuncio");
-    expect(describeTrigger("ad_referral", { sourceId: "77" })).toBe("Cuando alguien llega del anuncio 77");
+    // 047: sin el catálogo (aún no sincronizado) se muestra el ID y se dice; con él, el nombre vivo.
+    expect(describeTrigger("ad_referral", { sourceId: "77" })).toBe("Cuando alguien llega del anuncio 77 (aún sin sincronizar desde Meta)");
   });
 });
 

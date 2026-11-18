@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { adReferralDedupeKey, parseAdReferralConfig } from "@/lib/automation";
+import { adReferralDedupeKey, adReferralDedupeKeyFor, matchesAdTrigger, parseAdReferralConfig, type AdHierarchy } from "@/lib/automation";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { emitAutomationEvent } from "@/server/automation/events";
@@ -57,29 +57,50 @@ export async function loadAdContext(
   return ctx;
 }
 
-/** Devuelve cuántas ejecuciones arrancó. Nunca lanza. */
+/**
+ * 047 — Lo que el catálogo `meta_ad` sabe de la jerarquía de un anuncio (conjunto y campaña). Solo cuenta si el
+ * anuncio ya se sincronizó; si no, devuelve solo el `adId` y los flujos de conjunto/campaña esperan al catálogo.
+ * Una consulta indexada por `(organization_id, ad_id)`; nunca llama a Meta.
+ */
+export async function loadAdHierarchy(organizationId: string, adId: string): Promise<AdHierarchy> {
+  const m = schema.metaAd;
+  const [row] = await getDb()
+    .select({ adsetId: m.adsetId, campaignId: m.campaignId })
+    .from(m)
+    .where(scoped(m.organizationId, organizationId, eq(m.adId, adId), eq(m.status, "synced")))
+    .limit(1);
+  return { adId, adsetId: row?.adsetId ?? null, campaignId: row?.campaignId ?? null };
+}
+
+/**
+ * Devuelve cuántas ejecuciones arrancó. Nunca lanza.
+ *
+ * Un flujo «por anuncio» (o «cualquiera») arranca al instante, como siempre. Uno «por conjunto» o «por campaña»
+ * necesita la jerarquía del anuncio: si el catálogo ya la tiene arranca ahora; si no (primer mensaje de un anuncio
+ * nuevo) NO se descarta: `emitDeferredAdReferrals` lo vuelve a evaluar cuando el worker resuelve el anuncio.
+ */
 export async function emitAdReferral(
   input: { organizationId: string; contactId: string; sourceId: string; headline?: string | null },
   store: TriggerStore = dbTriggerStore,
   enabled: () => boolean = automationsEnabled,
   loadContext: typeof loadAdContext = loadAdContext,
-  now: () => Date = () => new Date()
+  now: () => Date = () => new Date(),
+  loadHierarchy: typeof loadAdHierarchy = loadAdHierarchy
 ): Promise<number> {
   if (!enabled()) return 0;
   try {
     const context = await loadContext(input.organizationId, input.sourceId, input.headline);
+    // Si el catálogo no se puede leer, los flujos de «cualquier anuncio» y «un anuncio» arrancan igual (no dependen de él).
+    const hierarchy = await loadHierarchy(input.organizationId, input.sourceId).catch((): AdHierarchy => ({ adId: input.sourceId }));
     return await emitAutomationEvent(
       {
         organizationId: input.organizationId,
         trigger: "ad_referral",
         contactId: input.contactId,
         dedupeKey: adReferralDedupeKey(input.sourceId),
+        dedupeKeyFor: (f) => adReferralDedupeKeyFor(parseAdReferralConfig(f.triggerConfig), input.sourceId),
         context,
-        // Un flujo con anuncio solo reacciona a ese; sin él, a cualquiera.
-        matches: (f) => {
-          const only = parseAdReferralConfig(f.triggerConfig).sourceId;
-          return !only || only === input.sourceId;
-        },
+        matches: (f) => matchesAdTrigger(parseAdReferralConfig(f.triggerConfig), hierarchy) === "yes",
       },
       store,
       now

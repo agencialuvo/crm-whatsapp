@@ -64,8 +64,18 @@ export const TRIGGER_CONFIG_SCHEMAS = {
   booking_created: z.object({}).strict(),
   booking_confirmed: z.object({}).strict(),
   booking_no_show: z.object({}).strict(),
-  // Sin `sourceId`, cualquier anuncio; con él, solo ese (el `source_id` del referral de Meta).
-  ad_referral: z.object({ sourceId: z.string().trim().min(1).max(200).nullish() }).strict(),
+  // Sin nada, cualquier anuncio; con `sourceId`, solo ese (el `source_id` del referral de Meta); con `adsetId` o
+  // `campaignId` (047), todo un conjunto o una campaña. Exactamente uno: solo IDs, nunca nombres.
+  ad_referral: z
+    .object({
+      sourceId: z.string().trim().min(1).max(200).nullish(),
+      adsetId: z.string().trim().min(1).max(200).nullish(),
+      campaignId: z.string().trim().min(1).max(200).nullish(),
+    })
+    .strict()
+    .refine((v) => [v.sourceId, v.adsetId, v.campaignId].filter(Boolean).length <= 1, {
+      message: "Elige un anuncio, un conjunto o una campaña, no varios a la vez",
+    }),
 } as const satisfies Record<FlowTriggerType, z.ZodTypeAny>;
 
 /**

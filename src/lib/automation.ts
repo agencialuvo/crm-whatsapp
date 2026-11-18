@@ -531,11 +531,62 @@ export const bookingConfirmedDedupeKey = (bookingId: string, scheduledAt: Date) 
 /** Una vez por cita. */
 export const bookingNoShowDedupeKey = (bookingId: string) => `booking_no_show:${bookingId}`;
 
-/** `trigger_config` de un flujo `ad_referral`: el `source_id` al que reacciona (sin él, a cualquier anuncio). */
-export function parseAdReferralConfig(raw: unknown): { sourceId?: string } {
-  const id = (raw as { sourceId?: unknown } | null)?.sourceId;
-  return typeof id === "string" && id.trim() ? { sourceId: id.trim() } : {};
+/**
+ * `trigger_config` de un flujo `ad_referral` (047): a qué reacciona. Exactamente uno de `sourceId` (un anuncio),
+ * `adsetId` (todo un conjunto) o `campaignId` (toda una campaña); sin ninguno, a cualquier anuncio. Solo IDs de
+ * Meta, nunca nombres: un renombre en Meta no puede romper ni desactualizar un flujo. Los flujos anteriores
+ * (`{ sourceId }` o vacío) siguen valiendo tal cual.
+ */
+export type AdReferralConfig = { sourceId?: string; adsetId?: string; campaignId?: string };
+export type AdScopeLevel = "any" | "ad" | "adset" | "campaign";
+
+const idOf = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
+export function parseAdReferralConfig(raw: unknown): AdReferralConfig {
+  const c = (raw ?? {}) as Record<string, unknown>;
+  // Si por un dato viejo o hecho a mano vinieran varias claves, manda la más específica.
+  const sourceId = idOf(c.sourceId);
+  if (sourceId) return { sourceId };
+  const adsetId = idOf(c.adsetId);
+  if (adsetId) return { adsetId };
+  const campaignId = idOf(c.campaignId);
+  if (campaignId) return { campaignId };
+  return {};
+}
+
+export function adScopeOf(cfg: AdReferralConfig): { level: AdScopeLevel; id: string | null } {
+  if (cfg.sourceId) return { level: "ad", id: cfg.sourceId };
+  if (cfg.adsetId) return { level: "adset", id: cfg.adsetId };
+  if (cfg.campaignId) return { level: "campaign", id: cfg.campaignId };
+  return { level: "any", id: null };
+}
+
+/** El anuncio que llegó y lo que se sabe de su jerarquía (viene del catálogo `meta_ad`; puede faltar). */
+export type AdHierarchy = { adId: string; adsetId?: string | null; campaignId?: string | null };
+
+/**
+ * ¿Este anuncio activa el flujo? `unknown` = el flujo es de conjunto/campaña y la jerarquía del anuncio todavía no
+ * se conoce (primer mensaje de un anuncio nuevo): no se descarta, se vuelve a evaluar cuando el catálogo lo resuelve.
+ */
+export function matchesAdTrigger(cfg: AdReferralConfig, ad: AdHierarchy): "yes" | "no" | "unknown" {
+  const { level, id } = adScopeOf(cfg);
+  if (level === "any") return "yes";
+  if (level === "ad") return id === ad.adId ? "yes" : "no";
+  const known = level === "adset" ? ad.adsetId : ad.campaignId;
+  if (!known) return "unknown";
+  return known === id ? "yes" : "no";
 }
 
 /** Una vez por contacto y anuncio: el mismo anuncio no vuelve a arrancar el flujo para la misma persona. */
 export const adReferralDedupeKey = (sourceId: string) => `ad_referral:${sourceId}`;
+
+/**
+ * La llave de un flujo concreto: por anuncio (o cualquiera) es la de siempre; con alcance de conjunto o campaña es
+ * por ALCANCE, así un contacto cuya atribución pasa a otro anuncio de la misma campaña no arranca el flujo dos veces.
+ */
+export function adReferralDedupeKeyFor(cfg: AdReferralConfig, sourceId: string): string {
+  const { level, id } = adScopeOf(cfg);
+  if (level === "adset") return `ad_referral:adset:${id}`;
+  if (level === "campaign") return `ad_referral:campaign:${id}`;
+  return adReferralDedupeKey(sourceId);
+}

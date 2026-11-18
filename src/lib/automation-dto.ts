@@ -7,6 +7,8 @@ import {
   type WaitLateAction,
 } from "@/lib/automation";
 import { FLOW_TRIGGER_TYPES, type FlowTriggerType } from "@/lib/automation-schemas";
+import { nodeTitle, pathLabel, type PickerNode } from "@/lib/ad-picker";
+import { adScopeOf, parseAdReferralConfig, type AdReferralConfig } from "@/lib/automation";
 
 /**
  * Automatizaciones — tipos y textos de las pantallas (compartidos y sin React, para probarlos).
@@ -23,6 +25,8 @@ export type FlowListItem = {
   active: boolean;
   createdAt: string;
   stepCount: number;
+  /** 047 — El disparador de anuncio con los nombres VIVOS del catálogo (campaña, conjunto, anuncio); null en los demás. */
+  triggerSummary?: string | null;
 };
 
 export type FlowDto = {
@@ -33,6 +37,8 @@ export type FlowDto = {
   active: boolean;
   /** Cómo se edita: lista lineal (`simple`) o lienzo (`canvas`). Los flujos anteriores al lienzo no lo traen: `simple`. */
   editorMode?: "simple" | "canvas";
+  /** 047 — Ver `FlowListItem.triggerSummary`. */
+  triggerSummary?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -110,11 +116,27 @@ export function offsetOptionLabel(offset: number): string {
 /** Lo que ofrece la pantalla; un flujo creado por la API con otro valor lo conserva al editarse. */
 export const BIRTHDAY_OFFSETS = [0, -1, -2] as const;
 
-/** El disparador y sus reglas en una frase. `stages` resuelve el nombre de la etapa configurada. */
+/**
+ * 047 — La frase del disparador «Llegó de un anuncio» con el nombre VIVO de lo elegido (`resolved` sale del catálogo
+ * `meta_ad` en cada lectura). Sin `resolved` (aún no sincronizado, o sin catálogo) se muestra el ID y se dice.
+ */
+export function describeAdTrigger(cfg: AdReferralConfig, resolved: PickerNode | null): string {
+  const { level, id } = adScopeOf(cfg);
+  if (level === "any") return "Cuando alguien llega de cualquier anuncio";
+  const quoted = resolved ? `«${nodeTitle(resolved)}»` : `${id}`;
+  const path = resolved ? pathLabel(resolved) : "";
+  const tail = resolved ? (path ? ` (${path})` : "") : " (aún sin sincronizar desde Meta)";
+  if (level === "ad") return `Cuando alguien llega del anuncio ${quoted}${tail}`;
+  if (level === "adset") return `Cuando alguien llega de cualquier anuncio del conjunto ${quoted}${resolved && path ? ` (campaña ${path})` : tail}`;
+  return `Cuando alguien llega de cualquier anuncio de la campaña ${quoted}${tail}`;
+}
+
+/** El disparador y sus reglas en una frase. `stages` resuelve el nombre de la etapa; `adNode` el de un anuncio/conjunto/campaña. */
 export function describeTrigger(
   type: string,
   config: Record<string, unknown> | null,
-  stages: readonly StageOption[] = []
+  stages: readonly StageOption[] = [],
+  adNode: PickerNode | null = null
 ): string {
   switch (type) {
     case "birthday": {
@@ -137,9 +159,7 @@ export function describeTrigger(
     case "booking_no_show":
       return "Cuando una cita se marca como «No asistió»";
     case "ad_referral":
-      return typeof config?.sourceId === "string"
-        ? `Cuando alguien llega del anuncio ${config.sourceId}`
-        : "Cuando alguien llega de cualquier anuncio";
+      return describeAdTrigger(parseAdReferralConfig(config), adNode);
     case "manual":
       return "Se inicia a mano";
     default:

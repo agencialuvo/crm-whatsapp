@@ -46,7 +46,19 @@ export async function saveGraph(organizationId: string, flowId: string, payload:
   const stepNodes = payload.nodes.filter((n) => n.type !== TRIGGER_NODE_TYPE);
 
   // Las referencias deben ser de ESTA organización (etiqueta, etapa, plantilla): nunca se guarda una ajena.
-  const triggerConfig = await resolveTriggerConfig(organizationId, triggerType, triggerNode.config.triggerConfig ?? null);
+  // 047: el alcance de un disparador de anuncio no se vuelve a exigir en el catálogo si no cambió (guardar el lienzo de
+  // un flujo cuya campaña ya no está en Meta no debe fallar).
+  const [existing] = await getDb()
+    .select({ triggerConfig: schema.automationFlow.triggerConfig })
+    .from(schema.automationFlow)
+    .where(scoped(schema.automationFlow.organizationId, organizationId, eq(schema.automationFlow.id, flowId)))
+    .limit(1);
+  const triggerConfig = await resolveTriggerConfig(
+    organizationId,
+    triggerType,
+    triggerNode.config.triggerConfig ?? null,
+    (existing?.triggerConfig ?? null) as Record<string, unknown> | null
+  );
   for (const n of stepNodes) {
     await assertTemplateOwned(organizationId, n.config);
     await assertRefsOwned(organizationId, n.config);

@@ -286,7 +286,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
             <h3 className="break-words text-lg font-bold tracking-tight">{flow.name}</h3>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant="secondary">{triggerLabel(flow.triggerType)}</Badge>
-              <span className="text-sm text-text-2">{describeTrigger(flow.triggerType, flow.triggerConfig, stages)}</span>
+              <span className="text-sm text-text-2">{flow.triggerSummary ?? describeTrigger(flow.triggerType, flow.triggerConfig, stages)}</span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
