@@ -1,9 +1,10 @@
 /**
- * Self-test E2E de comportamiento — módulo Medios (biblioteca de imágenes y
- * videos).
+ * Self-test E2E de comportamiento — módulo Medios (biblioteca de imágenes,
+ * videos y PDF).
  *
  * Cubre, contra la app real: la subida desde el dispositivo, los límites de
- * peso y formato (JPG/PNG 3 MB, WEBP/AVIF 1,5 MB, MP4 5 GB, subido en flujo), el archivo
+ * peso y formato vigentes desde la spec 048 (JPG/PNG 3 MB, WEBP/AVIF 1,5 MB,
+ * MP4 y PDF 16 MB, el tope de WhatsApp; subido por cuerpo directo en flujo), el archivo
  * disfrazado, la inserción por URL (y el bloqueo de direcciones internas), la
  * URL pública con Range y, en el navegador, la cuadrícula, el lightbox y
  * «Copiar URL».
@@ -13,6 +14,9 @@
  * E2E_PASSWORD (por defecto e2e@vocero.test, que se registra si no existe).
  * Con WA_MOCK_ENABLED=true se prueba además la descarga real por URL contra
  * el propio servidor; sin él, se comprueba que ese destino queda bloqueado.
+ *
+ * Corre con R2 APAGADO (el camino local, el de siempre). La subida directa a R2
+ * y el CORS se prueban contra el bucket real con `pnpm r2:smoke` (scripts/r2-smoke.ts).
  */
 import { chromium } from "playwright";
 
@@ -38,6 +42,7 @@ const relleno = (n, b = 7) => Buffer.alloc(n, b);
 const jpg = (n) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), relleno(n - 4)]);
 const webp = (n) => Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), relleno(n - 12)]);
 const avif = (n) => Buffer.concat([Buffer.from([0, 0, 0, 0x1c]), Buffer.from("ftypavif"), relleno(n - 12)]);
+const pdf = (n) => Buffer.concat([Buffer.from("%PDF-1.4\n"), relleno(n - 9, 0x20)]);
 const mp4 = (n) => Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from("ftypisom"), relleno(n - 12)]);
 
 // E2E_CHANNEL=chrome usa el Chrome instalado (sin descargar el Chromium de Playwright).
@@ -89,29 +94,52 @@ ok("AVIF de 2 MB → 413", r4.status() === 413);
 const w = await subir("ligera.webp", "image/webp", webp(1.5 * MB));
 ok("WEBP de exactamente 1,5 MB → 201", w.status() === 201, `status ${w.status()}`);
 if (w.ok()) creados.push((await w.json()).medio.id);
-const v1 = await subir("clip.mp4", "video/mp4", mp4(20 * MB));
-ok("MP4 de 20 MB → 201", v1.status() === 201, `status ${v1.status()}`);
+const v1 = await subir("clip.mp4", "video/mp4", mp4(16 * MB));
+ok("MP4 de exactamente 16 MB → 201 (el tope de WhatsApp)", v1.status() === 201, `status ${v1.status()}`);
 const medioMp4 = v1.ok() ? (await v1.json()).medio : null;
 if (medioMp4) creados.push(medioMp4.id);
 ok("el MP4 queda como video", medioMp4?.tipo === "video");
-const v2 = await subir("enorme.mp4", "video/mp4", mp4(51 * MB));
-ok("MP4 de 51 MB por multipart → 413 (ese camino carga en memoria y topa en 50 MB)", v2.status() === 413, `status ${v2.status()}`);
+const v2 = await subir("pesado.mp4", "video/mp4", mp4(16 * MB + 1));
+ok("MP4 de 16 MB + 1 byte → 413 too_large", v2.status() === 413 && (await errorDe(v2)) === "too_large", `status ${v2.status()}`);
+const v3 = await subir("enorme.mp4", "video/mp4", mp4(51 * MB));
+ok("MP4 de 51 MB por multipart → 413 (también topa el sobre multipart de 50 MB)", v3.status() === 413, `status ${v3.status()}`);
 
-console.log("\n== Cuerpo directo en flujo (videos de hasta 5 GB) ==");
+console.log("\n== PDF (documento, hasta 16 MB) ==");
+const p1 = await subir("lista de precios ñ.pdf", "application/pdf", pdf(200 * 1024));
+ok("PDF válido → 201", p1.status() === 201, `status ${p1.status()}`);
+const medioPdf = p1.ok() ? (await p1.json()).medio : null;
+if (medioPdf) creados.push(medioPdf.id);
+ok("queda como documento application/pdf con su peso exacto", medioPdf?.tipo === "document" && medioPdf?.mime === "application/pdf" && medioPdf?.bytes === 200 * 1024, JSON.stringify(medioPdf));
+const p2 = await subir("justo.pdf", "application/pdf", pdf(16 * MB));
+ok("PDF de exactamente 16 MB → 201", p2.status() === 201, `status ${p2.status()}`);
+if (p2.ok()) creados.push((await p2.json()).medio.id);
+const p3 = await subir("pesado.pdf", "application/pdf", pdf(16 * MB + 1));
+ok("PDF de 16 MB + 1 byte → 413 too_large", p3.status() === 413 && (await errorDe(p3)) === "too_large", `status ${p3.status()}`);
+const p4 = await subir("disfraz.pdf", "application/pdf", Buffer.from("<html><script>alert(1)</script></html>".padEnd(200, " ")));
+ok("HTML con nombre .pdf → 422 (se mira el contenido: debe empezar con %PDF-)", p4.status() === 422, `status ${p4.status()}`);
+
+console.log("\n== Cuerpo directo en flujo (el que usa la pantalla; tope 16 MB) ==");
 const subirDirecto = (nombre, mimeType, buffer, query = "") =>
   req.post(`${BASE}/api/medios${query}`, {
     headers: { "Content-Type": mimeType, "X-Nombre": encodeURIComponent(nombre) },
     data: buffer,
   });
-const d1 = await subirDirecto("clip grande ñ.mp4", "video/mp4", mp4(60 * MB));
-ok("MP4 de 60 MB por cuerpo directo → 201 (supera el tope del multipart)", d1.status() === 201, `status ${d1.status()}`);
+const d1 = await subirDirecto("clip grande ñ.mp4", "video/mp4", mp4(10 * MB));
+ok("MP4 de 10 MB por cuerpo directo → 201", d1.status() === 201, `status ${d1.status()}`);
 const medioGrande = d1.ok() ? (await d1.json()).medio : null;
 if (medioGrande) creados.push(medioGrande.id);
-ok("conserva el peso exacto y el nombre con tilde", medioGrande?.bytes === 60 * MB && medioGrande?.nombre === "clip grande ñ", JSON.stringify(medioGrande));
+ok("conserva el peso exacto y el nombre con tilde", medioGrande?.bytes === 10 * MB && medioGrande?.nombre === "clip grande ñ", JSON.stringify(medioGrande));
 if (medioGrande) {
   const rango = await req.get(`${BASE}${medioGrande.ruta}`, { headers: { Range: "bytes=0-15" } });
   ok("el archivo en disco se sirve con Range (206, 16 bytes)", rango.status() === 206 && (await rango.body()).length === 16, `status ${rango.status()}`);
 }
+const d1b = await subirDirecto("pesado directo.mp4", "video/mp4", mp4(16 * MB + 1));
+ok("MP4 de 16 MB + 1 byte por cuerpo directo → 413 (antes se admitían hasta 5 GB)", d1b.status() === 413, `status ${d1b.status()}`);
+const d1c = await subirDirecto("manual.pdf", "application/pdf", pdf(1 * MB));
+ok("PDF por cuerpo directo → 201 como documento", d1c.status() === 201, `status ${d1c.status()}`);
+const medioPdf2 = d1c.ok() ? (await d1c.json()).medio : null;
+if (medioPdf2) creados.push(medioPdf2.id);
+ok("un PDF donde solo se aceptan imágenes → 422", (await subirDirecto("manual.pdf", "application/pdf", pdf(1 * MB), "?tipo=image")).status() === 422);
 const d2 = await subirDirecto("grande.jpg", "image/jpeg", jpg(3 * MB + 1));
 ok("JPG de 3 MB + 1 byte por cuerpo directo → 413", d2.status() === 413, `status ${d2.status()}`);
 const d3 = await subirDirecto("disfraz.mp4", "video/mp4", Buffer.from("<html>".padEnd(200, " ")));
@@ -168,6 +196,11 @@ if (medioMp4) {
   const rx = await fetch(`${BASE}${medioMp4.ruta}`, { headers: { range: `bytes=${medioMp4.bytes + 5}-` } });
   ok("Range fuera del archivo → 416", rx.status === 416);
 }
+if (medioPdf) {
+  const r = await fetch(`${BASE}${medioPdf.ruta}`);
+  ok("el PDF sin sesión → 200 con Content-Type application/pdf y nosniff", r.status === 200 && r.headers.get("content-type") === "application/pdf" && r.headers.get("x-content-type-options") === "nosniff", `status ${r.status} ${r.headers.get("content-type")}`);
+  ok("el peso del PDF coincide", (await r.arrayBuffer()).byteLength === medioPdf.bytes);
+}
 const inex = await fetch(`${BASE}/api/medios/med_aaaaaaaaaaaaaaaaaaaa/archivo`);
 ok("id que no existe → 404", inex.status === 404);
 const malo = await fetch(`${BASE}/api/medios/..%2F..%2Fetc/archivo`);
@@ -183,6 +216,8 @@ ok("lo subido aparece en el listado, lo más nuevo primero", todos.length >= cre
 const imgs = (await (await req.get(`${BASE}/api/medios?tipo=image`)).json()).medios ?? [];
 const vids = (await (await req.get(`${BASE}/api/medios?tipo=video`)).json()).medios ?? [];
 ok("?tipo=image solo trae imágenes y ?tipo=video solo videos", imgs.length > 0 && imgs.every((m) => m.tipo === "image") && vids.every((m) => m.tipo === "video") && vids.some((m) => m.id === medioMp4?.id));
+const docs = (await (await req.get(`${BASE}/api/medios?tipo=document`)).json()).medios ?? [];
+ok("?tipo=document solo trae PDF", docs.length > 0 && docs.every((m) => m.tipo === "document") && docs.some((m) => m.id === medioPdf?.id));
 ok("?tipo inválido → 422", (await req.get(`${BASE}/api/medios?tipo=audio`)).status() === 422);
 
 console.log("\n== Interfaz (navegador) ==");
@@ -244,15 +279,26 @@ ok("«Copiar URL» desde la tarjeta también copia", (await page.evaluate(() => 
 
 // Avisos de subida
 const grande = { name: "demasiado-pesada.jpg", mimeType: "image/jpeg", buffer: jpg(3 * MB + 1) };
-const raro = { name: "documento.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 hola") };
+const raro = { name: "notas.txt", mimeType: "text/plain", buffer: Buffer.from("hola") };
 await page.locator('input[type="file"]').setInputFiles([grande, raro]);
 const alertas = page.getByRole("alert");
 await alertas.first().waitFor();
 const textos = (await alertas.allTextContents()).join(" | ");
 ok("un archivo pesado se rechaza en pantalla, con su peso y el máximo", /demasiado-pesada\.jpg.*3,0 MB.*JPG/.test(textos) || /demasiado-pesada\.jpg.*pesa/.test(textos), textos);
-ok("un formato no válido se rechaza en pantalla", /documento\.pdf.*no es un formato válido/.test(textos), textos);
+ok("un formato no válido se rechaza en pantalla", /notas\.txt.*no es un formato válido/.test(textos), textos);
 const antes = (await (await req.get(`${BASE}/api/medios`)).json()).medios.length;
 ok("lo rechazado en pantalla ni siquiera se envía", antes === todos.length);
+
+// Un PDF es un formato válido: se sube por la pantalla y aparece como documento
+await page.getByLabel("Descartar aviso").first().click();
+await page.locator('input[type="file"]').setInputFiles({ name: "catalogo-ui.pdf", mimeType: "application/pdf", buffer: pdf(100 * 1024) });
+await page.getByRole("button", { name: /^Ver catalogo-ui/ }).waitFor({ timeout: 15000 });
+ok("subir un PDF desde la interfaz agrega su tarjeta", true);
+await page.getByRole("button", { name: "PDF", exact: true }).click();
+ok("el filtro «PDF» deja solo los documentos", (await page.getByRole("button", { name: /^Ver clip/ }).count()) === 0 && (await page.getByRole("button", { name: /^Ver catalogo-ui/ }).count()) > 0);
+await page.getByRole("button", { name: "Todos", exact: true }).click();
+const docsUi = (await (await req.get(`${BASE}/api/medios?tipo=document`)).json()).medios ?? [];
+creados.push(...docsUi.filter((m) => m.nombre === "catalogo-ui").map((m) => m.id));
 
 // Subida válida por la UI
 await page.getByLabel("Descartar aviso").first().click();

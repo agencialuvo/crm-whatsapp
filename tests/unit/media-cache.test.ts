@@ -47,8 +47,11 @@ describe("isStaleMediaError (el reintento único)", () => {
   it.each([
     [{ code: 131052 }, true],
     [{ code: 131053 }, true],
+    [{ code: 131047 }, true],
     [{ code: 100, message: "Invalid parameter: media id does not exist" }, true],
     [{ code: 190, details: { error: { error_subcode: 1357004 } } }, true],
+    [{ code: 190, details: { error: { error_subcode: 2018047 } } }, true],
+    [{ code: 190, details: { error: { error_subcode: 123 } } }, false],
     [{ code: 100, message: "Invalid parameter: to" }, false],
     [{ code: 190 }, false],
     [{ code: 131026 }, false],

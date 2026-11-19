@@ -700,6 +700,9 @@ export async function callGraphSend(
           err.ambiguous ? err.message : "Meta no está disponible ahora"
         );
       }
+      // Solo código, subcódigo, tipo y texto de Meta: nunca el token ni el destinatario.
+      const subcode = (err.details as { error?: { error_subcode?: unknown } } | null | undefined)?.error?.error_subcode;
+      console.error("[meta] rechazo", { code: err.code, subcode, type: err.type, message: err.message });
       throw Object.assign(new SendError("meta_error", err.message), { metaError: { code: err.code, details: err.details } });
     }
     throw err;
