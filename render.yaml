@@ -30,10 +30,12 @@
 services:
   - type: web
     name: vocero
-    runtime: image
-    image:
-      # Pública: sin `creds`. Es linux/amd64, lo único que corre Render.
-      url: ghcr.io/kevinrivm/vocero-crm:1.6.0
+    # Se construye desde este repo (Dockerfile): corre tu codigo, no la imagen oficial.
+    # Mismo servicio, misma base y mismo disco: solo cambia como se construye.
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeploy: true
     plan: starter
     # Misma región para el servicio y la base; no se cambia después.
     # region: oregon   # ohio · virginia · frankfurt · singapore
@@ -49,10 +51,8 @@ services:
         # La URL .onrender.com del propio servicio. Con dominio propio,
         # cámbiala en el panel: de ella sale la URL del webhook.
         # Sistema LIA: https://app.sistemalia.com (sin barra final; debe coincidir con el CORS de R2).
-        fromService:
-          type: web
-          name: vocero
-          envVarKey: RENDER_EXTERNAL_URL
+        # Se conserva el valor del panel (dominio propio); el Blueprint no lo pisa.
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: vocero-db
@@ -70,6 +70,9 @@ services:
         sync: false
       - key: META_GRAPH_API_VERSION
         value: v25.0
+      - key: NEXT_PUBLIC_NAV_V2
+        # Se lee al construir: menu completo (Bandeja, Pipeline, Agente, Resultados).
+        value: "on"
       # Opcionales, cuando los tengas (guía en .env.example):
       # - key: OPENROUTER_API_TOKEN
       #   sync: false
