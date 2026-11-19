@@ -4,7 +4,7 @@ import { r2Config, r2Enabled, r2Incompleto } from "@/server/storage/config";
 
 /** 048 — El adaptador de R2: las URLs firmadas se calculan localmente (sin red) y llevan lo que deben. */
 
-const CFG = { endpoint: "https://acc123.r2.cloudflarestorage.com", bucket: "agencia-luvo-media", accessKeyId: "AKIATEST", secretAccessKey: "secret-test-0123456789" };
+const CFG = { endpoint: "https://acc123.r2.cloudflarestorage.com", bucket: "sistema-lia-media", accessKeyId: "AKIATEST", secretAccessKey: "secret-test-0123456789" };
 const NOW = new Date("2026-11-18T12:34:56Z");
 
 describe("subida firmada", () => {
@@ -12,7 +12,7 @@ describe("subida firmada", () => {
     const r = await createR2Store(CFG).signUpload("pending/org_1/med_a", { contentType: "image/png", contentLength: 1234, now: NOW });
     const u = new URL(r.url);
     expect(u.host).toBe("acc123.r2.cloudflarestorage.com");
-    expect(u.pathname).toBe("/agencia-luvo-media/pending/org_1/med_a");
+    expect(u.pathname).toBe("/sistema-lia-media/pending/org_1/med_a");
     expect(u.searchParams.get("X-Amz-Expires")).toBe("900");
     expect(u.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
     const firmadas = (u.searchParams.get("X-Amz-SignedHeaders") ?? "").split(";");
@@ -59,7 +59,7 @@ describe("la bandera", () => {
     con({ ...todo }, () => expect(r2Enabled()).toBe(false));
   });
   it("encendido con las cuatro variables", () => {
-    con({ R2_STORAGE: "on", ...todo }, () => expect(r2Config()).toMatchObject({ bucket: "agencia-luvo-media" }));
+    con({ R2_STORAGE: "on", ...todo }, () => expect(r2Config()).toMatchObject({ bucket: "sistema-lia-media" }));
   });
   it("encendido con una variable faltante o de relleno → degrada a local y se avisa", () => {
     con({ R2_STORAGE: "on", ...todo, R2_SECRET_ACCESS_KEY: "" }, () => {

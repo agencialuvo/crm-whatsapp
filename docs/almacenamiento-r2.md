@@ -22,7 +22,11 @@ cambio, funciona siempre.
    ```json
    [
      {
-       "AllowedOrigins": ["https://TU-DOMINIO"],
+       "AllowedOrigins": [
+         "https://app.sistemalia.com",
+         "http://localhost:3000",
+         "http://localhost:3002"
+       ],
        "AllowedMethods": ["GET", "PUT", "HEAD"],
        "AllowedHeaders": ["content-type", "content-length"],
        "ExposeHeaders": ["etag"],
@@ -31,7 +35,9 @@ cambio, funciona siempre.
    ]
    ```
 
-   `TU-DOMINIO` es exactamente `APP_BASE_URL` (con `https://`, sin barra final).
+   Cada origen debe coincidir **exactamente** con el `APP_BASE_URL` desde el que se abre la app (con `https://`, sin barra final):
+   `https://app.sistemalia.com` en producción. Los dos `localhost` solo sirven para desarrollo; quítalos si no los necesitas.
+   Si usas otro dominio, cámbialo aquí.
 3. **Regla de ciclo de vida** (R2 → Settings → Object lifecycle rules, recomendado): borrar los objetos con prefijo
    `pending/` a **1 día**. Es la red de seguridad de las subidas que se firmaron y nunca se confirmaron (el CRM ya las
    barre cada hora).
@@ -40,7 +46,7 @@ cambio, funciona siempre.
    ```bash
    R2_STORAGE=on
    R2_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com   # sin el nombre del bucket
-   R2_BUCKET_NAME=agencia-luvo-media
+   R2_BUCKET_NAME=sistema-lia-media
    R2_ACCESS_KEY_ID=...
    R2_SECRET_ACCESS_KEY=...
    ```
@@ -102,7 +108,7 @@ cientos de archivos y miles de envíos al mes queda dentro de la capa gratuita.
 
 | Síntoma | Causa probable |
 |---|---|
-| «No se pudo conectar con el almacenamiento (o la configuración CORS del bucket)» al subir | Falta o está mal el CORS (el origen debe ser `APP_BASE_URL` exacto) |
+| «No se pudo conectar con el almacenamiento (o la configuración CORS del bucket)» al subir | Falta o está mal el CORS (el origen debe estar en `AllowedOrigins` y ser igual a `APP_BASE_URL`, p. ej. `https://app.sistemalia.com`, sin barra final) |
 | «La subida expiró o no se permitió» (403) | La firma venció (15 min) o el reloj del equipo está muy desfasado |
 | Se sube pero «no llegó completo o su tamaño no coincide» | El navegador cortó la subida; se borra solo, vuelve a subirlo |
 | `pnpm doctor` marca R2 en ✗ | Variables incompletas, `R2_ENDPOINT` con el nombre del bucket, o token sin permiso sobre ese bucket |

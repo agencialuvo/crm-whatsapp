@@ -39,6 +39,7 @@ services:
       - key: APP_BASE_URL
         # La URL .onrender.com del propio servicio. Con dominio propio, cámbiala
         # en el panel: el inicio de sesión solo acepta ese origen.
+        # Sistema LIA: https://app.sistemalia.com (sin barra final; debe coincidir con el CORS de R2).
         fromService:
           type: web
           name: crm-salon
