@@ -69,3 +69,50 @@ describe("la bandera", () => {
     con({ R2_STORAGE: "on", ...todo, R2_ENDPOINT: "REEMPLAZA_ENDPOINT" }, () => expect(r2Enabled()).toBe(false));
   });
 });
+
+describe("listado (Hallazgo H: reconciliación de huérfanos)", () => {
+  type Enviado = { input: Record<string, unknown> };
+  const clienteFalso = (respuestas: (Record<string, unknown> | Error)[], enviados: Enviado[] = []) => {
+    let i = 0;
+    return {
+      enviados,
+      cliente: {
+        send: async (cmd: Enviado) => {
+          enviados.push(cmd);
+          const r = respuestas[i++];
+          if (r instanceof Error) throw r;
+          return r;
+        },
+      } as never,
+    };
+  };
+
+  it("pagina con el cursor, acota MaxKeys a 1000 y devuelve clave, peso y fecha", async () => {
+    const f = new Date("2026-01-02T03:04:05Z");
+    const { cliente, enviados } = clienteFalso([
+      { Contents: [{ Key: "org/o/medios/a", Size: 10, LastModified: f }, { Key: "org/o/medios/b", Size: 20, LastModified: f }], IsTruncated: true, NextContinuationToken: "tok" },
+      { Contents: [{ Key: "org/o/medios/c", Size: 30, LastModified: f }], IsTruncated: false },
+    ]);
+    const s = createR2Store(CFG, cliente);
+    const p1 = await s.list("org/", { limit: 5000 });
+    expect(p1.objects).toEqual([
+      { key: "org/o/medios/a", size: 10, lastModified: f },
+      { key: "org/o/medios/b", size: 20, lastModified: f },
+    ]);
+    expect(p1.next).toBe("tok");
+    const p2 = await s.list("org/", { cursor: p1.next! });
+    expect(p2.objects.map((o) => o.key)).toEqual(["org/o/medios/c"]);
+    expect(p2.next).toBeNull();
+    expect(enviados[0]!.input).toMatchObject({ Bucket: "sistema-lia-media", Prefix: "org/", MaxKeys: 1000 });
+    expect(enviados[1]!.input).toMatchObject({ ContinuationToken: "tok" });
+  });
+
+  it("un bucket vacío devuelve una lista vacía, y un fallo es StorageError unavailable (sin filtrar el detalle)", async () => {
+    const vacio = clienteFalso([{ IsTruncated: false }]);
+    expect(await createR2Store(CFG, vacio.cliente).list("")).toEqual({ objects: [], next: null });
+    const roto = clienteFalso([new Error("403 AccessDenied secret-test-0123456789")]);
+    const err = await createR2Store(CFG, roto.cliente).list("").catch((e) => e);
+    expect(err).toMatchObject({ name: "StorageError", code: "unavailable" });
+    expect(String(err.message)).not.toContain("secret-test");
+  });
+});

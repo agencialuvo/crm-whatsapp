@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { mediaDirStatus } from "@/server/media-dir";
+import { diagnosticarR2 } from "@/server/storage/config";
 import { leerConfigDespacho } from "@/server/brains/config";
 import { iniciarWorker, tanda } from "@/server/dispatch/worker";
 import { cifrarSecretosEnClaro } from "@/server/zernio/secreto-guardado";
@@ -28,6 +29,17 @@ export async function checkMediaDir(): Promise<void> {
       "En Docker: monta un volumen persistente en /data (la imagen ya usa /data/media) y arranca el contenedor como root —el default—, " +
       "que el entrypoint le da el volumen al usuario de la app. Fuera de Docker: apunta MEDIA_DIR a un directorio escribible."
   );
+}
+
+/**
+ * Hallazgo D — Aviso al arranque si `R2_STORAGE=on` pero la configuración de R2 está incompleta o mal puesta. Sin esto
+ * el sistema degradaba a `MEDIA_DIR` sin decir nada y el disco de Render volvía a llenarse. Solo nombra las variables
+ * (nunca sus valores) y nunca tumba el arranque. Con R2 apagado o completo no escribe nada.
+ */
+export function checkR2Config(): void {
+  const d = diagnosticarR2();
+  if (d.estado !== "incompleto") return;
+  console.error(`[boot] AVISO R2: ${d.mensaje}. Corrige las variables y reinicia; \`pnpm doctor\` y /api/health (r2) muestran el estado.`);
 }
 
 /**

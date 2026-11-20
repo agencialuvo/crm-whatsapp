@@ -6,6 +6,7 @@ import { parseAgendaFlag } from "@/server/agenda/flag";
 import { parseAtribucionFlag } from "@/server/attribution/flag";
 import { parseChannels } from "@/server/channels/enabled";
 import { mediaDirStatus } from "@/server/media-dir";
+import { diagnosticarR2 } from "@/server/storage/config";
 
 /**
  * `GET /api/health` — lo que una plataforma, un script o un `curl` pueden
@@ -45,6 +46,15 @@ export type HealthFeatures = {
   atribucion: boolean;
 };
 
+/**
+ * Hallazgo D — el estado de la configuración de R2, sin tocar la red (el healthcheck pega cada 15 s):
+ * `off` (sin `R2_STORAGE`), `ok` (bandera y variables completas) o `incomplete` (bandera encendida pero falta o está
+ * mal alguna variable: los archivos nuevos van a disco). `missing` lista NOMBRES de variable, jamás valores.
+ */
+export type HealthR2 =
+  | { status: "off" | "ok" }
+  | { status: "incomplete"; missing: string[]; warning: string };
+
 export type HealthOk = {
   ok: true;
   version: string;
@@ -52,6 +62,8 @@ export type HealthOk = {
   commitVerified?: boolean;
   features: HealthFeatures;
   mediaWritable: boolean;
+  /** Campo nuevo y aditivo: no mueve `ok` ni el código HTTP, igual que `mediaWritable`. */
+  r2: HealthR2;
 };
 
 export type HealthDown = {
@@ -89,6 +101,12 @@ export function healthFeatures(env: FlagEnv = process.env): HealthFeatures {
   };
 }
 
+export function healthR2(env: FlagEnv = process.env): HealthR2 {
+  const d = diagnosticarR2(env);
+  if (d.estado !== "incompleto") return { status: d.estado };
+  return { status: "incomplete", missing: [...d.faltan, ...d.invalidas], warning: d.mensaje };
+}
+
 export async function checkHealth(): Promise<HealthResult> {
   try {
     await getDb().execute(sql`select 1`);
@@ -111,6 +129,7 @@ export async function checkHealth(): Promise<HealthResult> {
       ...(commit ? { commit, commitVerified: verified } : {}),
       features: healthFeatures(),
       mediaWritable: media?.writable ?? false,
+      r2: healthR2(),
     },
   };
 }

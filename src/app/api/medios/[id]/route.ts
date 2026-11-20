@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { canConfigure } from "@/lib/auth/roles";
-import { borrarMedio, MedioError, renombrarMedio } from "@/server/medios/store";
+import { AVISO_ENLACES_PEGADOS, borrarMedio, MedioError, renombrarMedio } from "@/server/medios/store";
 
 export const dynamic = "force-dynamic";
 
@@ -46,10 +46,12 @@ export const DELETE = withAuth(async (session, _req: Request, ctx: Params) => {
       puedeAdministrar: canConfigure(session.role),
       id,
     });
-    return Response.json({ ok: true });
+    // `aviso`: los enlaces «Copiar URL» pegados a mano no se pueden comprobar y se rompen al borrar.
+    return Response.json({ ok: true, aviso: AVISO_ENLACES_PEGADOS });
   } catch (err) {
     if (err instanceof MedioError) {
-      return apiError(err.code === "forbidden" ? 403 : err.code === "in_use" ? 409 : 404, err.code, err.message);
+      // 409 `in_use`: `error.usos` dice dónde se usa (tipo, id, nombre y, en fidelidad, qué parte).
+      return apiError(err.code === "forbidden" ? 403 : err.code === "in_use" ? 409 : 404, err.code, err.message, err.usos ? { usos: err.usos } : undefined);
     }
     throw err;
   }

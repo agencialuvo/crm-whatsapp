@@ -6,9 +6,11 @@ import { subscriptionInactive } from "@/server/saas/enforcement";
 export function apiError(
   status: number,
   code: string,
-  message: string
+  message: string,
+  /** Detalle estructurado opcional (p. ej. `usos` de un medio en uso). Se suma a `code` y `message`, no los reemplaza. */
+  details?: Record<string, unknown>
 ): Response {
-  return Response.json({ error: { code, message } }, { status });
+  return Response.json({ error: { code, message, ...(details ?? {}) } }, { status });
 }
 
 /**

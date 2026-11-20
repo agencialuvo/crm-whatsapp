@@ -529,13 +529,17 @@ export function MediosClient() {
           message={
             borrando.length === 1 ? (
               <>
-                Se borrará «{borrando[0]!.nombre}» de la biblioteca. Si lo usas en un servicio u
-                oferta, se quedará sin imagen. No se puede deshacer.
+                Se borrará «{borrando[0]!.nombre}» de la biblioteca. Si lo usa un servicio, una oferta, el
+                equipo, la tarjeta de fidelidad o una automatización, no se borrará y te diremos dónde. Los
+                enlaces «Copiar URL» que hayas pegado en plantillas, anuncios o tu sitio web dejarán de
+                funcionar. No se puede deshacer.
               </>
             ) : (
               <>
-                Se borrarán {borrando.length} archivos de la biblioteca. Si los usas en servicios u
-                ofertas, se quedarán sin imagen. No se puede deshacer.
+                Se borrarán {borrando.length} archivos de la biblioteca. Los que use un servicio, una oferta, el
+                equipo, la tarjeta de fidelidad o una automatización no se borrarán y te diremos dónde. Los
+                enlaces «Copiar URL» que hayas pegado en plantillas, anuncios o tu sitio web dejarán de
+                funcionar. No se puede deshacer.
               </>
             )
           }

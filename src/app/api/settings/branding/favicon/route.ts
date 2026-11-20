@@ -1,12 +1,10 @@
-import { rm } from "node:fs/promises";
 import { apiError, withAuth } from "@/lib/api";
 import {
-  FAVICON_ASSET,
   MAX_FAVICON_BYTES,
   sniffFaviconMime,
 } from "@/lib/favicon";
 import { getBranding, saveBranding } from "@/server/branding";
-import { mediaFilePath, saveMediaFile } from "@/server/whatsapp/media";
+import { guardarFavicon, quitarFavicon } from "@/server/favicon-store";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +42,7 @@ export const PUT = withAuth(async (session, req: Request) => {
     );
   }
 
-  await saveMediaFile(session.organizationId, FAVICON_ASSET, buf);
+  await guardarFavicon(session.organizationId, buf, mime);
 
   const branding = await getBranding(session.organizationId);
   // Marca de tiempo y no un contador: al quitar el icono no queda dónde
@@ -70,10 +68,8 @@ export const DELETE = withAuth(async (session) => {
   await saveBranding(session.organizationId, { ...branding, favicon: null });
   // El archivo se borra DESPUÉS de que la marca ya no lo referencia: si esto
   // falla, queda un archivo huérfano —inofensivo— en vez de una marca
-  // apuntando a algo que ya no está.
-  await rm(mediaFilePath(session.organizationId, FAVICON_ASSET), {
-    force: true,
-  }).catch(() => null);
+  // apuntando a algo que ya no está. Se quita de R2 y del disco (`quitarFavicon`).
+  await quitarFavicon(session.organizationId);
 
   return Response.json({ favicon: null });
 });

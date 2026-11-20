@@ -486,8 +486,10 @@ function MediaPickerDialog({
             title="Borrar imagen"
             message={
               <>
-                Se borrará <strong>«{borrando.nombre}»</strong> de la galería. Los servicios y ofertas
-                que la usan se quedarán sin imagen. No se puede deshacer.
+                Se borrará <strong>«{borrando.nombre}»</strong> de la galería. Si la usa un servicio, una
+                oferta, el equipo, la tarjeta de fidelidad o una automatización, no se borrará y te diremos
+                dónde. Los enlaces «Copiar URL» pegados en otros sitios dejarán de funcionar. No se puede
+                deshacer.
               </>
             }
             confirmLabel="Borrar"

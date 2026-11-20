@@ -1,6 +1,6 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -28,12 +28,34 @@ import { claveDeMedio, clavePendiente, objectStore, StorageError } from "@/serve
 export class MedioError extends Error {
   constructor(
     readonly code: "empty" | "unsupported_type" | "too_large" | "not_found" | "forbidden" | "in_use" | "unavailable",
-    message: string
+    message: string,
+    /** Solo en `in_use`: dónde se usa el medio, para que la UI y la API lo muestren con detalle. */
+    readonly usos?: UsoDeMedio[]
   ) {
     super(message);
     this.name = "MedioError";
   }
 }
+
+/**
+ * Hallazgo E — dónde se usa un medio de la biblioteca: los pasos de automatización que lo envían (dejarían de funcionar)
+ * y las referencias con clave foránea `set null` (servicio, oferta, equipo, fidelidad), que de otro modo se quedarían
+ * sin imagen en silencio.
+ */
+export type UsoDeMedio = {
+  tipo: "automatizacion" | "servicio" | "combo" | "personal" | "fidelidad";
+  id: string;
+  nombre: string;
+  /** Qué parte lo usa cuando hay varias posibilidades (fidelidad: «logo» o «icono de los sellos»). */
+  detalle?: string;
+};
+
+/**
+ * Lo que NO se puede comprobar: el enlace «Copiar URL» (`/api/medios/<id>/archivo`) que alguien pegó a mano en una
+ * plantilla, un anuncio o su sitio web no deja rastro en la base. Borrar el medio rompe esos enlaces (responden 404).
+ */
+export const AVISO_ENLACES_PEGADOS =
+  "Si pegaste el enlace de un archivo («Copiar URL») en una plantilla, un anuncio o tu sitio web, ese enlace dejará de funcionar al borrarlo: el sistema no puede comprobarlo.";
 
 type Fila = typeof schema.mediaLibraryItem.$inferSelect;
 
@@ -333,7 +355,8 @@ async function quitarBinario(f: Fila): Promise<void> {
     await rm(l.ruta, { force: true }).catch(() => {});
     return;
   }
-  await objectStore()?.delete(l.clave).catch(() => {});
+  // Un borrado fallido deja un huérfano: se avisa y lo barre la reconciliación (`reconciliar.ts`).
+  await objectStore()?.delete(l.clave).catch((e) => console.warn(`[medios] no se pudo borrar el objeto ${l.clave} (queda huérfano hasta la reconciliación):`, e instanceof Error ? e.message : e));
 }
 
 /* ---------- Subida directa a R2 (048) ---------- */
@@ -517,15 +540,11 @@ export async function borrarMedio(input: {
   if (!input.puedeAdministrar && fila.createdBy !== input.userId) {
     throw new MedioError("forbidden", "Solo quien lo subió, el dueño o un administrador puede borrarlo.");
   }
-  // 037: un flujo de automatización que lo envía dejaría de funcionar en silencio.
-  const flujos = await flujosQueUsanMedio(input.organizationId, input.id);
-  if (flujos.length > 0) {
-    throw new MedioError(
-      "in_use",
-      `«${fila.name}» lo envía ${flujos.length === 1 ? "la automatización" : "las automatizaciones"} ${flujos
-        .map((f) => `«${f.name}»`)
-        .join(", ")}. Cambia ese paso antes de borrarlo.`
-    );
+  // 037 + Hallazgo E: un paso de automatización que lo envía dejaría de funcionar, y un servicio, oferta, integrante del
+  // equipo o la tarjeta de fidelidad se quedarían sin imagen en silencio (la clave foránea los pone en null).
+  const usos = await usosDeMedio(input.organizationId, input.id);
+  if (usos.length > 0) {
+    throw new MedioError("in_use", mensajeDeUsos(fila.name, usos), usos);
   }
   await db
     .delete(schema.mediaLibraryItem)
@@ -548,6 +567,71 @@ export async function flujosQueUsanMedio(organizationId: string, id: string): Pr
     .from(s)
     .innerJoin(f, eq(f.id, s.flowId))
     .where(scoped(s.organizationId, organizationId, eq(s.stepType, "send_media"), sql`${s.config}->>'mediaId' = ${id}`));
+}
+
+/**
+ * Todos los usos activos de un medio dentro de la organización: pasos `send_media` de automatizaciones, y las imágenes de
+ * servicios, ofertas (combos), integrantes del equipo y la tarjeta de fidelidad (logo e icono de los sellos).
+ * Una consulta por origen, todas acotadas por organización.
+ */
+export async function usosDeMedio(organizationId: string, id: string): Promise<UsoDeMedio[]> {
+  const db = getDb();
+  const l = schema.loyaltySettings;
+  const [flujos, servicios, combos, personal, fidelidad] = await Promise.all([
+    flujosQueUsanMedio(organizationId, id),
+    db
+      .select({ id: schema.service.id, name: schema.service.name })
+      .from(schema.service)
+      .where(scoped(schema.service.organizationId, organizationId, eq(schema.service.imageMediaId, id))),
+    db
+      .select({ id: schema.combo.id, name: schema.combo.name })
+      .from(schema.combo)
+      .where(scoped(schema.combo.organizationId, organizationId, eq(schema.combo.imageMediaId, id))),
+    db
+      .select({ id: schema.staff.id, name: schema.staff.name })
+      .from(schema.staff)
+      .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.imageMediaId, id))),
+    db
+      .select({ id: l.id, name: l.cardTitle, logo: l.logoMediaId, sello: l.stampIconMediaId })
+      .from(l)
+      .where(scoped(l.organizationId, organizationId, or(eq(l.logoMediaId, id), eq(l.stampIconMediaId, id)))),
+  ]);
+  const usos: UsoDeMedio[] = [
+    ...flujos.map((f): UsoDeMedio => ({ tipo: "automatizacion", id: f.id, nombre: f.name })),
+    ...servicios.map((x): UsoDeMedio => ({ tipo: "servicio", id: x.id, nombre: x.name })),
+    ...combos.map((x): UsoDeMedio => ({ tipo: "combo", id: x.id, nombre: x.name })),
+    ...personal.map((x): UsoDeMedio => ({ tipo: "personal", id: x.id, nombre: x.name })),
+  ];
+  for (const f of fidelidad) {
+    if (f.logo === id) usos.push({ tipo: "fidelidad", id: f.id, nombre: f.name, detalle: "logo" });
+    if (f.sello === id) usos.push({ tipo: "fidelidad", id: f.id, nombre: f.name, detalle: "icono de los sellos" });
+  }
+  return usos;
+}
+
+const ETIQUETA_USO: Record<UsoDeMedio["tipo"], [singular: string, plural: string]> = {
+  automatizacion: ["la automatización", "las automatizaciones"],
+  servicio: ["el servicio", "los servicios"],
+  combo: ["la oferta", "las ofertas"],
+  personal: ["el integrante del equipo", "los integrantes del equipo"],
+  fidelidad: ["la tarjeta de fidelidad", "la tarjeta de fidelidad"],
+};
+
+/** El mensaje que se le enseña a quien intenta borrar: qué archivo, dónde se usa y qué hacer. */
+export function mensajeDeUsos(nombreMedio: string, usos: UsoDeMedio[]): string {
+  const orden: UsoDeMedio["tipo"][] = ["automatizacion", "servicio", "combo", "personal", "fidelidad"];
+  const partes: string[] = [];
+  for (const tipo of orden) {
+    const delTipo = usos.filter((u) => u.tipo === tipo);
+    if (delTipo.length === 0) continue;
+    const [singular, plural] = ETIQUETA_USO[tipo];
+    const nombres = delTipo.map((u) => `«${u.nombre}»${u.detalle ? ` (${u.detalle})` : ""}`).join(", ");
+    partes.push(`${delTipo.length === 1 ? singular : plural} ${nombres}`);
+  }
+  const accion = usos.some((u) => u.tipo === "automatizacion")
+    ? "Cambia o quita ese uso (en las automatizaciones, ese paso) antes de borrarlo."
+    : "Cámbialo o quítalo de ahí antes de borrarlo.";
+  return `«${nombreMedio}» está en uso en ${partes.join("; ")}. ${accion}`;
 }
 
 /** El nombre de un archivo en la biblioteca: sin saltos ni caracteres de control, de 1 a 120. */
@@ -611,17 +695,17 @@ export async function borrarMedios(input: {
   userId: string;
   puedeAdministrar: boolean;
   ids: string[];
-}): Promise<{ borrados: string[]; omitidos: { id: string; motivo: string }[] }> {
+}): Promise<{ borrados: string[]; omitidos: { id: string; motivo: string; usos?: UsoDeMedio[] }[]; aviso: string }> {
   const borrados: string[] = [];
-  const omitidos: { id: string; motivo: string }[] = [];
+  const omitidos: { id: string; motivo: string; usos?: UsoDeMedio[] }[] = [];
   for (const id of new Set(input.ids)) {
     try {
       await borrarMedio({ ...input, id });
       borrados.push(id);
     } catch (err) {
-      if (err instanceof MedioError) omitidos.push({ id, motivo: err.message });
+      if (err instanceof MedioError) omitidos.push({ id, motivo: err.message, ...(err.usos ? { usos: err.usos } : {}) });
       else throw err;
     }
   }
-  return { borrados, omitidos };
+  return { borrados, omitidos, aviso: AVISO_ENLACES_PEGADOS };
 }

@@ -46,6 +46,7 @@ import {
 } from "@/server/channels/capabilities";
 import { isChannelEnabled } from "@/server/channels/enabled";
 import { SendError } from "@/server/inbox/send-error";
+import { BYTES_CABECERA_ADJUNTO, validarAdjuntoManual } from "@/server/inbox/adjunto-manual";
 import { isStaleMediaError, StaleMediaRetry, withStaleMediaRetry } from "@/lib/media-cache";
 import { invalidateWaMediaId, MediaArchivoAusente, resolveWaMediaId } from "@/server/whatsapp/media-cache";
 import { enviarYRegistrar } from "@/server/inbox/outbox";
@@ -408,7 +409,7 @@ export async function sendMediaMessage(input: {
   automatico?: boolean;
 }): Promise<SendResult> {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
-  const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
+  validateOutgoing(input.file.mimeType, input.file.data.byteLength);
 
   const target = await prepareSend(input.conversationId, input.organizationId);
   const { credentials } = target;
@@ -420,12 +421,23 @@ export async function sendMediaMessage(input: {
     );
   }
 
+  // Hallazgo A: el tipo se decide por los bytes (no por el MIME del cliente) y el documento topa en 16 MB. La ruta ya lo
+  // comprobó antes de cargar el archivo; aquí se repite con la cabecera porque esta función es la última frontera.
+  const verificado = validarAdjuntoManual({
+    mimeType: input.file.mimeType,
+    size: input.file.data.byteLength,
+    head: input.file.data.subarray(0, BYTES_CABECERA_ADJUNTO),
+  });
+  const kind = verificado.kind;
+  const file = { ...input.file, mimeType: verificado.mimeType };
+
   const db = getDb();
   const assetId = newId("mediaAsset");
   const storagePath = await saveMediaFile(
     input.organizationId,
     assetId,
-    input.file.data
+    file.data,
+    file.mimeType
   );
   const assetRows = await db
     .insert(schema.mediaAsset)
@@ -433,9 +445,9 @@ export async function sendMediaMessage(input: {
       id: assetId,
       organizationId: input.organizationId,
       kind,
-      mimeType: input.file.mimeType,
-      fileName: input.file.fileName ?? null,
-      fileSize: input.file.data.byteLength,
+      mimeType: file.mimeType,
+      fileName: file.fileName ?? null,
+      fileSize: file.data.byteLength,
       caption: input.caption ?? null,
       storagePath,
       fetchStatus: "available",
@@ -457,7 +469,7 @@ export async function sendMediaMessage(input: {
     estadoAlAceptar: "pending",
     enviar: async () => {
       try {
-        const waMediaId = await uploadGraphMedia(credentials!, input.file);
+        const waMediaId = await uploadGraphMedia(credentials!, file);
         await db
           .update(schema.mediaAsset)
           .set({ waMediaId, updatedAt: new Date() })
@@ -465,8 +477,8 @@ export async function sendMediaMessage(input: {
 
         const mediaPayload: Record<string, unknown> = { id: waMediaId };
         if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
-        if (kind === "document" && input.file.fileName) {
-          mediaPayload.filename = input.file.fileName;
+        if (kind === "document" && file.fileName) {
+          mediaPayload.filename = file.fileName;
         }
         return await callGraphSend(credentials!, {
           messaging_product: "whatsapp",
@@ -550,8 +562,8 @@ export async function sendLibraryMedia(input: {
     fila: { type: kind, text: null, origin: "operator", mediaAssetId: asset.id, media: asset },
     estadoAlAceptar: "pending",
     enviar: async () => {
-      const mandar = async (forceRefresh: boolean) => {
-        const r = await resolveWaMediaId(item, credentials!, { forceRefresh });
+      const mandar = async (forceRefresh: boolean, rejectedWaMediaId?: string) => {
+        const r = await resolveWaMediaId(item, credentials!, { forceRefresh, rejectedWaMediaId });
         await db.update(schema.mediaAsset).set({ waMediaId: r.waMediaId, updatedAt: new Date() }).where(eq(schema.mediaAsset.id, asset.id));
         const mediaPayload: Record<string, unknown> = { id: r.waMediaId };
         if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
@@ -567,8 +579,9 @@ export async function sendLibraryMedia(input: {
           // Un id que veníamos reutilizando y Meta ya no reconoce: se invalida y el llamador reintenta una vez.
           const rechazo = err instanceof SendError ? err.metaError : undefined;
           if (!forceRefresh && r.reused && err instanceof SendError && err.code === "meta_error" && isStaleMediaError({ code: rechazo?.code, details: rechazo?.details, message: err.message })) {
-            await invalidateWaMediaId(item, credentials!.phoneNumberId).catch(() => {});
-            throw new StaleMediaRetry();
+            // Solo se olvida ESE id: si otro envío ya renovó el de este medio, el nuevo se conserva.
+            await invalidateWaMediaId(item, credentials!.phoneNumberId, r.waMediaId).catch(() => {});
+            throw new StaleMediaRetry(r.waMediaId);
           }
           throw err;
         }

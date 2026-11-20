@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CACHE_TTL_DAYS, cacheExpiry, decideMediaSource, isStaleMediaError, StaleMediaRetry, withStaleMediaRetry, type CachedMedia } from "@/lib/media-cache";
+import { CACHE_TTL_DAYS, cacheExpiry, decideMediaSource, esLease, isStaleMediaError, LEASE_MS, leaseId, STALE_MEDIA_RULES, StaleMediaRetry, withStaleMediaRetry, type CachedMedia } from "@/lib/media-cache";
 import { esEnviablePorWhatsapp, MAX_VIDEO_BYTES } from "@/lib/medios";
 import { claveDeMedio, clavePendiente } from "@/server/storage/keys";
 import { detectarFormato, revisarCodecsMp4 } from "@/server/medios/sniff";
@@ -47,7 +47,15 @@ describe("isStaleMediaError (el reintento único)", () => {
   it.each([
     [{ code: 131052 }, true],
     [{ code: 131053 }, true],
-    [{ code: 131047 }, true],
+    // 131047 = ventana de 24 h cerrada: NO es un media vencido (invalidar la caché y re-subir fallaría igual).
+    [{ code: 131047 }, false],
+    [{ code: 131047, message: "Re-engagement message: media id" }, false],
+    [{ code: 131009, message: "Parameter value is not valid: media id not found" }, true],
+    [{ code: 131009, details: { error: { error_data: { details: "Media ID is not valid" } } } }, true],
+    [{ code: 131009, details: { error: { error_user_msg: "El media no existe" } } }, true],
+    [{ code: 131009, message: "Parameter value is not valid" }, false],
+    [{ code: 131009, message: "Parameter value is not valid: phone number" }, false],
+    [{ code: 100, details: { error: { error_data: { details: "Media ID 123 does not exist" } } } }, true],
     [{ code: 100, message: "Invalid parameter: media id does not exist" }, true],
     [{ code: 190, details: { error: { error_subcode: 1357004 } } }, true],
     [{ code: 190, details: { error: { error_subcode: 2018047 } } }, true],
@@ -57,6 +65,37 @@ describe("isStaleMediaError (el reintento único)", () => {
     [{ code: 131026 }, false],
     [null, false],
   ])("%j → %s", (err, esperado) => expect(isStaleMediaError(err as never)).toBe(esperado));
+});
+
+describe("arrendamiento de subida en curso (Hallazgo G)", () => {
+  it("un marcador pending:<token> vigente NO se reutiliza como media_id: hay que esperar", () => {
+    expect(decideMediaSource(cache({ waMediaId: leaseId("abc"), expiresAt: new Date(NOW.getTime() + LEASE_MS) }), item, "pn_1", NOW)).toEqual({
+      action: "upload",
+      reason: "in_progress",
+    });
+  });
+  it("vencido, el marcador es una subida abandonada: se retoma", () => {
+    expect(decideMediaSource(cache({ waMediaId: leaseId("abc"), expiresAt: new Date(NOW.getTime() - 1) }), item, "pn_1", NOW)).toMatchObject({ reason: "expired" });
+  });
+  it("reconoce los marcadores y no confunde un media_id real", () => {
+    expect(esLease(leaseId("x"))).toBe(true);
+    expect(esLease("1234567890")).toBe(false);
+    expect(LEASE_MS).toBe(2 * 60 * 1000);
+  });
+});
+
+describe("STALE_MEDIA_RULES (la constante que se ajusta al probar con un número real)", () => {
+  it("131047 no está en ninguna regla", () => {
+    expect(STALE_MEDIA_RULES.codes).not.toContain(131047);
+    expect(STALE_MEDIA_RULES.generic.map((g) => g.code)).not.toContain(131047);
+    expect(STALE_MEDIA_RULES.subcodes).not.toContain(131047);
+  });
+  it("los códigos de media bastan por sí solos; los genéricos (100, 131009) necesitan que el texto hable del media", () => {
+    expect([...STALE_MEDIA_RULES.codes]).toEqual([131052, 131053]);
+    expect([...STALE_MEDIA_RULES.subcodes]).toEqual([1357004, 2018047]);
+    expect(STALE_MEDIA_RULES.generic.map((g) => g.code)).toEqual([100, 131009]);
+    for (const code of [100, 131009]) expect(isStaleMediaError({ code })).toBe(false);
+  });
 });
 
 describe("lo enviable por WhatsApp", () => {
@@ -91,6 +130,15 @@ describe("reconocimiento por bytes", () => {
 });
 
 describe("withStaleMediaRetry (a lo sumo UN reintento)", () => {
+  it("el reintento recibe el id que Meta rechazó, para no reutilizarlo", async () => {
+    const run = vi.fn(async (force: boolean) => {
+      if (!force) throw new StaleMediaRetry("OLD-ID");
+      return "ok";
+    });
+    expect(await withStaleMediaRetry(run)).toBe("ok");
+    expect(run.mock.calls).toEqual([[false], [true, "OLD-ID"]]);
+  });
+
   it("sin error corre una vez y sin forzar", async () => {
     const run = vi.fn(async () => "ok");
     expect(await withStaleMediaRetry(run)).toBe("ok");
@@ -102,7 +150,7 @@ describe("withStaleMediaRetry (a lo sumo UN reintento)", () => {
       return "reenviado";
     });
     expect(await withStaleMediaRetry(run)).toBe("reenviado");
-    expect(run.mock.calls).toEqual([[false], [true]]);
+    expect(run.mock.calls).toEqual([[false], [true, undefined]]);
   });
   it("si el reintento también falla, el error sale (dos intentos, jamás un bucle)", async () => {
     const run = vi.fn(async () => {

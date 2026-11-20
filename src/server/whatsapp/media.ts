@@ -5,6 +5,7 @@ import path from "node:path";
 import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { getEnv } from "@/lib/env";
+import { escribirFetchError, leerFetchError } from "@/lib/media-retry";
 import { graphRequest, MetaApiError } from "@/lib/meta/client";
 import {
   getCredentialsByOrg,
@@ -63,7 +64,7 @@ export function kindFromMime(mime: string): "image" | "audio" | "video" | "docum
 }
 
 export class MediaValidationError extends Error {
-  code: "too_large" | "unsupported_type";
+  code: "too_large" | "unsupported_type" | "empty";
   constructor(code: MediaValidationError["code"], message: string) {
     super(message);
     this.name = "MediaValidationError";
@@ -205,14 +206,17 @@ export async function readMediaFile(
   organizationId: string,
   assetId: string
 ): Promise<Buffer> {
-  try {
-    return await readFile(mediaFilePath(organizationId, assetId));
-  } catch (err) {
-    // No esta en el disco: puede estar en R2 (adjuntos nuevos).
-    const store = objectStore();
-    if (!store) throw err;
-    return store.readAll(claveDeMedio(organizationId, assetId), MEDIA_LIMITS.document.maxBytes);
+  // Con R2 activo manda R2: lo que se guarda ahora va allá, y una copia anterior en disco (de antes de encenderlo) sería
+  // una versión vieja. El disco queda de respaldo: archivos anteriores a R2, o R2 sin responder.
+  const store = objectStore();
+  if (store) {
+    try {
+      return await store.readAll(claveDeMedio(organizationId, assetId), MEDIA_LIMITS.document.maxBytes);
+    } catch {
+      // No está en R2 (o no contesta): se intenta el disco.
+    }
   }
+  return readFile(mediaFilePath(organizationId, assetId));
 }
 
 /**
@@ -414,9 +418,13 @@ export async function ensureAssetAvailable(
     return updated[0] ?? null;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Hallazgo J: la falla deja anotado el número de intento (para la espera creciente del reintento proactivo) y si Meta ya
+    // no tiene el archivo (`gone`: no se reintenta jamás).
+    const previo = leerFetchError(asset.fetchError);
+    const fetchError = escribirFetchError({ intentos: previo.intentos + 1, gone: err instanceof MediaFetchError && err.gone, mensaje: message });
     await db
       .update(schema.mediaAsset)
-      .set({ fetchStatus: "failed", fetchError: message, updatedAt: new Date() })
+      .set({ fetchStatus: "failed", fetchError, updatedAt: new Date() })
       .where(eq(schema.mediaAsset.id, assetId));
     console.warn(`[media] descarga del asset ${assetId} falló: ${message}`);
     return null;
@@ -439,10 +447,11 @@ export async function uploadGraphMedia(
   const form = new FormData();
   form.set("messaging_product", "whatsapp");
   form.set("type", file.mimeType);
-  const bytes = new Uint8Array(file.data);
+  // Sin `new Uint8Array(file.data)`: copiar un Buffer a otro arreglo duplicaba el archivo en memoria. El Blob ya hace su
+  // propia (única) copia; un Buffer es un Uint8Array y se admite tal cual.
   form.set(
     "file",
-    new Blob([bytes], { type: file.mimeType }),
+    new Blob([file.data as BlobPart], { type: file.mimeType }),
     file.fileName ?? "adjunto"
   );
 

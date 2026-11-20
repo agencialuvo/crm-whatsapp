@@ -7,6 +7,7 @@ import { envSchema, safeParseEnv, type Env } from "@/lib/env";
 import { leerConfigDespacho } from "@/server/brains/config";
 import { GENERATED_SECRETS, PLACEHOLDER_PREFIX } from "@/server/doctor/init-env";
 import { probeMediaDir } from "@/server/media-dir";
+import { diagnosticarR2 } from "@/server/storage/config";
 import { testConnection, type ConnectionCheck } from "@/server/whatsapp/connect";
 import {
   getCredentialsByOrg,
@@ -346,16 +347,12 @@ export async function checkR2(
   source: Record<string, string | undefined>,
   deps: { probe?: () => Promise<{ status: "off" | "incomplete" | "ok" | "fail"; bucket?: string; detail?: string }> } = {}
 ): Promise<CheckResult[]> {
-  const on = ["on", "1", "true", "si", "sí", "yes"].includes((source.R2_STORAGE ?? "").trim().toLowerCase());
-  if (!on) {
+  const d = diagnosticarR2(source);
+  if (d.estado === "off") {
     return [{ status: "skip", label: "R2_STORAGE", detail: "apagado: los archivos de Medios viven en MEDIA_DIR", fix: "para guardarlos en Cloudflare R2: R2_STORAGE=on más R2_ENDPOINT, R2_BUCKET_NAME, R2_ACCESS_KEY_ID y R2_SECRET_ACCESS_KEY (guía en docs/almacenamiento-r2.md)" }];
   }
-  const faltan = ["R2_ENDPOINT", "R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"].filter((k) => {
-    const v = source[k]?.trim();
-    return !v || v.startsWith(PLACEHOLDER_PREFIX);
-  });
-  if (faltan.length > 0) {
-    return [{ status: "fail", label: "R2", detail: `R2_STORAGE=on pero faltan: ${faltan.join(", ")} (mientras tanto los archivos nuevos van a MEDIA_DIR)`, fix: "Cloudflare → R2 → tu bucket y Manage API tokens; ponlas en .env" }];
+  if (d.estado === "incompleto") {
+    return [{ status: "fail", label: "R2", detail: d.mensaje, fix: "Cloudflare → R2 → tu bucket y Manage API tokens; ponlas en .env (R2_ENDPOINT sin el nombre del bucket)" }];
   }
   const probe = deps.probe ?? (async () => (await import("@/server/storage/health")).probeR2());
   const r = await probe();

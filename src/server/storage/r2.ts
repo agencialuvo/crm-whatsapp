@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -129,6 +130,19 @@ export function createR2Store(config: R2Config | null = r2Config(), injected?: S
         await s3.send(new DeleteObjectCommand({ Bucket, Key: key }));
       } catch {
         throw new StorageError("unavailable", "No se pudo borrar del almacenamiento");
+      }
+    },
+    async list(prefix, opts = {}) {
+      try {
+        const r = await s3.send(
+          new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken: opts.cursor, MaxKeys: Math.min(Math.max(opts.limit ?? 1000, 1), 1000) })
+        );
+        const objects = (r.Contents ?? [])
+          .filter((o) => o.Key)
+          .map((o) => ({ key: o.Key!, size: Number(o.Size ?? 0), lastModified: o.LastModified ?? new Date() }));
+        return { objects, next: r.IsTruncated ? (r.NextContinuationToken ?? null) : null };
+      } catch {
+        throw new StorageError("unavailable", "No se pudo listar el almacenamiento");
       }
     },
   };

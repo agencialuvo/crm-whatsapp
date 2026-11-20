@@ -52,8 +52,12 @@ cambio, funciona siempre.
    ```
 
 5. `pnpm doctor` → sección «Medios en Cloudflare R2»: comprueba las cuatro variables y que el bucket responda.
-   Si falta alguna con `R2_STORAGE=on`, el sistema **degrada a disco local** (los archivos nuevos van a `MEDIA_DIR`) y el
-   doctor lo marca.
+   Si falta alguna (vacía, con el valor de ejemplo `REEMPLAZA_…`, o un `R2_ENDPOINT` que no sea una URL http/https) con
+   `R2_STORAGE=on`, el sistema **degrada a disco local** (los archivos nuevos van a `MEDIA_DIR`), pero **no en silencio**:
+   el arranque escribe `[boot] AVISO R2: …` en el log con los **nombres** de las variables (nunca sus valores),
+   `GET /api/health` responde `r2: { status: "incomplete", missing: [...], warning: "..." }` (con `ok` y el código 200
+   intactos, para no reiniciar el contenedor) y el doctor lo marca. `r2.status` vale `off` (sin `R2_STORAGE`), `ok`
+   (completo) o `incomplete`. Es solo configuración: `/api/health` no consulta el bucket.
 
 ## Cómo funciona
 
@@ -76,14 +80,79 @@ solo vence la firma interna.
 con vencimiento a **25 días** (Meta borra a los 30). Un `media_id` solo vale para el número que lo subió; si se reconecta
 otro número, la fila vieja no coincide y se vuelve a subir sola. Con varios envíos a la vez del mismo medio se sube **una**
 sola vez (candado en el proceso y en Postgres). Si Meta rechaza un id que veníamos reutilizando por «media vencido o
-inválido» (códigos 131052/131053/131047, subcódigos 1357004/2018047, o un 100 que habla del media) se invalida, se sube de
-nuevo y se **reintenta una sola vez**.
+inválido» (códigos 131052/131053, subcódigos 1357004/2018047, o un 100 / 131009 cuyo texto hable del media) se invalida, se
+sube de nuevo y se **reintenta una sola vez**. **131047 no cuenta**: es «ventana de 24 h cerrada», no un media vencido. Las
+reglas están en `STALE_MEDIA_RULES` (`src/lib/media-cache.ts`) y **faltan por confirmar contra un número real**.
+
+Ante la concurrencia, la renovación es segura: si muchos envíos rechazan el mismo id vencido, el archivo se sube **una sola
+vez** (se comparte la subida en el proceso y, entre instancias, un arrendamiento en la fila de la caché) y los demás reciben
+el id nuevo. La invalidación borra la fila **solo si todavía guarda el id que falló**: un id que otro envío ya renovó se
+conserva.
+
+**Sin transacciones abiertas durante la red.** Leer el archivo de R2 y subirlo a Meta tarda segundos y **no retiene ninguna
+conexión de Postgres** (el pool es de 10). Quien va a subir deja en la fila de la caché un marcador `pending:<token>` con
+vencimiento de **2 minutos**, escrito en una transacción de milisegundos (candado de Postgres + lectura + escritura, sin
+red); sube; y reemplaza el marcador por el `media_id` real en una sola sentencia. Las demás llamadas (de este u otro
+proceso) ven el marcador, **esperan con consultas cortas** (cada 250 ms) y reutilizan el id cuando aparece. Si quien subía
+se cae, el marcador vence solo y otra llamada lo retoma; si la subida falla, el marcador se suelta enseguida. Un marcador
+nunca se usa como `media_id`.
+
+## Archivos huérfanos: reconciliación (BD ↔ R2 ↔ disco)
+
+Los borrados de binarios son «mejor esfuerzo»: si R2 o el disco fallan justo al borrar, la fila ya no existe pero el archivo se
+queda (también los restos `.part` de una escritura interrumpida, y todo lo de una organización borrada, cuyas filas se van en
+cascada pero no sus archivos). Un **huérfano** es un archivo cuyo id (el último tramo de su nombre) no existe ni en
+`media_asset` ni en `media_library_item`, o un temporal `.part` / `.dedup` abandonado. Las filas `pending` de subidas a medias y
+los adjuntos aún descargándose **sí cuentan como referencia**: nunca se confunden con huérfanos.
+
+- **Una vez al día** el mantenimiento reconcilia R2 y `MEDIA_DIR`. **Por defecto solo informa** en el log
+  (`[medios] reconciliación (solo informe): N archivo(s) huérfano(s)…`). Con `MEDIA_RECONCILE_AUTO=on` borra solo, con tope de
+  100 por corrida y únicamente lo de más de 72 h.
+- **A mano y con control:** `pnpm reconciliar-medios` (informe, no cambia nada). Para borrar de verdad:
+  `pnpm reconciliar-medios -- --aplicar --confirmo-borrar`. Opciones: `--edad-horas N` (por defecto 24), `--max-borrar N`
+  (200), `--max-escaneo N` (20000) y `--filas [N]`, que además **lista** (sin tocar nada) las filas cuyo archivo ya no está.
+- **Garantías:** dry-run por defecto; lo más reciente que la edad mínima (24 h) no se toca (por `LastModified` en R2 y `mtime`
+  en disco); la base se consulta **después** de listar y otra vez justo antes de borrar (una fila que aparezca salva su
+  archivo); tope por corrida; **nunca** toca el icono de la marca, claves que no tienen la forma `org/<org>/medios/<id>` o
+  `pending/<org>/<id>`, enlaces simbólicos ni nada fuera de `MEDIA_DIR/<org>/`; si el listado o la base fallan, aborta antes de
+  borrar; y **nunca borra filas**.
+- **Freno de «base equivocada»:** si las tablas de medios están vacías, o si de 20 o más archivos viejos revisados **ninguno** tiene
+  fila, no borra nada y lo dice (`FRENADO`): casi seguro la base no es la de ese bucket (un entorno de pruebas apuntando al bucket
+  de producción, una restauración a medias).
+- **Límites:** el listado de R2 es por páginas de 1000 y cada corrida mira hasta 20 000 objetos (la siguiente retoma donde
+  quedó); el token de R2 necesita permiso de lectura de listados (con *Object Read & Write* basta). Un huérfano de menos de la
+  edad mínima se limpia en una corrida posterior. Lo que tiene fila pero perdió su archivo **solo se informa** (`--filas`): puede
+  ser historial que alguien quiera conservar.
+
+## Adjuntos entrantes pendientes o fallidos: reintento proactivo
+
+Si al llegar el webhook R2 (o Meta) estaba caído, o la instancia se reinició a media descarga, el adjunto queda `pending` o
+`failed`. Antes solo se reintentaba al **abrir** esa conversación: si nadie la abría en ~30 días, Meta borraba el archivo y se
+perdía. Ahora, **cada 10 minutos**, un barrido vuelve a bajarlos de Meta con estos frenos:
+
+- **Vigencia:** solo adjuntos de menos de **28 días** (Meta conserva ~30).
+- **Espera creciente por adjunto:** 15 min, 30, 1 h, 2 h… con tope de 12 h entre intentos, y un máximo de 40 intentos (unos 19
+  días): una caída larga no los agota, y no es un bucle infinito. Un `pending` de menos de 10 min no se toca (aún lo baja la
+  descarga normal del webhook).
+- **Lo permanente no se reintenta:** si Meta responde que el archivo ya no existe (404/410) o pesa más del límite, queda
+  `[gone]` y no se vuelve a intentar.
+- **Tope por tanda y cortacircuitos:** a lo sumo 10 descargas por tanda (la más antigua primero, que es la más cercana a
+  caducar), y tras 3 fallas seguidas la tanda se detiene (R2 o Meta siguen caídos: no se martilla).
+- El número de intento y lo permanente se guardan en `media_asset.fetch_error` (`[intento N] …` / `[gone] …`), sin migración.
+  Solo cubre adjuntos **entrantes** (y ecos): los de la biblioteca y los salientes no se descargan de Meta.
 
 ## Lo que sigue en disco (a propósito, spec 049)
 
-Los **adjuntos entrantes** de las conversaciones, el **logo** y el icono siguen en `MEDIA_DIR`. Por eso el disco de Render
-todavía no se puede quitar. Lo que esta spec elimina es el crecimiento **por envío** y el tráfico de subida/bajada de la
-biblioteca.
+Con R2 activo, los **adjuntos** (entrantes y salientes), el **icono de la pestaña** y lo nuevo de la biblioteca (incluido el logo, que es un elemento de la biblioteca) se guardan en R2. En `MEDIA_DIR` queda **solo lo anterior a encender R2** y todo lo que se guarde mientras R2 esté apagado o incompleto (el arranque y `/api/health` avisan si está incompleto). Por eso el disco de Render todavía no se puede quitar mientras haya archivos antiguos sin migrar. Lo que esta spec elimina es el crecimiento **por envío** y el tráfico de subida/bajada de la biblioteca.
+
+### Icono de la pestaña (favicon) con R2
+
+Cada organización tiene un solo icono, con el nombre fijo `favicon`: en R2 es el objeto `org/<orgId>/medios/favicon` y en disco `MEDIA_DIR/<orgId>/favicon`.
+
+- **Subir** (con R2 activo): va a R2 con su tipo real y **se borra la copia de disco** si había una de antes de encender R2, para que nunca reaparezca una versión vieja.
+- **Servir**: se lee **primero de R2**; el disco es solo respaldo (icono anterior a R2, o R2 sin responder). Si no hay ninguno, la pestaña usa el icono generado de la marca.
+- **Quitar**: se borra de **R2 y del disco**. Cada borrado es independiente y no rompe la respuesta si falla uno (queda un aviso `[favicon] no se pudo borrar…` en el log; un huérfano es inofensivo porque la marca ya no lo referencia).
+- Con R2 apagado todo sigue como antes, solo en disco. Si apagas R2 y vuelves a encenderlo, un icono que quedó en R2 volvería a tener prioridad sobre uno subido en el intervalo: quítalo y súbelo de nuevo.
 
 ### Miniaturas de anuncios de Meta: sin copia local (`AD_CREATIVE_LOCAL_COPY`)
 
@@ -112,6 +181,14 @@ Consecuencias a conocer:
 
 - Un adjunto ya enviado desde la biblioteca **no tiene copia propia**: su vista previa en el hilo se sirve del medio. Si el
   medio se borra de la biblioteca, esa vista previa pasa a «se eliminó de la biblioteca» (el mensaje en WhatsApp no cambia).
+- **Borrar un medio en uso se bloquea.** `DELETE /api/medios/:id` y `POST /api/medios/eliminar` rechazan (409 `in_use`) el
+  borrado si el medio es la imagen de un **servicio, oferta (combo) o integrante del equipo**, el **logo o el icono de
+  sellos de la tarjeta de fidelidad**, o lo envía un paso de **automatización**. La respuesta trae `error.usos` (o `usos`
+  dentro de cada elemento de `omitidos`): `[{ tipo, id, nombre, detalle? }]`, además del `message` de siempre. Antes solo se
+  comprobaban las automatizaciones y lo demás se quedaba sin imagen en silencio.
+- **Lo que no se puede comprobar:** el enlace «Copiar URL» (`/api/medios/<id>/archivo`) que alguien pegó a mano en una
+  plantilla, un anuncio o su sitio web no deja rastro en la base. Borrar el medio rompe esos enlaces (404). Por eso un
+  borrado exitoso responde con un `aviso` que lo recuerda, y los diálogos de borrado lo advierten.
 - **Apagar `R2_STORAGE` con archivos ya en R2** los deja ilegibles desde el CRM (no hay copia local). Antes de apagarlo,
   descarga lo que necesites desde Cloudflare.
 

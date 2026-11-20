@@ -23,7 +23,7 @@ function parseMetadata(metadata: string | null): Record<string, unknown> {
 /**
  * Marca + a qué organización pertenece.
  *
- * El icono se guarda como archivo en `MEDIA_DIR/{organizationId}/favicon`, así
+ * El icono se guarda como archivo (R2 si está activo, si no `MEDIA_DIR/{organizationId}/favicon`; ver `favicon-store.ts`), así
  * que servirlo necesita el id — y la ruta que lo sirve es pública (el login
  * también tiene pestaña), donde no hay sesión de la que sacarlo.
  */
