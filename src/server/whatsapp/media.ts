@@ -342,7 +342,13 @@ export async function streamGraphMediaToR2(
   } catch (err) {
     throw new MediaFetchError(`No se pudo subir el adjunto a R2: ${err instanceof Error ? err.message : err}`);
   }
-  if (!put.ok) throw new MediaFetchError(`R2 rechazó la subida (${put.status})`);
+  if (!put.ok) {
+    // El cuerpo de error de R2 trae el motivo (<Code>SignatureDoesNotMatch</Code>, etc.); no incluye claves ni la URL firmada.
+    const cuerpo = await put.text().catch(() => "");
+    const codigo = /<Code>([\w]+)<\/Code>/.exec(cuerpo)?.[1] ?? "sin código";
+    const detalle = /<Message>([^<]{0,160})<\/Message>/.exec(cuerpo)?.[1] ?? "";
+    throw new MediaFetchError(`R2 rechazó la subida (${put.status} ${codigo}${detalle ? `: ${detalle}` : ""})`);
+  }
   const head = await store.head(clave);
   if (!head || head.size !== meta.file_size) {
     await store.delete(clave).catch(() => {});
