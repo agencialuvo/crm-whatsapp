@@ -18,12 +18,17 @@ import { StorageError, type ObjectStore } from "@/server/storage/types";
 const HORA = 3600_000;
 
 function cliente(c: R2Config): S3Client {
-  return new S3Client({
+  // R2 no soporta los checksums opcionales que el SDK agrega por defecto a las URLs firmadas (devuelven 403):
+  // solo se calculan cuando la operación los exige. Variable aparte: las versiones viejas del SDK ignoran estas claves.
+  const opciones = {
     region: "auto",
     endpoint: c.endpoint,
     forcePathStyle: true,
     credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey },
-  });
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+  };
+  return new S3Client(opciones as ConstructorParameters<typeof S3Client>[0]);
 }
 
 async function aBuffer(body: unknown): Promise<Buffer> {
