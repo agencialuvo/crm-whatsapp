@@ -134,12 +134,6 @@ export async function saveMediaFile(
 /** Por debajo de esto no vale la pena comparar contenido. */
 const MIN_DEDUPE_BYTES = 1024 * 1024;
 
-/**
- * Tope de lo que se descarga de Meta en memoria para entrantes y ecos de imagen, audio, video y sticker. Los
- * documentos conservan el limite de la Cloud API (100 MB). Un video de 76 MB leido entero con 512 MB de RAM tumbo la instancia.
- */
-export const MAX_INBOUND_MEDIA_BYTES = 25 * 1024 * 1024;
-
 function sha256File(file: string): Promise<string> {
   return new Promise((ok, no) => {
     const h = createHash("sha256");
@@ -303,8 +297,7 @@ export async function ensureAssetAvailable(
   try {
     const { data, mimeType, fileSize } = await downloadGraphMedia(
       creds.token,
-      asset.waMediaId,
-      asset.kind === "document" ? MEDIA_LIMITS.document.maxBytes : MAX_INBOUND_MEDIA_BYTES
+      asset.waMediaId
     );
     const storagePath = await saveMediaFile(organizationId, assetId, data);
     await dedupeMediaFile(organizationId, assetId, data);
