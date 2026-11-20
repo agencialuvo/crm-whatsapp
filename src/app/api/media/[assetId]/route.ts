@@ -1,12 +1,12 @@
-import { readFile } from "node:fs/promises";
 import { eq } from "drizzle-orm";
 import { apiError, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import {
   ensureAssetAvailable,
-  readMediaFile,
+  mediaFilePath,
 } from "@/server/whatsapp/media";
+import { serveFileStream } from "@/server/whatsapp/media-stream";
 import { lecturaDe } from "@/server/medios/store";
 import { objectStore } from "@/server/storage";
 import { mediaResponseHeaders } from "@/server/whatsapp/media-headers";
@@ -21,7 +21,7 @@ type Params = { params: Promise<{ assetId: string }> };
  * filtra existencia entre tenants). Si el archivo aún no se descargó,
  * intenta on-demand contra Graph; si Meta ya lo expiró → 410.
  */
-export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
+export const GET = withAuth(async (session, req: Request, ctx: Params) => {
   const { assetId } = await ctx.params;
   if (!/^[\w.-]{1,64}$/.test(assetId)) {
     return apiError(422, "invalid", "assetId inválido");
@@ -66,8 +66,7 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
       return new Response(null, { status: 302, headers: { location: url, "cache-control": "private, max-age=300" } });
     }
     try {
-      const data = await readFile(l.ruta);
-      return new Response(new Uint8Array(data), { headers: mediaResponseHeaders(asset, data.byteLength) });
+      return await serveFileStream(req, l.ruta, mediaResponseHeaders(asset, 0));
     } catch {
       return apiError(410, "gone", "El archivo no está en el volumen");
     }
@@ -86,11 +85,12 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
   }
 
   try {
-    const data = await readMediaFile(session.organizationId, assetId);
     // #78: nosniff + CSP sandbox siempre; inline solo para lo previsualizable.
-    return new Response(new Uint8Array(data), {
-      headers: mediaResponseHeaders(asset, data.byteLength),
-    });
+    return await serveFileStream(
+      req,
+      mediaFilePath(session.organizationId, assetId),
+      mediaResponseHeaders(asset, 0)
+    );
   } catch {
     return apiError(410, "gone", "El archivo del adjunto no está en el volumen");
   }
