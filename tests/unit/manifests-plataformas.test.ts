@@ -111,7 +111,7 @@ describe("render.yaml: el Blueprint declara todo lo que Render deja declarar", (
 
   it("servicio web construido desde el Dockerfile del repo, con healthcheck y disco en /data", () => {
     expect(activo).toMatch(/^\s*runtime: docker$/m);
-    expect(activo).toMatch(new RegExp(`^\\s*url: ${IMAGEN.replace(/[.]/g, "\\.")}$`, "m"));
+    expect(activo).toMatch(/dockerfilePath: [.][/]Dockerfile/);
     expect(activo).toMatch(/^\s*healthCheckPath: \/api\/health$/m);
     expect(activo).toMatch(/^\s*mountPath: \/data$/m);
   });
