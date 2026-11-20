@@ -11,6 +11,7 @@ import {
   type Credentials,
 } from "@/server/whatsapp/credentials";
 import { isForbiddenUploadMime } from "@/server/whatsapp/media-headers";
+import { claveDeMedio, objectStore } from "@/server/storage";
 
 /**
  * 008 — Única frontera de media con la Graph API (constitución II: todo el
@@ -114,8 +115,17 @@ export function mediaFilePath(organizationId: string, assetId: string): string {
 export async function saveMediaFile(
   organizationId: string,
   assetId: string,
-  data: Buffer | Uint8Array
+  data: Buffer | Uint8Array,
+  contentType?: string | null
 ): Promise<string> {
+  // Con R2 activo los adjuntos viven en Cloudflare y el disco de Render no se usa (se llenaba). Si R2 falla NO se cae al
+  // disco: el que llama falla y se reintenta (un entrante se vuelve a bajar de Meta al abrirlo). Sin R2, disco local.
+  const store = objectStore();
+  if (store) {
+    const clave = claveDeMedio(organizationId, assetId);
+    await store.put(clave, data, contentType || "application/octet-stream");
+    return `r2:${clave}`;
+  }
   const file = mediaFilePath(organizationId, assetId);
   await mkdir(path.dirname(file), { recursive: true });
   // Se escribe aparte y se renombra: si `file` fuera un enlace duro compartido (dedupe), escribir encima lo truncaria
@@ -195,7 +205,14 @@ export async function readMediaFile(
   organizationId: string,
   assetId: string
 ): Promise<Buffer> {
-  return readFile(mediaFilePath(organizationId, assetId));
+  try {
+    return await readFile(mediaFilePath(organizationId, assetId));
+  } catch (err) {
+    // No esta en el disco: puede estar en R2 (adjuntos nuevos).
+    const store = objectStore();
+    if (!store) throw err;
+    return store.readAll(claveDeMedio(organizationId, assetId), MEDIA_LIMITS.document.maxBytes);
+  }
 }
 
 /**
@@ -208,6 +225,7 @@ export async function deleteMediaFile(
   assetId: string
 ): Promise<void> {
   await rm(mediaFilePath(organizationId, assetId), { force: true });
+  await objectStore()?.delete(claveDeMedio(organizationId, assetId)).catch(() => {});
 }
 
 /* ---------- Descarga desde Graph (entrantes y echoes) ---------- */
@@ -299,8 +317,8 @@ export async function ensureAssetAvailable(
       creds.token,
       asset.waMediaId
     );
-    const storagePath = await saveMediaFile(organizationId, assetId, data);
-    await dedupeMediaFile(organizationId, assetId, data);
+    const storagePath = await saveMediaFile(organizationId, assetId, data, asset.mimeType ?? mimeType);
+    if (!storagePath.startsWith("r2:")) await dedupeMediaFile(organizationId, assetId, data);
     const updated = await db
       .update(schema.mediaAsset)
       .set({
