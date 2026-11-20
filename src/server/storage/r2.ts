@@ -5,6 +5,7 @@ import {
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { r2Config, type R2Config } from "@/server/storage/config";
@@ -28,7 +29,7 @@ function cliente(c: R2Config): S3Client {
     requestChecksumCalculation: "WHEN_REQUIRED",
     responseChecksumValidation: "WHEN_REQUIRED",
   };
-  return new S3Client(opciones as ConstructorParameters<typeof S3Client>[0]);
+  return new S3Client(opciones as S3ClientConfig);
 }
 
 async function aBuffer(body: unknown): Promise<Buffer> {
