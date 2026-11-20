@@ -53,6 +53,11 @@ const REDIRECCIONES_DE_PAGINAS: ReadonlyArray<readonly [string, string]> = [
 // cabeceras se fijan al construir, y ahí solo existe la pública (la secreta llega al arrancar).
 const RECAPTCHA = !!process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY?.trim();
 
+// Cloudflare R2: los adjuntos y Medios se sirven y se suben directo desde/hacia el bucket (URLs firmadas de
+// <cuenta>.r2.cloudflarestorage.com). Sin esto el navegador bloquea la subida (connect-src) y las imágenes/videos (img-src/media-src).
+// Las cabeceras se fijan al construir y R2_ENDPOINT no llega al build, por eso va el comodín del dominio de R2.
+const R2_ORIGENES = " https://*.r2.cloudflarestorage.com";
+
 const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -74,9 +79,10 @@ const SECURITY_HEADERS = [
       // React Refresh (solo en desarrollo) evalúa código; en producción no.
       `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}${RECAPTCHA ? " https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/" : ""}`,
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
+      `img-src 'self' data: blob:${R2_ORIGENES}`,
+`media-src 'self' blob:${R2_ORIGENES}`,
       "font-src 'self' data:",
-      `connect-src 'self'${RECAPTCHA ? " https://www.google.com/recaptcha/" : ""}`,
+      `connect-src 'self'${R2_ORIGENES}${RECAPTCHA ? " https://www.google.com/recaptcha/" : ""}`,
       // reCAPTCHA (solo con claves): el desafío vive en un iframe de Google.
       ...(RECAPTCHA ? ["frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/"] : []),
       "frame-ancestors 'none'",
