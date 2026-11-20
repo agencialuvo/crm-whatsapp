@@ -6,7 +6,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import type { AnuncioDto } from "@/lib/types";
-import { descargaEnCurso, guardarCreativo } from "@/server/attribution/creativo";
+import { adCreativeLocalCopy, descargaEnCurso, guardarCreativo } from "@/server/attribution/creativo";
 import { atribucionEnabled } from "@/server/attribution/flag";
 import { enqueueAdLookup } from "@/server/attribution/meta-ads/catalog";
 import {
@@ -301,6 +301,8 @@ export function repararImagenSiFalta(organizationId: string, contactId: string):
     if (!fila || fila.imageAssetId || !fila.sourceId) return;
     // La copia de la llegada sigue en marcha: no es un fallo, y gastar aquí el
     // intento de la ventana dejaría sin reparar lo que de verdad falle.
+    // Sin copia local de creativos no hay nada que reparar (y no se gasta el intento de la ventana).
+    if (!adCreativeLocalCopy()) return;
     if (descargaEnCurso(organizationId, fila.sourceId)) return;
     if (!frenoDeReparacion.intentar(`${organizationId}:${fila.sourceId}`)) return;
 

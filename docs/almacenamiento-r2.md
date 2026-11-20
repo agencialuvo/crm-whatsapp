@@ -81,9 +81,26 @@ nuevo y se **reintenta una sola vez**.
 
 ## Lo que sigue en disco (a propósito, spec 049)
 
-Los **adjuntos entrantes** de las conversaciones, el **logo**, el icono y las **miniaturas de los creativos de anuncios**
-siguen en `MEDIA_DIR`. Por eso el disco de Render todavía no se puede quitar. Lo que esta spec elimina es el crecimiento
-**por envío** y el tráfico de subida/bajada de la biblioteca.
+Los **adjuntos entrantes** de las conversaciones, el **logo** y el icono siguen en `MEDIA_DIR`. Por eso el disco de Render
+todavía no se puede quitar. Lo que esta spec elimina es el crecimiento **por envío** y el tráfico de subida/bajada de la
+biblioteca.
+
+### Miniaturas de anuncios de Meta: sin copia local (`AD_CREATIVE_LOCAL_COPY`)
+
+Las miniaturas de los creativos **ya no se copian a `MEDIA_DIR`** (apagado por defecto). Afecta a los dos flujos que lo hacían:
+el sync del catálogo (`syncCreatives`, spec 040) y la imagen del anuncio de origen en el webhook (`guardarCreativo`, spec 018).
+
+- Con la bandera apagada no se descarga nada ni se escribe en disco; las URL remotas siguen en `meta_ad` y `creative_asset_id`
+  / `creative_source_url` no se modifican. El resto del sync (catálogo, gasto, Resultados) no cambia.
+- La UI usa el ícono de megáfono donde no hay copia (Resultados, vista previa, selector de Automatizaciones, tarjeta de origen).
+  Las copias ya guardadas se siguen sirviendo.
+- `AD_CREATIVE_LOCAL_COPY=on` (también `1`, `true`, `si`) restaura la copia local. El código de descarga se conserva para
+  migrarlo a R2 más adelante.
+- **Liberar el disco ya ocupado:** `pnpm limpiar-creativos` (simulación: solo cuenta y lista). Para borrar de verdad:
+  `pnpm limpiar-creativos -- --aplicar --confirmo-borrar`. Borra los `media_asset` con `payload->>'origen' = 'catalogo'`
+  (copias del catálogo), pone `meta_ad.creative_asset_id = null` y quita su archivo del volumen. **No toca** las imágenes del
+  anuncio de origen (`origen = 'anuncio'`, ligadas a `ad_attribution`). Hazlo con la bandera apagada: encendida, el siguiente
+  sync las volvería a descargar.
 
 ## Lo anterior (retrocompatibilidad)
 

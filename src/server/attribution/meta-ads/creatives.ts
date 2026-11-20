@@ -2,7 +2,7 @@ import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import { descargarConReintento, type Descarga } from "@/server/attribution/creativo";
+import { adCreativeLocalCopy, descargarConReintento, type Descarga } from "@/server/attribution/creativo";
 import { deleteMediaFile, saveMediaFile } from "@/server/whatsapp/media";
 
 /**
@@ -95,6 +95,8 @@ export async function syncCreatives(
 ): Promise<CreativesSummary> {
   const descargar = deps.descargar ?? ((u: string) => descargarConReintento(u));
   const out: CreativesSummary = { downloaded: 0, failed: 0, replaced: 0 };
+  // Apagado (por defecto): no se descarga ni se escribe nada, ni se tocan `creative_source_url` / `creative_asset_id`.
+  if (!adCreativeLocalCopy()) return out;
   let pendientes: Awaited<ReturnType<typeof adsNeedingCreative>> = [];
   try {
     pendientes = await adsNeedingCreative(organizationId, deps.limit);

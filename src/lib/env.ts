@@ -80,6 +80,8 @@ export const envSchema = z.object({
   // 048: almacenamiento de Medios en Cloudflare R2 (conector opcional, apagado por defecto: sin el, el disco local).
   // Se leen SOLO en src/server/storage/config.ts; aqui se declaran para que `pnpm doctor` las vea.
   R2_STORAGE: z.string().optional(),
+  // Copia local (MEDIA_DIR) de las miniaturas de anuncios de Meta. Apagado por defecto. Se lee en src/server/attribution/creativo.ts.
+  AD_CREATIVE_LOCAL_COPY: z.string().optional(),
   R2_ENDPOINT: z.string().optional(),
   R2_BUCKET_NAME: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),

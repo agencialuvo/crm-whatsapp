@@ -39,6 +39,7 @@
     "e2e:cuentas": "esbuild scripts/e2e-cuentas.ts --bundle --platform=node --format=esm --outfile=.tmp-e2e-cuentas.mjs --alias:@=./src --packages=external --log-level=warning && node --env-file=.env .tmp-e2e-cuentas.mjs",
     "init-env": "esbuild scripts/init-env.ts --bundle --platform=node --format=esm --outfile=.tmp-init-env.mjs --alias:@=./src --log-level=warning && node .tmp-init-env.mjs",
     "doctor": "esbuild scripts/doctor.ts --bundle --platform=node --format=esm --outfile=.tmp-doctor.mjs --alias:@=./src --log-level=warning --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" && node .tmp-doctor.mjs",
+    "limpiar-creativos": "esbuild scripts/limpiar-creativos.ts --bundle --platform=node --format=esm --outfile=.tmp-limpiar-creativos.mjs --alias:@=./src --packages=external --log-level=warning && node .tmp-limpiar-creativos.mjs",
     "r2:smoke": "esbuild scripts/r2-smoke.ts --bundle --platform=node --format=esm --outfile=.tmp-r2-smoke.mjs --alias:@=./src --log-level=warning --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" && node .tmp-r2-smoke.mjs"
   },
   "dependencies": {

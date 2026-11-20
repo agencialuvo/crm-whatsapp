@@ -5,6 +5,7 @@ import {
   sinIdentificadorDeClic,
 } from "@/server/attribution/referral";
 import {
+  adCreativeLocalCopy,
   CREATIVO_MAX_BYTES,
   descargarConReintento,
   descargarCreativo,
@@ -353,6 +354,27 @@ describe("descargarCreativo", () => {
     f = stubFetch(new Response(null, { status: 404 }), imagen());
     expect((await descargarConReintento(META, 0)).ok).toBe(false);
     expect(f).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AD_CREATIVE_LOCAL_COPY", () => {
+  const original = process.env.AD_CREATIVE_LOCAL_COPY;
+  afterEach(() => {
+    if (original === undefined) delete process.env.AD_CREATIVE_LOCAL_COPY;
+    else process.env.AD_CREATIVE_LOCAL_COPY = original;
+  });
+
+  it("está apagada por defecto y solo la enciende un valor afirmativo", () => {
+    delete process.env.AD_CREATIVE_LOCAL_COPY;
+    expect(adCreativeLocalCopy()).toBe(false);
+    for (const v of ["", "off", "0", "no", "false"]) {
+      process.env.AD_CREATIVE_LOCAL_COPY = v;
+      expect(adCreativeLocalCopy()).toBe(false);
+    }
+    for (const v of ["on", "ON", "1", "true", " sí "]) {
+      process.env.AD_CREATIVE_LOCAL_COPY = v;
+      expect(adCreativeLocalCopy()).toBe(true);
+    }
   });
 });
 

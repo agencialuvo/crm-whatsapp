@@ -1035,6 +1035,15 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
   /* ─── 040: los creativos de los anuncios ─── */
 
   describe("040 — creativos", () => {
+    // La copia local está APAGADA por defecto (AD_CREATIVE_LOCAL_COPY): estas pruebas la encienden; la de abajo la apaga.
+    const copiaAntes = process.env.AD_CREATIVE_LOCAL_COPY;
+    beforeEach(() => {
+      process.env.AD_CREATIVE_LOCAL_COPY = "on";
+    });
+    afterAll(() => {
+      if (copiaAntes === undefined) delete process.env.AD_CREATIVE_LOCAL_COPY;
+      else process.env.AD_CREATIVE_LOCAL_COPY = copiaAntes;
+    });
     const id = (n: string) => `${n}-${uid}`;
     const IMG = (n: string) => `https://scontent.xx.fbcdn.net/${uid}/${n}.jpg`;
     const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -1078,6 +1087,21 @@ describe.skipIf(!live)("Marketing API de Meta contra Postgres", () => {
       expect((copia.payload as { origen?: string }).origen).toBe("catalogo");
       // Un anuncio sin creativo no genera copia.
       expect((await metaRow(org, id("k-2")))!.creativeAssetId).toBeNull();
+    });
+
+    it("con AD_CREATIVE_LOCAL_COPY apagada no se descarga ni se escribe nada, y las URL remotas se conservan", async () => {
+      delete process.env.AD_CREATIVE_LOCAL_COPY;
+      await conectarNuevo();
+      const calls: string[] = [];
+      const r = await sync.syncOrganization(org, deps(fakeGraph({ account: CUENTA(), spend: gasto() }), T0, descargador(calls)));
+      expect(r.creatives).toBe(0);
+      expect(calls).toEqual([]);
+      const fila = (await metaRow(org, id("k-1")))!;
+      expect(fila).toMatchObject({ creativeTitle: "Titular uno", creativeAssetId: null, creativeSourceUrl: null });
+      expect(fila.creativeImageUrl).toBe(IMG("uno"));
+      expect(fila.creativeThumbUrl).toBe(IMG("uno-t"));
+      const copias = await db.select().from(schema.mediaAsset).where(and(eq(schema.mediaAsset.organizationId, org), sql`${schema.mediaAsset.payload}->>'origen' = 'catalogo'`));
+      expect(copias).toHaveLength(0);
     });
 
     it("una imagen que no baja de forma permanente (p. ej. pasa del tope) cae a la miniatura", async () => {

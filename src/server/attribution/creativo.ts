@@ -19,6 +19,18 @@ import { deleteMediaFile, saveMediaFile } from "@/server/whatsapp/media";
  * aquí puede tocarlo.
  */
 
+const COPIA_LOCAL_ON = new Set(["on", "1", "true", "si", "sí", "yes"]);
+
+/**
+ * `AD_CREATIVE_LOCAL_COPY`: ¿se copian a `MEDIA_DIR` las imágenes de los anuncios de Meta? APAGADO por defecto: con la
+ * bandera apagada ni el sync del catálogo (040) ni la llegada de un anuncio de origen (018) escriben miniaturas en
+ * disco; las URL remotas de `meta_ad` y el `raw` de `ad_attribution` se conservan intactas, y la UI muestra el ícono
+ * de megáfono. El código de descarga sigue aquí para poder migrarlo a R2. Se lee en cada llamada (no se cachea).
+ */
+export function adCreativeLocalCopy(): boolean {
+  return COPIA_LOCAL_ON.has((process.env.AD_CREATIVE_LOCAL_COPY ?? "").trim().toLowerCase());
+}
+
 /** El jpg de un creativo ronda 20-150 KB; más que esto no es una miniatura. */
 export const CREATIVO_MAX_BYTES = 300_000;
 /** Tiempo por intento, contando redirecciones y la lectura del cuerpo. */
@@ -288,6 +300,9 @@ export async function guardarCreativo(input: {
     avisar();
     return existente;
   }
+
+  // Una copia ya existente se reutiliza arriba (no escribe nada); una NUEVA solo si la bandera lo permite.
+  if (!adCreativeLocalCopy()) return null;
 
   const clave = `${organizationId}:${sourceId}`;
   if (enCurso.has(clave)) return null;
