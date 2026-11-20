@@ -1,6 +1,8 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { graphRequest, MetaApiError } from "@/lib/meta/client";
@@ -116,8 +118,83 @@ export async function saveMediaFile(
 ): Promise<string> {
   const file = mediaFilePath(organizationId, assetId);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, data);
+  // Se escribe aparte y se renombra: si `file` fuera un enlace duro compartido (dedupe), escribir encima lo truncaria
+  // para todos los que lo comparten; y con el disco lleno ya no deja un archivo de 0 bytes.
+  const tmp = `${file}.part`;
+  try {
+    await writeFile(tmp, data);
+    await rename(tmp, file);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
   return path.join(organizationId, assetId); // ruta relativa persistida en BD
+}
+
+/** Por debajo de esto no vale la pena comparar contenido. */
+const MIN_DEDUPE_BYTES = 1024 * 1024;
+
+/**
+ * Tope de lo que se descarga de Meta en memoria para entrantes y ecos de imagen, audio, video y sticker. Los
+ * documentos conservan el limite de la Cloud API (100 MB). Un video de 76 MB leido entero con 512 MB de RAM tumbo la instancia.
+ */
+export const MAX_INBOUND_MEDIA_BYTES = 25 * 1024 * 1024;
+
+function sha256File(file: string): Promise<string> {
+  return new Promise((ok, no) => {
+    const h = createHash("sha256");
+    createReadStream(file)
+      .on("data", (d) => h.update(d))
+      .on("end", () => ok(h.digest("hex")))
+      .on("error", no);
+  });
+}
+
+/**
+ * Si ya hay en la misma organizacion un archivo IDENTICO (mismo tamano y mismo SHA-256), el recien guardado pasa a ser
+ * un enlace duro a ese: dos ids, un solo archivo fisico. Nada cambia para la app (cada id sigue teniendo su ruta) y el
+ * disco no se llena de copias del mismo video. Mejor esfuerzo: nunca lanza y, si algo falla, el archivo queda como estaba.
+ */
+export async function dedupeMediaFile(
+  organizationId: string,
+  assetId: string,
+  data: Buffer | Uint8Array
+): Promise<boolean> {
+  if (data.byteLength < MIN_DEDUPE_BYTES) return false;
+  try {
+    const a = schema.mediaAsset;
+    const candidatos = await getDb()
+      .select({ id: a.id })
+      .from(a)
+      .where(
+        and(
+          eq(a.organizationId, organizationId),
+          eq(a.fileSize, data.byteLength),
+          ne(a.id, assetId),
+          isNotNull(a.storagePath)
+        )
+      )
+      .limit(5);
+    if (!candidatos.length) return false;
+    const hash = createHash("sha256").update(data).digest("hex");
+    const destino = mediaFilePath(organizationId, assetId);
+    for (const c of candidatos) {
+      const origen = mediaFilePath(organizationId, c.id);
+      const tmp = `${destino}.dedup`;
+      try {
+        if ((await stat(origen)).size !== data.byteLength) continue;
+        if ((await sha256File(origen)) !== hash) continue;
+        await link(origen, tmp);
+        await rename(tmp, destino);
+        return true;
+      } catch {
+        await rm(tmp, { force: true }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn(`[media] dedupe de ${assetId} omitido:`, err instanceof Error ? err.message : err);
+  }
+  return false;
 }
 
 export async function readMediaFile(
@@ -226,9 +303,11 @@ export async function ensureAssetAvailable(
   try {
     const { data, mimeType, fileSize } = await downloadGraphMedia(
       creds.token,
-      asset.waMediaId
+      asset.waMediaId,
+      asset.kind === "document" ? MEDIA_LIMITS.document.maxBytes : MAX_INBOUND_MEDIA_BYTES
     );
     const storagePath = await saveMediaFile(organizationId, assetId, data);
+    await dedupeMediaFile(organizationId, assetId, data);
     const updated = await db
       .update(schema.mediaAsset)
       .set({
