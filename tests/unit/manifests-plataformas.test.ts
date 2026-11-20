@@ -70,7 +70,7 @@ describe.each([
   ["render.yaml", render],
   ["fly.toml", fly],
   ["railway.toml", railway],
-])("%s: lo común a los tres", (_nombre, texto) => {
+])("%s: lo común a los tres", (nombre, texto) => {
   it("nombra cada variable obligatoria, declarada o en el comando que la fija", () => {
     for (const clave of OBLIGATORIAS) {
       expect(texto, clave).toMatch(new RegExp(`\\b${clave}\\b`));
@@ -80,8 +80,8 @@ describe.each([
   it("fija la imagen publicada a la versión de package.json", () => {
     // Como el compose (tests/unit/version.test.ts): una etiqueta vieja en un
     // manifest instala la versión anterior mientras el CHANGELOG habla de
-    // la nueva.
-    expect(texto).toContain(IMAGEN);
+    // la nueva. (render.yaml se construye desde el Dockerfile: no lleva imagen que fijar.)
+    if (nombre !== "render.yaml") expect(texto).toContain(IMAGEN);
     expect(texto).not.toMatch(/vocero-crm:latest/);
   });
 
@@ -109,8 +109,8 @@ describe.each([
 describe("render.yaml: el Blueprint declara todo lo que Render deja declarar", () => {
   const activo = sinComentarios(render);
 
-  it("servicio web desde la imagen, con healthcheck y disco en /data", () => {
-    expect(activo).toMatch(/^\s*runtime: image$/m);
+  it("servicio web construido desde el Dockerfile del repo, con healthcheck y disco en /data", () => {
+    expect(activo).toMatch(/^\s*runtime: docker$/m);
     expect(activo).toMatch(new RegExp(`^\\s*url: ${IMAGEN.replace(/[.]/g, "\\.")}$`, "m"));
     expect(activo).toMatch(/^\s*healthCheckPath: \/api\/health$/m);
     expect(activo).toMatch(/^\s*mountPath: \/data$/m);
@@ -126,10 +126,10 @@ describe("render.yaml: el Blueprint declara todo lo que Render deja declarar", (
     }
   });
 
-  it("DATABASE_URL viene de la base del Blueprint y APP_BASE_URL de la URL del servicio", () => {
+  it("DATABASE_URL viene de la base del Blueprint y APP_BASE_URL se conserva del panel (dominio propio)", () => {
     expect(bloqueRender("DATABASE_URL")).toMatch(/fromDatabase:[\s\S]*name: vocero-db[\s\S]*property: connectionString/);
     expect(activo).toMatch(/^databases:\n\s*- name: vocero-db$/m);
-    expect(bloqueRender("APP_BASE_URL")).toMatch(/fromService:[\s\S]*envVarKey: RENDER_EXTERNAL_URL/);
+    expect(bloqueRender("APP_BASE_URL")).toMatch(/sync: false/); // el Blueprint no pisa el valor del panel
   });
 
   it("los secretos los genera Render (256 bits base64 = los 32 bytes de ENCRYPTION_KEY)", () => {
