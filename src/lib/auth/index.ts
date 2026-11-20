@@ -75,6 +75,9 @@ function createAuth() {
   return betterAuth({
     baseURL: env.APP_BASE_URL,
     secret: env.BETTER_AUTH_SECRET,
+    // Detrás del balanceador de Render la IP real viene en x-forwarded-for (la misma que lee clientIp): sin esto el limitador
+    // interno de Better Auth junta a todos los visitantes en un solo grupo por ruta.
+    advanced: { ipAddress: { ipAddressHeaders: ["x-forwarded-for"] } },
     database: drizzleAdapter(getDb(), {
       provider: "pg",
       schema: {
