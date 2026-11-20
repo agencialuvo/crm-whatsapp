@@ -84,6 +84,8 @@ export function utcOffsetLabel(timeZone: string, at: Date = new Date()): string 
   if (!m[1]) return "UTC";
   const h = Number(m[2]);
   const min = m[3] === "00" ? "" : `:${m[3]}`;
+  // Algunos ICU devuelven «GMT+00:00» (no «GMT») para UTC: sin desfase es «UTC», no «UTC+0».
+  if (h === 0 && !min) return "UTC";
   return `UTC${m[1] === "-" ? "−" : "+"}${h}${min}`;
 }
 
