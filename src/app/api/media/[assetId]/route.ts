@@ -9,7 +9,11 @@ import {
 import { serveFileStream } from "@/server/whatsapp/media-stream";
 import { lecturaDe } from "@/server/medios/store";
 import { objectStore } from "@/server/storage";
-import { mediaResponseHeaders } from "@/server/whatsapp/media-headers";
+import {
+  contentTypeFor,
+  isPreviewable,
+  mediaResponseHeaders,
+} from "@/server/whatsapp/media-headers";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +86,24 @@ export const GET = withAuth(async (session, req: Request, ctx: Params) => {
       "gone",
       "El contenido ya no está disponible (expiró en WhatsApp antes de poder copiarse)"
     );
+  }
+
+  // Adjunto guardado en Cloudflare R2: se redirige a una URL firmada (los bytes no pasan por Render).
+  const ruta = asset.storagePath ?? "";
+  if (ruta.startsWith("r2:")) {
+    const url = await objectStore()
+      ?.signRead(ruta.slice(3), {
+        contentType: contentTypeFor(asset.mimeType),
+        fileName: asset.fileName ?? undefined,
+        download: !isPreviewable(asset.mimeType),
+        ttlSeconds: 600,
+      })
+      .catch(() => null);
+    if (!url) return apiError(503, "unavailable", "El almacenamiento no está disponible");
+    return new Response(null, {
+      status: 302,
+      headers: { location: url, "cache-control": "private, max-age=300" },
+    });
   }
 
   try {
