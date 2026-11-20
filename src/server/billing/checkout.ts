@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { CHECKOUT_TTL_MS, centsToMpAmount } from "@/lib/billing";
@@ -134,14 +134,4 @@ export async function getCheckoutStatus(organizationId: string, checkoutId: stri
     subscriptionStatus: sub?.status ?? null,
     currentPeriodEnd: sub?.end.toISOString() ?? null,
   };
-}
-
-export async function latestCheckout(organizationId: string) {
-  const [row] = await getDb()
-    .select()
-    .from(schema.billingCheckout)
-    .where(eq(schema.billingCheckout.organizationId, organizationId))
-    .orderBy(desc(schema.billingCheckout.createdAt))
-    .limit(1);
-  return row ?? null;
 }

@@ -186,6 +186,3 @@ export function applyBoardDelta(
   }
   return next;
 }
-
-/** Cuántas tarjetas hay cargadas en total (para decidir cuánto pedir al recargar una columna). */
-export const loadedCount = (col: Column): number => col.rows.length;

@@ -18,10 +18,6 @@ const IG_GRAPH_VERSION = process.env.META_GRAPH_API_VERSION ?? "v25.0";
  * emojis el margen real es menor de lo que aparenta. */
 export const IG_TEXT_MAX_BYTES = 1000;
 
-export function fitsInstagramText(text: string): boolean {
-  return Buffer.byteLength(text, "utf8") <= IG_TEXT_MAX_BYTES;
-}
-
 export type InstagramSendResult = { platformMessageId: string };
 
 /**

@@ -116,18 +116,3 @@ export async function getOrganizationContext(organizationId: string): Promise<Or
     customAiPromptRules: profile?.customAiPromptRules ?? null,
   };
 }
-
-/**
- * Valida de manera rápida si una organización tiene un módulo habilitado 
- * ya sea por su plan SaaS o por compatibilidad.
- */
-export async function organizationHasModule(
-  organizationId: string, 
-  moduleName: "agenda" | "salon" | "atribucion" | "loyalty" | "finances"
-): Promise<boolean> {
-  const context = await getOrganizationContext(organizationId);
-  if (!context) return false;
-
-  // Verificamos si el plan incluye el módulo
-  return context.plan.features.modules.includes(moduleName);
-}

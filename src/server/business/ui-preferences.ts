@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -66,14 +66,4 @@ export async function setTablePageSize(
 
   if (!row) throw new SalonError("preferences_full", 422, "Demasiadas vistas guardadas");
   return row.sizes;
-}
-
-/** Quita lo guardado de una vista (vuelve a su valor por defecto). */
-export async function clearTablePageSize(organizationId: string, userId: string, view: string): Promise<void> {
-  const parsed = setTablePageSizeInputSchema.shape.view.safeParse(view);
-  if (!parsed.success) throw new SalonError("invalid_preference", 422, "Nombre de vista no válido");
-  await getDb()
-    .update(prefs)
-    .set({ tablePageSizes: sql`${prefs.tablePageSizes} - ${parsed.data}::text`, updatedAt: new Date() })
-    .where(and(eq(prefs.organizationId, organizationId), eq(prefs.userId, userId)));
 }

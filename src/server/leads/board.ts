@@ -239,11 +239,3 @@ export async function boardDelta(
     totals: Object.fromEntries(stages.map((s) => [s.id, totals.get(s.id) ?? VACIO])),
   };
 }
-
-/** Una tarjeta por id (respuesta del `PATCH`). */
-export async function getBoardLead(organizationId: string, leadId: string): Promise<BoardLeadDto | null> {
-  const rows = await seleccionarTarjetas()
-    .where(scoped(schema.lead.organizationId, organizationId, eq(schema.lead.id, leadId)))
-    .limit(1);
-  return rows[0] ? aTarjeta(rows[0]) : null;
-}

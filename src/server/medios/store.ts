@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
@@ -330,22 +330,6 @@ export async function leerBytesDeMedio(f: Fila, max: number): Promise<Buffer | n
     if (err instanceof StorageError && err.code === "not_found") return null;
     throw err;
   }
-}
-
-/** ¿Está el archivo? (R2: un HEAD; local: stat). Distingue «no existe el elemento» de «no hay archivo». */
-export async function existeArchivoDeMedio(f: Fila): Promise<boolean> {
-  const l = lecturaDe(f);
-  if (l.donde === "local") {
-    try {
-      await stat(l.ruta);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  const r2 = objectStore();
-  if (!r2) return false;
-  return (await r2.head(l.clave)) !== null;
 }
 
 /** Quita el binario de un medio (disco o R2). Nunca lanza: un huérfano lo barre el mantenimiento. */
