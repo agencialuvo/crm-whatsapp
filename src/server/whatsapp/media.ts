@@ -289,6 +289,69 @@ export async function downloadGraphMedia(
 }
 
 /**
+ * Descarga un media de Graph y lo sube a R2 EN STREAMING: la memoria no depende del tamano del archivo (un video de
+ * 76 MB leido entero tumbo la instancia de 512 MB). Devuelve null si no se puede (R2 apagado o Meta no dio el tamano):
+ * el que llama usa entonces el camino con buffer.
+ */
+export async function streamGraphMediaToR2(
+  token: string,
+  waMediaId: string,
+  clave: string,
+  fallbackMime: string | null,
+  maxBytes: number = MEDIA_LIMITS.document.maxBytes
+): Promise<{ mimeType: string | null; fileSize: number } | null> {
+  const store = objectStore();
+  if (!store) return null;
+  let meta: GraphMediaMeta;
+  try {
+    meta = await graphRequest<GraphMediaMeta>(waMediaId, { token });
+  } catch (err) {
+    const gone = err instanceof MetaApiError && err.status === 404;
+    throw new MediaFetchError("Meta no entregó la metadata del adjunto", gone);
+  }
+  if (!meta.url) throw new MediaFetchError("Meta no entregó URL del adjunto");
+  if (!meta.file_size) return null; // sin tamano no se puede firmar la subida
+  if (meta.file_size > maxBytes) {
+    throw new MediaFetchError("El adjunto excede el límite de tamaño", true);
+  }
+  let res: Response;
+  try {
+    res = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    throw new MediaFetchError("No se pudo descargar el adjunto");
+  }
+  if (!res.ok || !res.body) {
+    throw new MediaFetchError(
+      `La descarga devolvió ${res.status}`,
+      res.status === 404 || res.status === 410
+    );
+  }
+  const mimeType = meta.mime_type ?? res.headers.get("content-type") ?? fallbackMime;
+  const firmado = await store.signUpload(clave, {
+    contentType: mimeType || "application/octet-stream",
+    contentLength: meta.file_size,
+  });
+  let put: Response;
+  try {
+    put = await fetch(firmado.url, {
+      method: "PUT",
+      headers: { ...firmado.headers, "content-length": String(meta.file_size) },
+      body: res.body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+  } catch (err) {
+    throw new MediaFetchError(`No se pudo subir el adjunto a R2: ${err instanceof Error ? err.message : err}`);
+  }
+  if (!put.ok) throw new MediaFetchError(`R2 rechazó la subida (${put.status})`);
+  const head = await store.head(clave);
+  if (!head || head.size !== meta.file_size) {
+    await store.delete(clave).catch(() => {});
+    throw new MediaFetchError("La subida a R2 quedó incompleta");
+  }
+  return { mimeType: mimeType ?? null, fileSize: meta.file_size };
+}
+
+/**
  * Garantiza que el asset esté en disco (`fetchStatus=available`).
  * Se usa en la descarga in-process post-ingesta Y on-demand desde la ruta de
  * media. Nunca lanza hacia el webhook: el que llama decide qué hacer con el
@@ -313,12 +376,23 @@ export async function ensureAssetAvailable(
   if (!creds) return null;
 
   try {
-    const { data, mimeType, fileSize } = await downloadGraphMedia(
-      creds.token,
-      asset.waMediaId
-    );
-    const storagePath = await saveMediaFile(organizationId, assetId, data, asset.mimeType ?? mimeType);
-    if (!storagePath.startsWith("r2:")) await dedupeMediaFile(organizationId, assetId, data);
+    // Con R2: Meta -> R2 en streaming, sin pasar el archivo por la memoria. Sin R2 (o sin tamano): camino con buffer y disco.
+    const clave = claveDeMedio(organizationId, assetId);
+    const directo = await streamGraphMediaToR2(creds.token, asset.waMediaId, clave, asset.mimeType);
+    let storagePath: string;
+    let mimeType: string | null;
+    let fileSize: number;
+    if (directo) {
+      storagePath = `r2:${clave}`;
+      mimeType = directo.mimeType;
+      fileSize = directo.fileSize;
+    } else {
+      const d = await downloadGraphMedia(creds.token, asset.waMediaId);
+      storagePath = await saveMediaFile(organizationId, assetId, d.data, asset.mimeType ?? d.mimeType);
+      if (!storagePath.startsWith("r2:")) await dedupeMediaFile(organizationId, assetId, d.data);
+      mimeType = d.mimeType;
+      fileSize = d.fileSize;
+    }
     const updated = await db
       .update(schema.mediaAsset)
       .set({
