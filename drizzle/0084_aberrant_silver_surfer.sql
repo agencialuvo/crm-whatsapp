@@ -1,0 +1,1 @@
+ALTER TABLE "service_sale" ALTER COLUMN "staff_id" DROP NOT NULL;

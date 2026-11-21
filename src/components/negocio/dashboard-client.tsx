@@ -269,6 +269,7 @@ export function DashboardClient({
             versus={data?.comparison.kind === "month" ? "vs. mes anterior" : "vs. periodo anterior"}
             currency={currency}
             loading={loading}
+            showCommissions={report?.teamInUse ?? true}
           />
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
             <KpiCard

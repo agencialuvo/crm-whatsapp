@@ -313,6 +313,12 @@ const otherNote = z
   .nullish();
 const OTHER_NOTE_REQUIRED = "Escribe qué servicio u oferta es";
 
+/**
+ * Quién atendió. OPCIONAL: un negocio sin equipo vende sin profesional (`null` o ausente → sin comisión, todo es
+ * del negocio). Lo que no se acepta es una cadena vacía: o es un id o no hay profesional.
+ */
+const saleStaffId = z.string().min(1, "Elige quién atendió").nullish();
+
 /** Un ítem del carrito de una venta: un servicio, una oferta o «Otro» con su precio. */
 export const saleItemSchema = z
   .object({
@@ -365,7 +371,7 @@ export const saleInputSchema = z
     /** Cumpleaños (día y mes, sin año). Se piden juntos o ninguno. */
     birthdayDay: birthdayDay.nullish(),
     birthdayMonth: birthdayMonth.nullish(),
-    staffId: z.string({ required_error: "Elige quién atendió" }).min(1, "Elige quién atendió"),
+    staffId: saleStaffId,
     /**
      * Lo vendido: uno o varios servicios u ofertas (el carrito). Sin `items`, vale la
      * forma de un solo ítem (`serviceId` / `comboId` / `other`), que sigue funcionando.
@@ -504,7 +510,7 @@ export const clientCreateSchema = z
     amountCents: cents,
     /** Día de la atención (AAAA-MM-DD, del negocio); sin él, hoy. */
     soldOn: z.string().regex(ISO_DATE, "Fecha no válida").nullish(),
-    staffId: z.string({ required_error: "Elige quién atendió" }).min(1, "Elige quién atendió"),
+    staffId: saleStaffId,
     paymentMethod: z.enum(PAYMENT_METHODS, {
       errorMap: () => ({ message: "Elige el método de pago" }),
     }),
@@ -544,7 +550,7 @@ export const saleEditSchema = z
       .array(saleItemSchema, { required_error: "Agrega al menos un servicio u oferta" })
       .min(1, "Agrega al menos un servicio u oferta")
       .max(20, "Máximo 20 ítems por venta"),
-    staffId: z.string({ required_error: "Elige quién atendió" }).min(1, "Elige quién atendió"),
+    staffId: saleStaffId,
     amountCents: cents,
     /** Porcentaje puntual para esta venta; sin él manda la regla de siempre. */
     customCommissionPercentage: percentage.nullish(),

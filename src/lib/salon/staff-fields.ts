@@ -58,3 +58,6 @@ export function formatStaffPhone(stored: string | null | undefined): string {
   if (digits.length !== STAFF_PHONE_DIGITS) return stored;
   return `${STAFF_PHONE_PREFIX} ${digits.replace(/(\d{3})(?=\d)/g, "$1 ")}`;
 }
+
+/** Cómo se llama, en pantallas y reportes, una venta sin profesional (un negocio sin equipo): todo es del negocio. */
+export const NO_STAFF_LABEL = "Sin asignar";

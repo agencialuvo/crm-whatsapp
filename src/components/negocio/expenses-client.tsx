@@ -141,6 +141,8 @@ export function ExpensesClient({
   }
 
   const s = report?.summary;
+  // Sin equipo (ni comisiones históricas) la tarjeta «Comisiones del equipo» siempre sería cero: no se muestra.
+  const showCommissions = report?.teamInUse ?? true;
   const revenue = s?.revenueCents ?? 0;
   const negative = (s?.realNetCents ?? 0) < 0;
   // La barra reparte los ingresos: comisiones, gastos y lo que de verdad queda.
@@ -189,16 +191,19 @@ export function ExpensesClient({
           <section aria-label="Ingresos contra gastos" aria-busy={loading}>
             <div
               className={cn(
-                "grid grid-cols-2 gap-2.5 transition-opacity sm:gap-3 lg:grid-cols-5",
+                "grid grid-cols-2 gap-2.5 transition-opacity sm:gap-3",
+                showCommissions ? "lg:grid-cols-5" : "lg:grid-cols-4",
                 loading && report && "opacity-60"
               )}
             >
               <Tile label="Ingresos" value={s ? money(s.revenueCents, currency) : "…"} />
-              <Tile
-                label="Comisiones del equipo"
-                value={s ? money(s.commissionsCents, currency) : "…"}
-                hint={s ? `${commissionsPct}% de los ingresos` : undefined}
-              />
+              {showCommissions && (
+                <Tile
+                  label="Comisiones del equipo"
+                  value={s ? money(s.commissionsCents, currency) : "…"}
+                  hint={s ? `${commissionsPct}% de los ingresos` : undefined}
+                />
+              )}
               <Tile
                 label="Ganancia neta"
                 value={s ? money(s.netBeforeExpensesCents, currency) : "…"}
@@ -236,10 +241,12 @@ export function ExpensesClient({
                   <span className="bg-success" style={{ width: `${negative ? 0 : realPct}%` }} />
                 </div>
                 <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-2">
-                  <li className="flex items-center gap-1.5">
-                    <span aria-hidden className="h-2 w-2 rounded-full bg-brand-soft" />
-                    Comisiones {commissionsPct}%
-                  </li>
+                  {showCommissions && (
+                    <li className="flex items-center gap-1.5">
+                      <span aria-hidden className="h-2 w-2 rounded-full bg-brand-soft" />
+                      Comisiones {commissionsPct}%
+                    </li>
+                  )}
                   <li className="flex items-center gap-1.5">
                     <span aria-hidden className="h-2 w-2 rounded-full bg-warning" />
                     Gastos {expensesPct}%

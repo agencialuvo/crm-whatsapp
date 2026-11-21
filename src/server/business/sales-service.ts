@@ -1,4 +1,4 @@
-import { asc, desc, eq, gte, inArray, lt, or, sql, type AnyColumn } from "drizzle-orm";
+import { asc, desc, eq, gte, inArray, isNotNull, lt, or, sql, type AnyColumn } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { birthdayAllowsItems, type SaleLoyaltyDto } from "@/lib/loyalty";
@@ -25,6 +25,7 @@ import type {
   SaleRowDto,
   SalesReportDto,
 } from "@/lib/salon/types";
+import { NO_STAFF_LABEL } from "@/lib/salon/staff-fields";
 import { dayIsoInTz, zonedWallClockToUtc } from "@/lib/time/slots";
 import { businessTimezone, type ResolvedPeriod } from "@/server/analytics/period";
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
@@ -84,11 +85,13 @@ const lineToDto = (l: Line, amountCents: number): SaleItemDto => ({
  * organización, debe estar activo y lo debe dar el profesional elegido.
  * `keep` son los ítems que la venta YA tenía y siguen con el mismo profesional
  * (al editar): no se vuelve a exigir que estén activos ni asignados.
+ *
+ * `member` es `null` en una venta sin profesional (negocio sin equipo): no hay a quién exigirle el servicio.
  */
 async function resolveLines(
   tx: Tx,
   organizationId: string,
-  member: StaffRow,
+  member: StaffRow | null,
   rawItems: SaleItemInput[],
   keep?: Set<string>
 ): Promise<{ lines: Line[]; first: Line }> {
@@ -141,6 +144,7 @@ async function resolveLines(
       // pantalla ya filtra la lista; la regla vive aquí porque la API se puede
       // llamar sin ella. «Otro» no tiene lista: lo da cualquiera.
       if (
+        member &&
         !raw.other &&
         !kept &&
         !(await staffGivesItem(tx, organizationId, { kind: "service", id: svc.id }, member.id))
@@ -176,6 +180,7 @@ async function resolveLines(
         throw new SalonError("item_inactive", 409, `«${cmb.name}» está desactivado.`);
       }
       if (
+        member &&
         !kept &&
         !(await staffGivesItem(tx, organizationId, { kind: "combo", id: cmb.id }, member.id))
       ) {
@@ -209,7 +214,7 @@ async function resolveLines(
 async function computeSplit(
   tx: Tx,
   organizationId: string,
-  member: StaffRow,
+  member: StaffRow | null,
   lines: Line[],
   amountCents: number,
   customCommissionPercentage: number | null | undefined
@@ -218,6 +223,16 @@ async function computeSplit(
     lines.map((l) => l.baseCents),
     amountCents
   );
+  // Sin profesional no hay a quién pagarle: sin comisión (ni siquiera la puntual) y todo es del negocio.
+  if (!member) {
+    return {
+      amounts,
+      staffCommissionCents: 0,
+      businessNetCents: amountCents,
+      percentage: 0,
+      source: "none" as CommissionSource,
+    };
+  }
   const itemSplits: { commission: number; pct: number; source: CommissionSource }[] = [];
   for (const [i, line] of lines.entries()) {
     let staffServicePct: number | null = null;
@@ -286,20 +301,25 @@ export async function registerServiceSale(
   }
 
   const result = await db.transaction(async (tx) => {
-    const [member] = await tx
-      .select()
-      .from(schema.staff)
-      .where(
-        scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, input.staffId))
-      )
-      .limit(1);
-    if (!member) throw new SalonError("staff_not_found", 404, "El profesional no existe");
-    if (!member.active) {
-      throw new SalonError(
-        "staff_inactive",
-        409,
-        `${member.name} está inactivo. Actívalo para registrarle ventas.`
-      );
+    // Sin `staffId` la venta es del negocio (sin comisión). Con `staffId`, el profesional debe existir y estar activo.
+    let member: StaffRow | null = null;
+    if (input.staffId) {
+      const [found] = await tx
+        .select()
+        .from(schema.staff)
+        .where(
+          scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, input.staffId))
+        )
+        .limit(1);
+      if (!found) throw new SalonError("staff_not_found", 404, "El profesional no existe");
+      if (!found.active) {
+        throw new SalonError(
+          "staff_inactive",
+          409,
+          `${found.name} está inactivo. Actívalo para registrarle ventas.`
+        );
+      }
+      member = found;
     }
 
     const { lines, first } = await resolveLines(tx, organizationId, member, saleItemsOf(input));
@@ -464,7 +484,7 @@ export async function registerServiceSale(
           bookingId: input.bookingId ?? null,
           contactId,
           customerName,
-          staffId: member.id,
+          staffId: member?.id ?? null,
           serviceId: first.serviceId,
           comboId: first.comboId,
           amountCents: input.amountCents,
@@ -514,7 +534,7 @@ export async function registerServiceSale(
         organizationId,
         contactId,
         saleId: id,
-        staffId: member.id,
+        staffId: member?.id ?? null,
         milestoneStamps: input.redeemMilestoneStamps,
         items: lines,
       });
@@ -536,7 +556,7 @@ export async function registerServiceSale(
         organizationId,
         contactId,
         saleId: id,
-        staffId: member.id,
+        staffId: member?.id ?? null,
         birthdayDiscount: input.birthdayDiscount === true,
         amountCents: input.amountCents,
       });
@@ -571,8 +591,8 @@ export async function registerServiceSale(
       createdAt: createdAt.toISOString(),
       customerName,
       contactId,
-      staffId: member.id,
-      staffName: member.name,
+      staffId: member?.id ?? null,
+      staffName: member?.name ?? NO_STAFF_LABEL,
       itemKind: first.kind,
       itemName: lines.map((l) => l.name).join(" + "),
       items: lines.map((l, i) => lineToDto(l, amounts[i]!)),
@@ -605,6 +625,29 @@ export async function registerServiceSale(
     publish(organizationId, { type: "booking.updated", data: { bookingId: input.bookingId } });
   }
   return result;
+}
+
+/**
+ * ¿Este negocio trabaja con equipo? Sí si hay algún profesional dado de alta O alguna venta ya se atribuyó a uno
+ * (aunque hoy esté borrado o inactivo). De ello depende que Caja, Panel y Gastos muestren «Comisiones del equipo»:
+ * un negocio que nunca tuvo equipo no necesita una tarjeta siempre en cero, pero uno con comisiones históricas
+ * jamás la pierde.
+ */
+export async function teamInUse(organizationId: string): Promise<boolean> {
+  const db = getDb();
+  const [member, attributed] = await Promise.all([
+    db
+      .select({ id: schema.staff.id })
+      .from(schema.staff)
+      .where(scoped(schema.staff.organizationId, organizationId))
+      .limit(1),
+    db
+      .select({ id: schema.serviceSale.id })
+      .from(schema.serviceSale)
+      .where(scoped(schema.serviceSale.organizationId, organizationId, isNotNull(schema.serviceSale.staffId)))
+      .limit(1),
+  ]);
+  return member.length > 0 || attributed.length > 0;
 }
 
 /** Cómo se ve un cobro «Otro» en Caja y en el historial: «Otro: Peinado para evento». */
@@ -680,7 +723,7 @@ export async function getSalesReport(
     staffId ? eq(sale.staffId, staffId) : undefined
   );
 
-  const [rows, totals, byStaff, byPayment, byItem] = await Promise.all([
+  const [rows, totals, byStaff, byPayment, byItem, withTeam] = await Promise.all([
     db
       .select({
         id: sale.id,
@@ -701,7 +744,8 @@ export async function getSalesReport(
         redeemed: sql<boolean>`exists (select 1 from loyalty_transaction lt where lt.sale_id = ${sale.id} and lt.type = 'redeemed')`,
       })
       .from(sale)
-      .innerJoin(schema.staff, eq(schema.staff.id, sale.staffId))
+      // LEFT: una venta sin profesional (negocio sin equipo) debe aparecer en Caja igual que cuenta en los totales.
+      .leftJoin(schema.staff, eq(schema.staff.id, sale.staffId))
       .leftJoin(schema.service, eq(schema.service.id, sale.serviceId))
       .leftJoin(schema.combo, eq(schema.combo.id, sale.comboId))
       .where(inRange)
@@ -725,7 +769,8 @@ export async function getSalesReport(
         commission: num(sale.staffCommissionCents),
       })
       .from(sale)
-      .innerJoin(schema.staff, eq(schema.staff.id, sale.staffId))
+      // LEFT: las ventas sin profesional forman su propia fila («Sin asignar»), así el desglose suma el total.
+      .leftJoin(schema.staff, eq(schema.staff.id, sale.staffId))
       .where(inRange)
       .groupBy(sale.staffId, schema.staff.name)
       .orderBy(desc(sql`sum(${sale.staffCommissionCents})`), asc(schema.staff.name)),
@@ -762,6 +807,7 @@ export async function getSalesReport(
       )
       .orderBy(desc(sql`count(*)`), desc(sql`sum(${schema.serviceSaleItem.amountCents})`))
       .limit(ITEM_RANKING_LIMIT),
+    teamInUse(organizationId),
   ]);
 
   const truncated = rows.length > REPORT_ROW_LIMIT;
@@ -775,6 +821,7 @@ export async function getSalesReport(
 
   return {
     staffId: staffId ?? null,
+    teamInUse: withTeam,
     period: {
       from: period.dto.from,
       to: period.dto.to,
@@ -789,7 +836,7 @@ export async function getSalesReport(
     },
     byStaff: byStaff.map((r) => ({
       staffId: r.staffId,
-      staffName: r.staffName,
+      staffName: r.staffName ?? NO_STAFF_LABEL,
       count: r.count,
       revenueCents: r.revenue,
       commissionCents: r.commission,
@@ -827,7 +874,7 @@ export async function getSalesReport(
         customerName: r.customerName,
         contactId: r.contactId,
         staffId: r.staffId,
-        staffName: r.staffName,
+        staffName: r.staffName ?? NO_STAFF_LABEL,
         itemKind: items[0]!.kind,
         itemName: items.map((i) => i.name).join(" + "),
         items,
@@ -912,7 +959,7 @@ type SaleSnapshot = {
   customerName: string;
   /** Cuándo ocurrió la venta (ISO). */
   soldAt: string;
-  staffId: string;
+  staffId: string | null;
   staffName: string;
   amountCents: number;
   staffCommissionCents: number;
@@ -956,14 +1003,19 @@ export async function updateSale(
       .for("update");
     if (!current) throw new SalonError("not_found", 404, "La venta no existe");
 
-    const [member] = await tx
-      .select()
-      .from(schema.staff)
-      .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, input.staffId)))
-      .limit(1);
-    if (!member) throw new SalonError("staff_not_found", 404, "El profesional no existe");
-    const staffUnchanged = member.id === current.staffId;
-    if (!member.active && !staffUnchanged) {
+    // Sin `staffId`, la venta queda sin profesional (sin comisión).
+    let member: StaffRow | null = null;
+    if (input.staffId) {
+      const [found] = await tx
+        .select()
+        .from(schema.staff)
+        .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, input.staffId)))
+        .limit(1);
+      if (!found) throw new SalonError("staff_not_found", 404, "El profesional no existe");
+      member = found;
+    }
+    const staffUnchanged = (member?.id ?? null) === current.staffId;
+    if (member && !member.active && !staffUnchanged) {
       throw new SalonError(
         "staff_inactive",
         409,
@@ -973,11 +1025,13 @@ export async function updateSale(
 
     // Cómo era la venta (los ítems vienen con lo que le tocó a cada uno).
     const before = (await loadSaleItems(organizationId, [id])).get(id) ?? [];
-    const [oldStaff] = await tx
-      .select({ name: schema.staff.name })
-      .from(schema.staff)
-      .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, current.staffId)))
-      .limit(1);
+    const [oldStaff] = current.staffId
+      ? await tx
+          .select({ name: schema.staff.name })
+          .from(schema.staff)
+          .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, current.staffId)))
+          .limit(1)
+      : [];
     // Otro cliente: debe ser un contacto de esta organización.
     let nextContactId = current.contactId;
     let nextCustomerName = current.customerName;
@@ -1007,7 +1061,7 @@ export async function updateSale(
     const dateChanged = nextAt.getTime() !== current.createdAt.getTime();
 
     const snapshotOf = (
-      staff: { id: string; name: string },
+      staff: { id: string | null; name: string },
       amountCents: number,
       commission: number,
       net: number,
@@ -1032,7 +1086,7 @@ export async function updateSale(
       })),
     });
     const beforeSnap = snapshotOf(
-      { id: current.staffId, name: oldStaff?.name ?? "—" },
+      { id: current.staffId, name: current.staffId ? (oldStaff?.name ?? "—") : NO_STAFF_LABEL },
       current.amountCents,
       current.staffCommissionCents,
       current.businessNetCents,
@@ -1057,7 +1111,7 @@ export async function updateSale(
       input.customCommissionPercentage
     );
     const afterSnap = snapshotOf(
-      member,
+      member ?? { id: null, name: NO_STAFF_LABEL },
       input.amountCents,
       split.staffCommissionCents,
       split.businessNetCents,
@@ -1076,7 +1130,7 @@ export async function updateSale(
     await tx
       .update(sale)
       .set({
-        staffId: member.id,
+        staffId: member?.id ?? null,
         serviceId: first.serviceId,
         comboId: first.comboId,
         contactId: nextContactId,
@@ -1126,7 +1180,7 @@ export async function updateSale(
       saleId: id,
       contactId: nextContactId,
       previousContactId: current.contactId,
-      staffId: member.id,
+      staffId: member?.id ?? null,
       amountCents: input.amountCents,
       birthdayDiscount: current.birthdayDiscount,
     });

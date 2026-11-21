@@ -280,6 +280,8 @@ export function TeamBars({
 }) {
   const team = report?.byStaff ?? [];
   const max = Math.max(1, ...team.map((m) => m.revenueCents));
+  // Sin equipo (ni ventas atribuidas a alguien) «Rendimiento del equipo» sería una sola barra «Sin asignar».
+  if (report && !report.teamInUse) return null;
 
   return (
     <Section
@@ -307,7 +309,7 @@ export function TeamBars({
           const width = Math.max(3, (m.revenueCents / max) * 100);
           const commissionPct = m.revenueCents > 0 ? (m.commissionCents / m.revenueCents) * 100 : 0;
           return (
-            <li key={m.staffId}>
+            <li key={m.staffId ?? "sin-asignar"}>
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-sm">
                 <span className="min-w-0 truncate font-medium">{m.staffName}</span>
                 <span className="text-xs text-text-3">

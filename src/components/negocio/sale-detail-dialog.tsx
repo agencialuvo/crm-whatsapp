@@ -31,7 +31,10 @@ export function SaleDetailDialog({
     ["Atendió", sale.staffName],
     ["Método de pago", PAYMENT_LABELS[sale.paymentMethod]],
     ["Monto total", <strong key="m">{money(sale.amountCents, currency)}</strong>],
-    ["Comisión del profesional", money(sale.staffCommissionCents, currency)],
+    // Una venta sin profesional no reparte nada: la fila de comisión sobra.
+    ...(sale.staffId === null
+      ? []
+      : ([["Comisión del profesional", money(sale.staffCommissionCents, currency)]] as [string, React.ReactNode][])),
     ["Ganancia neta", <strong key="n">{money(sale.businessNetCents, currency)}</strong>],
   ];
 

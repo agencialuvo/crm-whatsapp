@@ -234,7 +234,7 @@ export function SaleDialog({
       customerPhone: contact || picked || !customerPhone ? null : `51${customerPhone}`,
       birthdayDay: birthdayDay ? Number(birthdayDay) : null,
       birthdayMonth: birthdayMonth ? Number(birthdayMonth) : null,
-      staffId,
+      staffId: staffId || null,
       // Hoy se guarda «ahora»; otro día (pasado o futuro) se guarda a ese día.
       soldOn: soldOn && soldOn !== today ? soldOn : null,
       items: cart.payload(),
@@ -246,8 +246,13 @@ export function SaleDialog({
       ...(birthdayDiscount && isBirthday && { birthdayDiscount: true }),
       ...(redeeming && !birthdayDiscount && { redeemMilestoneStamps: redeeming.stamps }),
     });
-    if (!parsed.success) {
-      setErrors(fieldErrors(parsed.error.issues));
+    // Con equipo hay que elegir quién atendió; sin equipo la venta es del negocio (sin comisión).
+    const staffMissing = !noStaff && !staffId;
+    if (!parsed.success || staffMissing) {
+      setErrors({
+        ...(parsed.success ? {} : fieldErrors(parsed.error.issues)),
+        ...(staffMissing ? { staffId: "Elige quién atendió" } : {}),
+      });
       return;
     }
     setErrors({});
@@ -278,7 +283,11 @@ export function SaleDialog({
     <>
     <Modal
       title={initial?.bookingId ? "Cobrar cita" : "Registrar venta"}
-      description="Se calcula la comisión de quien atendió y lo que le queda al negocio."
+      description={
+        noStaff
+          ? "Todo lo cobrado es del negocio: sin equipo no hay comisiones."
+          : "Se calcula la comisión de quien atendió y lo que le queda al negocio."
+      }
       onClose={onClose}
       busy={busy}
     >
@@ -292,10 +301,6 @@ export function SaleDialog({
             <div key={i} className="h-9 animate-pulse rounded-md bg-subtle" />
           ))}
         </div>
-      ) : noStaff ? (
-        <p className="rounded-md border border-dashed px-3 py-4 text-sm text-text-2">
-          Primero da de alta al menos un profesional activo en «Equipo».
-        </p>
       ) : (
         <form onSubmit={submit} noValidate className="space-y-4">
           {contact || picked ? (
@@ -437,6 +442,7 @@ export function SaleDialog({
           </fieldset>
 
           <div className="grid gap-4 sm:grid-cols-2">
+            {!noStaff && (
             <Field
               label="Atendió" required
               htmlFor="sale-staff"
@@ -458,6 +464,7 @@ export function SaleDialog({
                 invalid={!!errors.staffId}
               />
             </Field>
+            )}
             {/* Poner la venta en otro día es del dueño o administrador (la API también lo exige). */}
             {canAdjustCommission && (
               <Field label="Fecha de atención" htmlFor="sale-sold-on" error={errors.soldOn}>
@@ -592,7 +599,7 @@ export function SaleDialog({
         </form>
       )}
 
-      {(optionsError || loading || noStaff) && (
+      {(optionsError || loading) && (
         <ModalFooter>
           <Button type="button" variant="outline" onClick={onClose}>
             Cerrar

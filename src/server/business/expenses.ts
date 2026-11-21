@@ -211,6 +211,7 @@ export async function getExpensesReport(
 
   const truncated = rows.length > REPORT_ROW_LIMIT;
   return {
+    teamInUse: sales.teamInUse,
     period: {
       from: period.dto.from,
       to: period.dto.to,

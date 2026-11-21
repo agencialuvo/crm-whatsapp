@@ -202,7 +202,7 @@ export async function redeemInSale(
     organizationId: string;
     contactId: string;
     saleId: string;
-    staffId: string;
+    staffId: string | null;
     milestoneStamps: number;
     items: { serviceId: string | null; comboId: string | null }[];
   }
@@ -615,7 +615,7 @@ export async function stampSale(
     organizationId: string;
     contactId: string;
     saleId: string;
-    staffId: string;
+    staffId: string | null;
     birthdayDiscount: boolean;
     /** Lo cobrado: decide si la venta da sello (monto mínimo de la tarjeta, sin importar el servicio). */
     amountCents: number;
@@ -657,7 +657,7 @@ export async function syncSaleStamp(
     saleId: string;
     contactId: string | null;
     previousContactId: string | null;
-    staffId: string;
+    staffId: string | null;
     amountCents: number;
     birthdayDiscount: boolean;
   }

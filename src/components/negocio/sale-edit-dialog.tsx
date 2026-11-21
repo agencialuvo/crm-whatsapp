@@ -44,7 +44,7 @@ export function SaleEditDialog({
 }) {
   const [options, setOptions] = useState<SaleOptionsDto | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
-  const [staffId, setStaffId] = useState(sale.staffId);
+  const [staffId, setStaffId] = useState(sale.staffId ?? "");
   const [customPct, setCustomPct] = useState("");
   const initialAt = wallClockInTz(sale.createdAt, timezone);
   const [soldOn, setSoldOn] = useState(initialAt.date);
@@ -93,27 +93,35 @@ export function SaleEditDialog({
   // El profesional actual siempre se puede dejar, aunque hoy esté inactivo o ya no dé algo del carrito.
   const staffChoices: SearchSelectOption[] = [
     ...staffForItems(options, cart.values),
-    ...(options && !options.staff.some((m) => m.id === sale.staffId)
+    ...(options && sale.staffId && !options.staff.some((m) => m.id === sale.staffId)
       ? [{ id: sale.staffId, name: sale.staffName }]
       : []),
   ]
     .filter((m, i, all) => all.findIndex((x) => x.id === m.id) === i)
     .map((m) => ({ value: m.id, label: m.name }));
 
+  // «Atendió» es obligatorio salvo en un negocio sin equipo o en una venta que ya estaba sin profesional.
+  const noStaffAtAll = options !== null && options.staff.length === 0 && sale.staffId === null;
+  const staffRequired = !noStaffAtAll && sale.staffId !== null;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
     const parsed = saleEditSchema.safeParse({
       items: cart.payload(),
-      staffId,
+      staffId: staffId || null,
       amountCents: cart.amountCents(),
       customCommissionPercentage: customPct.trim() !== "" ? Number(customPct) : null,
       contactId: pickedClient?.id ?? null,
       soldOn: soldOn || null,
       soldTime: soldTime || null,
     });
-    if (!parsed.success) {
-      setErrors(fieldErrors(parsed.error.issues));
+    const staffMissing = staffRequired && !staffId;
+    if (!parsed.success || staffMissing) {
+      setErrors({
+        ...(parsed.success ? {} : fieldErrors(parsed.error.issues)),
+        ...(staffMissing ? { staffId: "Elige quién atendió" } : {}),
+      });
       return;
     }
     setErrors({});
@@ -230,18 +238,20 @@ export function SaleEditDialog({
             </Field>
           </div>
 
-          <Field label="Atendió" required htmlFor="sale-edit-staff" error={errors.staffId}>
-            <SearchSelect
-              id="sale-edit-staff"
-              value={staffId}
-              onChange={setStaffId}
-              options={staffChoices}
-              placeholder="Elige quién atendió…"
-              searchPlaceholder="Buscar profesional…"
-              disabled={busy}
-              invalid={!!errors.staffId}
-            />
-          </Field>
+          {!noStaffAtAll && (
+            <Field label="Atendió" required={staffRequired} htmlFor="sale-edit-staff" error={errors.staffId}>
+              <SearchSelect
+                id="sale-edit-staff"
+                value={staffId}
+                onChange={setStaffId}
+                options={staffChoices}
+                placeholder={sale.staffId === null ? "Sin asignar" : "Elige quién atendió…"}
+                searchPlaceholder="Buscar profesional…"
+                disabled={busy}
+                invalid={!!errors.staffId}
+              />
+            </Field>
+          )}
 
           <SaleItemsField
             cart={cart}

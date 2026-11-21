@@ -89,7 +89,8 @@ export type SaleRowDto = {
   customerName: string;
   /** El contacto de la venta (puede no haber, o haberse borrado). */
   contactId: string | null;
-  staffId: string;
+  /** `null` = venta sin profesional (sin comisión). `staffName` entonces es «Sin asignar». */
+  staffId: string | null;
   staffName: string;
   /** El primer ítem de la venta. */
   itemKind: "service" | "combo";
@@ -118,6 +119,11 @@ export type RegisteredSaleDto = {
 export type SalesReportDto = {
   /** Si el reporte se acotó a un profesional (auditoría rápida). */
   staffId: string | null;
+  /**
+   * ¿El negocio trabaja con equipo (hay profesionales o ventas atribuidas a uno)? Si no, las pantallas esconden
+   * «Comisiones del equipo» y «Rendimiento del equipo», que siempre estarían en cero.
+   */
+  teamInUse: boolean;
   period: { from: string; to: string; timezone: string; days: number };
   totals: {
     count: number;
@@ -127,7 +133,8 @@ export type SalesReportDto = {
   };
   /** Lo que se le debe a cada profesional en el periodo (cierre / pago). */
   byStaff: {
-    staffId: string;
+    /** `null` agrupa las ventas sin profesional (`staffName` = «Sin asignar»): así el desglose suma el total. */
+    staffId: string | null;
     staffName: string;
     count: number;
     revenueCents: number;

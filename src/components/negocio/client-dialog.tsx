@@ -228,14 +228,19 @@ export function ClientDialog({
             items: cart.payload(),
             amountCents: cart.amountCents(),
             soldOn,
-            staffId,
+            staffId: staffId || null,
             paymentMethod: method || undefined,
             customCommissionPercentage:
               customPct.trim() !== "" ? Number(customPct) : null,
           })
         : clientInputSchema.safeParse(fields);
-    if (!parsed.success) {
-      setErrors(fieldErrors(parsed.error.issues));
+    // Con equipo hay que elegir quién atendió; sin equipo la primera compra es del negocio (sin comisión).
+    const staffMissing = currentId === null && !noStaff && !staffId;
+    if (!parsed.success || staffMissing) {
+      setErrors({
+        ...(parsed.success ? {} : fieldErrors(parsed.error.issues)),
+        ...(staffMissing ? { staffId: "Elige quién atendió" } : {}),
+      });
       return;
     }
     setErrors({});
@@ -670,14 +675,10 @@ export function ClientDialog({
                   className="h-9 animate-pulse rounded-md bg-subtle"
                   aria-busy
                 />
-              ) : noStaff ? (
-                <p className="text-sm text-text-2">
-                  Primero da de alta al menos un profesional activo en
-                  «Equipo».
-                </p>
               ) : (
                 <>
                   <div className="grid gap-4 sm:grid-cols-2">
+                    {!noStaff && (
                     <Field
                       label="Atendió" required
                       htmlFor="client-staff"
@@ -699,6 +700,7 @@ export function ClientDialog({
                         invalid={!!errors.staffId}
                       />
                     </Field>
+                    )}
                     <Field
                       label="Fecha de atención"
                       htmlFor="client-sold-on"
@@ -796,7 +798,7 @@ export function ClientDialog({
               </Button>
               <Button
                 type="submit"
-                disabled={busy || (creating && (!options || noStaff))}
+                disabled={busy || (creating && !options)}
               >
                 {busy
                   ? "Guardando…"

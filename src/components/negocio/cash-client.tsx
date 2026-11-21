@@ -125,8 +125,10 @@ export function CashClient({
     const { sale } = result;
     setNotice(
       `Venta registrada: ${sale.itemName} · ${money(sale.amountCents, currency)}. ` +
-        `Comisión de ${sale.staffName}: ${money(sale.staffCommissionCents, currency)} ` +
-        `(${result.commissionPercentage}%, ${COMMISSION_SOURCE_LABEL[result.commissionSource]}).` +
+        (sale.staffId === null
+          ? "Sin profesional: no hay comisión, todo es del negocio."
+          : `Comisión de ${sale.staffName}: ${money(sale.staffCommissionCents, currency)} ` +
+            `(${result.commissionPercentage}%, ${COMMISSION_SOURCE_LABEL[result.commissionSource]}).`) +
         loyaltyNotice(result)
     );
     void load(range);
@@ -169,6 +171,8 @@ export function CashClient({
   }
 
   const t = report?.totals;
+  // Sin equipo (ni comisiones históricas) la tarjeta «Comisiones del equipo» siempre sería cero: no se muestra.
+  const showCommissions = report?.teamInUse ?? true;
   const rows = useMemo(() => report?.rows ?? [], [report]);
   // Búsqueda local por cliente o servicio sobre las ventas ya cargadas del periodo.
   const filteredRows = useMemo(
@@ -245,17 +249,19 @@ export function CashClient({
             </Button>
           </div>
         ) : (
-          <div className={cn("grid grid-cols-2 gap-2.5 transition-opacity sm:gap-3 lg:grid-cols-5", loading && report && "opacity-60")}>
+          <div className={cn("grid grid-cols-2 gap-2.5 transition-opacity sm:gap-3", showCommissions ? "lg:grid-cols-5" : "lg:grid-cols-4", loading && report && "opacity-60")}>
             <StatCard
               label="Ingresos"
               value={t ? money(t.revenueCents, currency) : "…"}
               hint={t ? `${t.count} venta${t.count === 1 ? "" : "s"}` : undefined}
             />
-            <StatCard
-              label="Comisiones del equipo"
-              value={t ? money(t.commissionsCents, currency) : "…"}
-              hint={t ? percent(t.commissionsCents, t.revenueCents) : undefined}
-            />
+            {showCommissions && (
+              <StatCard
+                label="Comisiones del equipo"
+                value={t ? money(t.commissionsCents, currency) : "…"}
+                hint={t ? percent(t.commissionsCents, t.revenueCents) : undefined}
+              />
+            )}
             <div className="min-w-0 rounded-md border bg-subtle px-3 py-2.5">
               <p className="text-xs font-medium text-text-2">Gastos operativos</p>
               <p className="mt-0.5 truncate text-xl font-semibold">
@@ -566,8 +572,11 @@ export function CashClient({
           message={
             <>
               ¿Anular la venta de <strong>{voiding.customerName}</strong> por{" "}
-              <strong>{money(voiding.amountCents, currency)}</strong>? Desaparece de la caja y de la
-              comisión de {voiding.staffName}. No se puede deshacer.
+              <strong>{money(voiding.amountCents, currency)}</strong>?{" "}
+              {voiding.staffId === null
+                ? "Desaparece de la caja."
+                : `Desaparece de la caja y de la comisión de ${voiding.staffName}.`}{" "}
+              No se puede deshacer.
             </>
           }
           confirmLabel="Anular venta"

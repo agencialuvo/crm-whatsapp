@@ -211,6 +211,8 @@ export type ExpenseSummaryDto = {
 };
 
 export type ExpensesReportDto = {
+  /** ¿El negocio trabaja con equipo? Si no, la tarjeta «Comisiones del equipo» no aplica. */
+  teamInUse: boolean;
   period: { from: string; to: string; timezone: string; days: number };
   summary: ExpenseSummaryDto;
   items: ExpenseItemDto[];

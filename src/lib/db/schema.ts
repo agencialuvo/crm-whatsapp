@@ -351,9 +351,8 @@ export const serviceSale = pgTable(
     contactId: text("contact_id").references(() => contact.id, { onDelete: "set null" }),
     /** Nombre del cliente al cobrar: el historial no cambia si se renombra o borra el contacto. */
     customerName: text("customer_name").notNull(),
-    staffId: text("staff_id")
-      .notNull()
-      .references(() => staff.id),
+    /** Quién atendió. `null` = venta sin profesional (negocio sin equipo): sin comisión, todo es del negocio. */
+    staffId: text("staff_id").references(() => staff.id),
     serviceId: text("service_id").references(() => service.id),
     comboId: text("combo_id").references(() => combo.id),
     amountCents: integer("amount_cents").notNull(), // Precio real cobrado

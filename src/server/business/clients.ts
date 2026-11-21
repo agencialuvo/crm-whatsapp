@@ -3,6 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { normalizeMx } from "@/lib/meta/client";
+import { NO_STAFF_LABEL } from "@/lib/salon/staff-fields";
 import type { ClientCreateInput, ClientInput } from "@/lib/salon/schemas";
 import type {
   ContactMatchDto,
@@ -224,7 +225,8 @@ export async function getSalonClient(
       paymentMethod: sale.paymentMethod,
     })
     .from(sale)
-    .innerJoin(schema.staff, eq(schema.staff.id, sale.staffId))
+    // LEFT: una venta sin profesional (negocio sin equipo) sigue en el historial del cliente.
+    .leftJoin(schema.staff, eq(schema.staff.id, sale.staffId))
     .leftJoin(schema.service, eq(schema.service.id, sale.serviceId))
     .leftJoin(schema.combo, eq(schema.combo.id, sale.comboId))
     .where(
@@ -253,7 +255,7 @@ export async function getSalonClient(
         itemName: items
           ? items.map((i) => i.name).join(" + ")
           : (h.comboName ?? h.serviceName ?? "—"),
-        staffName: h.staffName,
+        staffName: h.staffName ?? NO_STAFF_LABEL,
         paymentMethod: h.paymentMethod,
         amountCents: h.amountCents,
       };

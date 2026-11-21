@@ -31,6 +31,7 @@ export function FunnelCards({
   versus,
   currency,
   loading,
+  showCommissions = true,
 }: {
   funnel: FunnelTotalsDto | null;
   previous: FunnelTotalsDto | null;
@@ -38,13 +39,15 @@ export function FunnelCards({
   versus: string;
   currency: string;
   loading: boolean;
+  /** `false` en un negocio sin equipo (ni comisiones históricas): la tarjeta siempre estaría en cero. */
+  showCommissions?: boolean;
 }) {
   const f = funnel;
   // Sin gastos no hay «ganancia neta» completa: es lo que queda antes de pagar los gastos del negocio.
   const expensesApply = f ? f.expensesCents !== null : true;
 
   return (
-    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-4">
+    <div className={cn("grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3", showCommissions ? "lg:grid-cols-4" : "lg:grid-cols-3")}>
       <KpiCard
         label="Ingresos totales"
         value={f ? money(f.revenueCents, currency) : "…"}
@@ -52,18 +55,20 @@ export function FunnelCards({
         trend={f && previous ? trendOf(f.revenueCents, previous.revenueCents, versus, currency) : undefined}
         loading={loading && !!f}
       />
-      <KpiCard
-        label="Comisiones del equipo"
-        value={f ? money(f.commissionsCents, currency) : "…"}
-        hint={
-          f && f.revenueCents > 0
-            ? `${Math.round((f.commissionsCents / f.revenueCents) * 100)}% de los ingresos`
-            : "lo que se lleva el personal"
-        }
-        trend={f && previous ? trendOf(f.commissionsCents, previous.commissionsCents, versus, currency) : undefined}
-        trendTone="neutral"
-        loading={loading && !!f}
-      />
+      {showCommissions && (
+        <KpiCard
+          label="Comisiones del equipo"
+          value={f ? money(f.commissionsCents, currency) : "…"}
+          hint={
+            f && f.revenueCents > 0
+              ? `${Math.round((f.commissionsCents / f.revenueCents) * 100)}% de los ingresos`
+              : "lo que se lleva el personal"
+          }
+          trend={f && previous ? trendOf(f.commissionsCents, previous.commissionsCents, versus, currency) : undefined}
+          trendTone="neutral"
+          loading={loading && !!f}
+        />
+      )}
       <KpiCard
         label="Gastos operativos"
         value={f ? (f.expensesCents === null ? "No aplica" : money(f.expensesCents, currency)) : "…"}
