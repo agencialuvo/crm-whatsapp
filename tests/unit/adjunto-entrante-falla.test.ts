@@ -11,7 +11,10 @@ const h = vi.hoisted(() => ({
   graphRequest: vi.fn(),
 }));
 
-vi.mock("@/lib/env", () => ({ getEnv: () => ({ MEDIA_DIR: "./.no-se-usa", META_GRAPH_BASE_URL: "http://x", META_GRAPH_API_VERSION: "v25.0" }) }));
+vi.mock("@/lib/env", () => ({
+  getEnv: () => ({ MEDIA_DIR: "./.no-se-usa", META_GRAPH_BASE_URL: "http://x", META_GRAPH_API_VERSION: "v25.0" }),
+  isMockEnabled: () => false,
+}));
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
     select: () => ({ from: () => ({ where: () => ({ limit: async () => (h.asset ? [h.asset] : []) }) }) }),
@@ -83,7 +86,7 @@ describe("ensureAssetAvailable anota la falla", () => {
 
   it("un adjunto que excede el límite también es permanente ([gone])", async () => {
     h.asset = pendiente();
-    h.graphRequest.mockResolvedValue({ url: "https://meta.example/x", file_size: 900 * 1024 * 1024 });
+    h.graphRequest.mockResolvedValue({ url: "https://lookaside.fbsbx.com/x", file_size: 900 * 1024 * 1024 });
     await ensureAssetAvailable("org_1", "ast_1");
     expect(String(h.sets.at(-1)!.fetchError)).toMatch(/^\[gone\] /);
   });

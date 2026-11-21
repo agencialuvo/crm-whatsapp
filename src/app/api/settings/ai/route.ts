@@ -1,5 +1,8 @@
 import { apiError, parseBody, withAuth } from "@/lib/api";
+import { chatCompletionsUrl } from "@/lib/ai/presets";
 import { canConfigure } from "@/lib/auth/roles";
+import { isMockEnabled } from "@/lib/env";
+import { validatePublicHttpUrl } from "@/lib/net-guard";
 import {
   AiCredentialError,
   deleteAiCredential,
@@ -31,11 +34,16 @@ export const PUT = withAuth(async (session, req: Request) => {
   const body = await parseBody(req, aiSettingsPutSchema);
   if (!body.ok) return body.response;
 
+  const baseUrl = baseUrlEfectiva(body.data.provider, body.data.baseUrl);
+  // SSRF: el servidor hará la petición a esta dirección. Con los mocks habilitados (nunca en producción) se permite local.
+  const urlError = validatePublicHttpUrl(chatCompletionsUrl(baseUrl), { allowLocal: isMockEnabled() });
+  if (urlError) return apiError(422, "bad_url", urlError);
+
   try {
     await saveAiCredential({
       organizationId: session.organizationId,
       provider: body.data.provider,
-      baseUrl: baseUrlEfectiva(body.data.provider, body.data.baseUrl),
+      baseUrl,
       model: body.data.model,
       token: body.data.token,
     });

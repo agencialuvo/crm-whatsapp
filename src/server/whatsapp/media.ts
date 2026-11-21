@@ -4,9 +4,10 @@ import { link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/prom
 import path from "node:path";
 import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
-import { getEnv } from "@/lib/env";
+import { getEnv, isMockEnabled } from "@/lib/env";
 import { escribirFetchError, leerFetchError } from "@/lib/media-retry";
 import { graphRequest, MetaApiError } from "@/lib/meta/client";
+import { isMetaMediaUrl } from "@/lib/net-guard";
 import {
   getCredentialsByOrg,
   type Credentials,
@@ -247,6 +248,24 @@ export class MediaFetchError extends Error {
 }
 
 /**
+ * La URL de descarga llega en una respuesta de Meta y se pide con el token de WhatsApp en `Authorization`: si no es
+ * un host de Meta, el token NO sale. (El origen del wa-mock solo cuenta con los mocks habilitados, nunca en producción.)
+ */
+function assertMetaMediaUrl(url: string): void {
+  let mockOrigin: string | null = null;
+  if (isMockEnabled() && process.env.META_GRAPH_BASE_URL) {
+    try {
+      mockOrigin = new URL(process.env.META_GRAPH_BASE_URL).origin;
+    } catch {
+      mockOrigin = null;
+    }
+  }
+  if (!isMetaMediaUrl(url, mockOrigin)) {
+    throw new MediaFetchError("La URL del adjunto no es de Meta: no se descarga", true);
+  }
+}
+
+/**
  * Descarga un media de Graph: GET {mediaId} → url efímera → GET con Bearer.
  * El token JAMÁS sale del servidor.
  */
@@ -263,6 +282,7 @@ export async function downloadGraphMedia(
     throw new MediaFetchError("Meta no entregó la metadata del adjunto", gone);
   }
   if (!meta.url) throw new MediaFetchError("Meta no entregó URL del adjunto");
+  assertMetaMediaUrl(meta.url);
   if (meta.file_size && meta.file_size > maxBytes) {
     throw new MediaFetchError("El adjunto excede el límite de tamaño", true);
   }
@@ -314,6 +334,7 @@ export async function streamGraphMediaToR2(
     throw new MediaFetchError("Meta no entregó la metadata del adjunto", gone);
   }
   if (!meta.url) throw new MediaFetchError("Meta no entregó URL del adjunto");
+  assertMetaMediaUrl(meta.url);
   if (!meta.file_size) return null; // sin tamano no se puede firmar la subida
   if (meta.file_size > maxBytes) {
     throw new MediaFetchError("El adjunto excede el límite de tamaño", true);

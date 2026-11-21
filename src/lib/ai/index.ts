@@ -1,5 +1,7 @@
 import type { z } from "zod";
 import { chatCompletionsUrl } from "@/lib/ai/presets";
+import { isMockEnabled } from "@/lib/env";
+import { validatePublicHttpUrl } from "@/lib/net-guard";
 import {
   resolveAiProvider,
   type AiProvider,
@@ -162,6 +164,12 @@ async function callProvider(
   messages: ChatMessage[],
   timeoutMs = 60_000
 ): Promise<string> {
+  // La base URL de una ORGANIZACIÓN la escribió quien configura: se revalida aquí (puede venir de antes de la guarda).
+  // La del entorno la fija quien opera el servidor y puede ser local.
+  if (provider.source === "org") {
+    const bad = validatePublicHttpUrl(chatCompletionsUrl(provider.baseUrl), { allowLocal: isMockEnabled() });
+    if (bad) throw new Error(bad);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

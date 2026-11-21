@@ -1,4 +1,5 @@
 import { chatCompletionsUrl, modelsUrl } from "@/lib/ai/presets";
+import { validatePublicHttpUrl } from "@/lib/net-guard";
 
 /**
  * Sonda del proveedor para Ajustes → IA: «Probar conexión» y «Traer modelos».
@@ -33,50 +34,11 @@ const PROBE_TIMEOUT_MS = 20_000;
 const MAX_BODY = 2000;
 
 /**
- * SSRF: la base URL la escribe quien configura la IA (ya protegido por
- * `canConfigure`), pero sigue siendo el servidor el que hace la petición. Sin
- * esto, un `owner` malicioso o una cuenta comprometida podría usar «Probar
- * conexión» para tocar la red interna del contenedor/host (otro servicio en
- * `localhost`, el endpoint de metadata de la nube en `169.254.169.254`) desde
- * dentro, con las credenciales de red del servidor. Es una lista negra de IP
- * literal, no resuelve DNS: no detiene DNS rebinding, pero cierra el caso
- * común (localhost, rangos privados, link-local) con costo cero.
+ * SSRF: la base URL la escribe quien configura la IA (ya protegido por `canConfigure`), pero sigue siendo el
+ * servidor el que hace la petición. La lista de hosts bloqueados vive en `@/lib/net-guard`.
  */
-function isBlockedHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost")) return true;
-  // IPv4 literal (incluye las representaciones que algunos parsers normalizan).
-  const parts = h.split(".");
-  if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p))) {
-    const [a, b] = parts.map(Number);
-    if (a === 127) return true; // loopback
-    if (a === 10) return true; // privada
-    if (a === 169 && b === 254) return true; // link-local, incluye metadata de nube
-    if (a === 172 && b !== undefined && b >= 16 && b <= 31) return true; // privada
-    if (a === 192 && b === 168) return true; // privada
-    if (a === 0) return true; // "esta red"
-  }
-  // IPv6 loopback/link-local/ULA.
-  if (h === "::1" || h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) {
-    return true;
-  }
-  return false;
-}
-
 function validateExternalUrl(url: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return "La base URL no es una dirección http(s) válida";
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return "La base URL no es una dirección http(s) válida";
-  }
-  if (isBlockedHost(parsed.hostname)) {
-    return "La base URL no puede apuntar a una red interna o local";
-  }
-  return null;
+  return validatePublicHttpUrl(url);
 }
 
 /** Una llamada mínima: un turno de pocos tokens con el modelo elegido. */
