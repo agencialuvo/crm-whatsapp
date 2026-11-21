@@ -1,0 +1,2 @@
+ALTER TABLE "service" ADD COLUMN "price_mode" text DEFAULT 'fixed' NOT NULL;--> statement-breakpoint
+ALTER TABLE "service" ADD CONSTRAINT "service_price_mode" CHECK ("service"."price_mode" in ('fixed', 'variable'));

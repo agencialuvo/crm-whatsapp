@@ -229,6 +229,7 @@ export async function importServices(organizationId: string, rows: SheetRow[]): 
         name: data.input.name,
         description: data.input.description ?? null,
         priceCents: data.input.priceCents,
+        priceMode: data.input.priceMode ?? "fixed",
         durationMinutes: data.input.durationMinutes ?? null,
         defaultCommissionPercentage: data.input.defaultCommissionPercentage ?? null,
         active: data.input.active ?? true,

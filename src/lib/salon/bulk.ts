@@ -60,7 +60,13 @@ export const BULK_COLUMNS: Record<BulkModule, BulkColumn[]> = {
       help: "Opcional: en las ofertas, qué incluye",
       examples: ["Corte con máquina y tijera", "Corte + barba + mascarilla"],
     },
-    { key: "precio", required: true, help: "En soles, ej. 25 o 25.50", examples: ["25", "60"] },
+    { key: "precio", required: true, help: "En soles, ej. 25 o 25.50. Con precio variable puede ir vacío", examples: ["25", "60"] },
+    {
+      key: "precio_variable",
+      required: false,
+      help: "Solo servicios: si, el monto se escribe al vender (el precio es una referencia). Vacío: no",
+      examples: ["no", ""],
+    },
     { key: "duracion_min", required: false, help: "Opcional. Minutos, de 5 a 600", examples: ["30", "75"] },
     {
       key: "comision_pct",
@@ -180,7 +186,11 @@ export function parseServiceRow(row: number, c: Cells): ParsedRow<ServiceRow> {
   const kind = tipo === "servicio" ? "servicio" : tipo === "oferta" ? "oferta" : null;
   if (!kind) errors.push({ row, column: "tipo", message: "Escribe «servicio» u «oferta»" });
 
-  const priceCents = parseMoneyToCents(c.precio ?? "");
+  // Servicio de precio variable: el monto se escribe al vender; el precio de la planilla es solo una referencia (puede ir vacío).
+  const variable = kind === "servicio" ? parseBool(c.precio_variable ?? "", false) : false;
+  if (variable === null) errors.push({ row, column: "precio_variable", message: "Escribe «si» o «no»" });
+  const precioRaw = (c.precio ?? "").trim();
+  const priceCents = variable === true && precioRaw === "" ? 0 : parseMoneyToCents(c.precio ?? "");
   if (priceCents === null) errors.push({ row, column: "precio", message: "Escribe el precio en soles (ej. 25 o 25.50)" });
   // La duración es opcional: vacía = sin duración definida.
   const durationRaw = (c.duracion_min ?? "").trim();
@@ -197,11 +207,11 @@ export function parseServiceRow(row: number, c: Cells): ParsedRow<ServiceRow> {
     if (!imageRef) errors.push({ row, column: "imagen_url", message: "La imagen debe ser una URL copiada desde Medios" });
   }
 
-  if (!kind || priceCents === null || durationBad || active === null) {
+  if (!kind || priceCents === null || durationBad || active === null || variable === null) {
     return { ok: false, row, errors };
   }
 
-  const names = { name: "nombre", description: "descripcion", priceCents: "precio", durationMinutes: "duracion_min", defaultCommissionPercentage: "comision_pct", keywordTrigger: "palabra_clave" };
+  const names = { name: "nombre", description: "descripcion", priceCents: "precio", priceMode: "precio_variable", durationMinutes: "duracion_min", defaultCommissionPercentage: "comision_pct", keywordTrigger: "palabra_clave" };
   if (kind === "servicio") {
     const pctRaw = (c.comision_pct ?? "").trim();
     const pct = pctRaw === "" ? undefined : parseInteger(pctRaw);
@@ -210,6 +220,7 @@ export function parseServiceRow(row: number, c: Cells): ParsedRow<ServiceRow> {
       name: c.nombre ?? "",
       description: (c.descripcion ?? "").trim() || null,
       priceCents,
+      priceMode: variable ? "variable" : "fixed",
       durationMinutes: duration,
       defaultCommissionPercentage: pct === null ? undefined : pct,
       active,

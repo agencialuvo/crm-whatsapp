@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import { service, combo, staff } from "@/lib/db/schema";
 import { scoped } from "@/lib/db/tenant";
 import { eq, isNotNull } from "drizzle-orm";
-import { money } from "@/lib/salon/format";
+import { money, priceLabel } from "@/lib/salon/format";
 import { getBranding } from "@/server/branding";
 import { activeProviders, isOpenToAll } from "@/lib/salon/providers";
 import { catalogStaffMaps } from "@/server/business/catalog-staff";
@@ -54,10 +54,12 @@ export async function getBarbershopAiContext(organizationId: string): Promise<st
       name: service.name,
       description: service.description,
       price: service.priceCents,
+      priceMode: service.priceMode,
       duration: service.durationMinutes,
     })
     .from(service)
-    .where(scoped(service.organizationId, organizationId, eq(service.active, true)));
+    // «Otro» (el cobro a criterio) no es una oferta del negocio: el agente no debe listarlo ni inventarle un precio.
+    .where(scoped(service.organizationId, organizationId, eq(service.active, true), eq(service.isOther, false)));
 
   // 2. Consultar combos u ofertas activas (vital para publicidad pagada y palabras clave)
   const combosActivos = await db
@@ -102,7 +104,7 @@ ${
     ? serviciosActivos
         .map(
           (s) =>
-            `- ${s.name}: ${money(s.price, currency)} ${s.duration ? ` (${s.duration} min)` : ""}.${s.description || ""}${loDan("service", s.id, quienes.services.get(s.id))}`
+            `- ${s.name}: ${priceLabel(s.priceMode, s.price, currency)} ${s.duration ? ` (${s.duration} min)` : ""}.${s.description || ""}${loDan("service", s.id, quienes.services.get(s.id))}`
         )
         .join("\n")
     : "No hay servicios regulares configurados aún."

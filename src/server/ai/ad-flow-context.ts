@@ -3,7 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import type { AdFlowContext, AdFlowTarget } from "@/lib/ad-flow";
 import { activeProviders, isOpenToAll } from "@/lib/salon/providers";
-import { money } from "@/lib/salon/format";
+import { priceLabel } from "@/lib/salon/format";
 import { findActiveAdFlow } from "@/server/attribution/ad-flow";
 import { getBranding } from "@/server/branding";
 import { catalogStaffMaps } from "@/server/business/catalog-staff";
@@ -54,6 +54,7 @@ async function loadTarget(
     name: string;
     description: string | null;
     priceCents: number;
+    priceMode: "fixed" | "variable";
     durationMinutes: number | null;
   } | null = null;
 
@@ -65,6 +66,7 @@ async function loadTarget(
         name: s.name,
         description: s.description,
         priceCents: s.priceCents,
+        priceMode: s.priceMode,
         durationMinutes: s.durationMinutes,
       })
       .from(s)
@@ -84,7 +86,7 @@ async function loadTarget(
       .from(c)
       .where(scoped(c.organizationId, organizationId, eq(c.id, comboId), eq(c.active, true)))
       .limit(1);
-    if (r) base = { kind: "combo", ...r };
+    if (r) base = { kind: "combo", ...r, priceMode: "fixed" };
   }
   if (!base) return null;
 
@@ -111,7 +113,7 @@ async function loadTarget(
     id: base.id,
     name: base.name,
     description: base.description?.trim() || null,
-    priceLabel: money(base.priceCents, currency),
+    priceLabel: priceLabel(base.priceMode, base.priceCents, currency),
     durationMinutes: base.durationMinutes,
     providers: providers && providers.length > 0 ? providers : null,
   };

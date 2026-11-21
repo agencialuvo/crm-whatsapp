@@ -17,7 +17,7 @@ import { ConfirmDialog } from "@/components/negocio/modal";
 import { ServiceDialog } from "@/components/negocio/service-dialog";
 import { staffPreview, type StaffOption } from "@/components/negocio/staff-select";
 import { matchesQuery } from "@/lib/search";
-import { durationLabel, money } from "@/lib/salon/format";
+import { durationLabel, money, priceLabel } from "@/lib/salon/format";
 import type { ComboDto, ServiceDto, StaffDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 
@@ -330,7 +330,7 @@ export function CatalogClient({ currency }: { currency: string }) {
                   {s.durationMinutes === null ? "—" : durationLabel(s.durationMinutes)}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums">
-                  {money(s.priceCents, currency)}
+                  {priceLabel(s.priceMode, s.priceCents, currency)}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-text-2">
                   {s.defaultCommissionPercentage === null ? "—" : `${s.defaultCommissionPercentage}%`}

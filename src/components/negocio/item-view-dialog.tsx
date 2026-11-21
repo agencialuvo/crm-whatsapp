@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/negocio/modal";
 import { staffPreview, type StaffOption } from "@/components/negocio/staff-select";
-import { durationLabel, money } from "@/lib/salon/format";
+import { durationLabel, money, priceLabel } from "@/lib/salon/format";
 import type { ComboDto, ServiceDto } from "@/lib/salon/types";
 
 /**
@@ -23,9 +23,20 @@ export function ItemViewDialog({
 }) {
   const { item } = target;
   const rows: { label: string; value: React.ReactNode }[] = [
-    { label: "Precio", value: <span className="font-semibold">{money(item.priceCents, currency)}</span> },
+    {
+      label: "Precio",
+      value: (
+        <span className="font-semibold">
+          {target.kind === "service" ? priceLabel(target.item.priceMode, item.priceCents, currency) : money(item.priceCents, currency)}
+        </span>
+      ),
+    },
     { label: "Duración", value: durationLabel(item.durationMinutes) },
   ];
+  if (target.kind === "service" && target.item.priceMode === "variable") {
+    rows.push({ label: "Cómo se cobra", value: "El monto se escribe al vender" });
+    if (item.priceCents > 0) rows.push({ label: "Precio de referencia", value: money(item.priceCents, currency) });
+  }
   if (target.kind === "service") {
     rows.push({
       label: "Comisión por defecto",

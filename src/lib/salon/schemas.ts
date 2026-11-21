@@ -31,6 +31,13 @@ export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   otro: "Otro",
 };
 
+/**
+ * Cómo se cobra un servicio. `fixed`: el precio sale del catálogo. `variable`: el monto se escribe al vender y el
+ * precio del catálogo es solo una referencia (puede ser 0). Las ofertas siempre son de precio fijo.
+ */
+export const PRICE_MODES = ["fixed", "variable"] as const;
+export type PriceMode = (typeof PRICE_MODES)[number];
+
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -104,7 +111,10 @@ const optionalDuration = z
 export const serviceInputSchema = z.object({
   name,
   description: optionalText(500),
+  /** Con precio variable es una referencia opcional (0 = sin referencia). */
   priceCents: cents,
+  /** Ausente = `fixed` al crear; en un PATCH, no se toca. */
+  priceMode: z.enum(PRICE_MODES, { errorMap: () => ({ message: "Elige si el precio es fijo o variable" }) }).optional(),
   durationMinutes: optionalDuration,
   /** Qué parte del servicio se queda el profesional si nadie pacta otra. Opcional: sin valor, no hay comisión. */
   defaultCommissionPercentage: percentage.nullish(),
@@ -325,7 +335,10 @@ export const saleItemSchema = z
     serviceId: z.string().min(1).nullish(),
     comboId: z.string().min(1).nullish(),
     other: z.boolean().optional(),
-    /** Solo «Otro»: lo que se cobra por ese ítem; el resto sale del catálogo. */
+    /**
+     * Lo que se cobra por ese ítem en «Otro» y en los servicios de precio VARIABLE (el servidor exige un monto mayor
+     * que cero en ambos: solo él sabe qué servicio es variable). En el resto sale del catálogo y esto se ignora.
+     */
     amountCents: cents.optional(),
     /** Solo «Otro»: obligatoria, dice qué se vendió. */
     note: otherNote,

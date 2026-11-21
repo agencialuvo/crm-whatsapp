@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { Field, MoneyInput } from "@/components/negocio/fields";
 import { parseMoneyToCents } from "@/lib/money";
-import { centsToInput, money } from "@/lib/salon/format";
+import { centsToInput, money, priceLabel } from "@/lib/salon/format";
 import { OTHER_NOTE_MAX, PAYMENT_LABELS, PAYMENT_METHODS, type PaymentMethod } from "@/lib/salon/schemas";
 import type { SaleOptionsDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
@@ -34,7 +34,7 @@ export function useSaleCart(
   seed?: {
     lines: { value: string; price: string; note: string }[];
     amount: string;
-    extra: { value: string; label: string; group: string; priceCents: number }[];
+    extra: { value: string; label: string; group: string; priceCents: number; variable?: boolean }[];
   },
 ) {
   const [cart, setCart] = useState<CartLine[]>(() =>
@@ -55,9 +55,22 @@ export function useSaleCart(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options]);
 
+  // Servicios de precio variable: su monto se escribe en la línea, como en «Otro» (pero sin detalle).
+  const variableValues = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of options?.services ?? []) if (s.priceMode === "variable") set.add(`service:${s.id}`);
+    for (const x of seed?.extra ?? []) if (x.variable) set.add(x.value);
+    return set;
+    // `seed` solo se usa al abrir: lo que importa para recalcular son las opciones.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options]);
+  const isVariable = (value: string): boolean => variableValues.has(value);
+
   const values = cart.map((l) => l.value);
   const lineCents = (l: { value: string; price: string }): number =>
-    l.value === "other" ? (parseMoneyToCents(l.price) ?? 0) : (priceOf.get(l.value) ?? 0);
+    l.value === "other" || isVariable(l.value)
+      ? (parseMoneyToCents(l.price) ?? 0)
+      : (priceOf.get(l.value) ?? 0);
   const total = cart.reduce((a, l) => a + lineCents(l), 0);
   const shownAmount = amountEdited ? amount : cart.length > 0 ? centsToInput(total) : "";
 
@@ -66,7 +79,7 @@ export function useSaleCart(
       value: `service:${x.id}`,
       label: x.name,
       group: "Servicios",
-      hint: money(x.priceCents, currency),
+      hint: priceLabel(x.priceMode, x.priceCents, currency),
     })),
     ...(options?.combos ?? []).map((x) => ({
       value: `combo:${x.id}`,
@@ -79,7 +92,7 @@ export function useSaleCart(
   // Lo que la venta ya tenía y hoy no está activo sigue visible en su lista.
   for (const x of seed?.extra ?? []) {
     if (!choices.some((o) => o.value === x.value)) {
-      choices.push({ value: x.value, label: x.label, group: x.group, hint: money(x.priceCents, currency) });
+      choices.push({ value: x.value, label: x.label, group: x.group, hint: x.variable ? priceLabel("variable", 0, currency) : money(x.priceCents, currency) });
     }
   }
 
@@ -91,6 +104,7 @@ export function useSaleCart(
     amountEdited,
     choices,
     lineCents,
+    isVariable,
     add(value: string) {
       if (!value) return;
       setCart((c) => [...c, { key: nextKey.current++, value, price: "", note: "" }]);
@@ -113,9 +127,13 @@ export function useSaleCart(
     payload() {
       return cart.map((l) => {
         const [kind, id] = l.value.split(":") as ["service" | "combo" | "other", string | undefined];
-        return kind === "other"
-          ? { other: true, note: l.note, amountCents: parseMoneyToCents(l.price) ?? Number.NaN }
-          : { serviceId: kind === "service" ? id : null, comboId: kind === "combo" ? id : null };
+        if (kind === "other") return { other: true, note: l.note, amountCents: parseMoneyToCents(l.price) ?? Number.NaN };
+        return {
+          serviceId: kind === "service" ? id : null,
+          comboId: kind === "combo" ? id : null,
+          // Precio variable: el monto de la línea (el servidor exige que sea mayor que cero).
+          ...(variableValues.has(l.value) ? { amountCents: parseMoneyToCents(l.price) ?? Number.NaN } : {}),
+        };
       });
     },
     /** El monto cobrado en centavos (`NaN` si está vacío o es inválido). */
@@ -171,6 +189,7 @@ export function SaleItemsField({
             {cart.cart.map((l) => {
               const choice = cart.choices.find((o) => o.value === l.value);
               const isOtherLine = l.value === "other";
+              const variableLine = cart.isVariable(l.value);
               const label = isOtherLine ? "Otro" : (choice?.label ?? "—");
               return (
                 <li key={l.key} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
@@ -180,7 +199,7 @@ export function SaleItemsField({
                       <span className="ml-1.5 text-[11px] font-normal text-text-3">oferta</span>
                     )}
                   </span>
-                  {isOtherLine ? (
+                  {isOtherLine || variableLine ? (
                     <div className="w-36 shrink-0">
                       <MoneyInput
                         id={`${idPrefix}-other-${l.key}`}

@@ -148,7 +148,10 @@ export const service = pgTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
+    /** Precio de lista. Con `priceMode = variable` es solo una referencia (puede ser 0): el monto se escribe al vender. */
     priceCents: integer("price_cents").notNull(), // en centavos (ej: 2500 = S/ 25.00)
+    /** `fixed`: el precio sale del catálogo. `variable`: se cobra el monto que se escriba en la venta (el agente dice «a consultar»). */
+    priceMode: text("price_mode", { enum: ["fixed", "variable"] }).notNull().default("fixed"),
     /** Opcional: sin duración definida (`null`) la agenda usa su franja estándar (`slotMinutes`). */
     durationMinutes: integer("duration_minutes"),
     photoUrl: text("photo_url"), // Sin uso (queda por compatibilidad): la imagen vive en `imageMediaId`
@@ -172,6 +175,7 @@ export const service = pgTable(
     index("service_org_idx").on(t.organizationId, t.active),
     uniqueIndex("service_org_other_uq").on(t.organizationId).where(sql`${t.isOther}`),
     check("service_price_nonneg", sql`${t.priceCents} >= 0`),
+    check("service_price_mode", sql`${t.priceMode} in ('fixed', 'variable')`),
     check("service_duration_pos", sql`${t.durationMinutes} > 0`),
     check(
       "service_commission_pct",

@@ -4,10 +4,10 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { money } from "@/lib/salon/format";
+import { priceLabel } from "@/lib/salon/format";
 import type { ComboDto, ServiceDto } from "@/lib/salon/types";
 
-type Option = { id: string; name: string; priceCents: number };
+type Option = { id: string; name: string; priceCents: number; priceMode?: "fixed" | "variable" };
 
 /**
  * Selector múltiple para Marketing (campaña de cumpleaños, sellos y premios): una lista con casillas y
@@ -70,7 +70,7 @@ export function ServiceMultiSelect({
                     className="accent-primary"
                   />
                   <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                  <span className="shrink-0 text-xs tabular-nums text-text-3">{money(s.priceCents, currency)}</span>
+                  <span className="shrink-0 text-xs tabular-nums text-text-3">{priceLabel(s.priceMode, s.priceCents, currency)}</span>
                 </label>
               </li>
             );

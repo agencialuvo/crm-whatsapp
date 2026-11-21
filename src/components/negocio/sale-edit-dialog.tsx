@@ -66,7 +66,7 @@ export function SaleEditDialog({
   const cart = useSaleCart(options, currency, undefined, {
     lines: sale.items.map((i) => ({
       value: i.other ? "other" : i.comboId ? `combo:${i.comboId}` : `service:${i.serviceId}`,
-      price: i.other ? centsToInput(i.amountCents) : "",
+      price: i.other || i.variable ? centsToInput(i.amountCents) : "",
       note: i.note ?? "",
     })),
     amount: centsToInput(sale.amountCents),
@@ -77,6 +77,7 @@ export function SaleEditDialog({
         label: i.name,
         group: i.comboId ? "Ofertas" : "Servicios",
         priceCents: i.amountCents,
+        variable: i.variable === true,
       })),
   });
 

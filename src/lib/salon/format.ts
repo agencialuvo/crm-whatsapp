@@ -39,6 +39,18 @@ export function money(cents: number | null | undefined, currency: string): strin
   return formatMoneyCents(cents, currency, moneyLocale(currency)) ?? "—";
 }
 
+/** Lo que se dice de un servicio cuyo precio no está fijado: nunca un «S/ 0.00» que el cliente tomaría por gratis. */
+export const PRICE_ON_REQUEST = "Precio a consultar";
+
+/** El precio de un servicio para mostrarlo (pantallas y agente): el monto, o «Precio a consultar» si es variable. */
+export function priceLabel(
+  mode: "fixed" | "variable" | null | undefined,
+  cents: number | null | undefined,
+  currency: string
+): string {
+  return mode === "variable" ? PRICE_ON_REQUEST : money(cents, currency);
+}
+
 /** El símbolo suelto ("S/", "$") para pegarlo delante de un campo de monto. */
 export function currencySymbol(currency: string): string {
   try {

@@ -8,7 +8,7 @@ import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-se
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Field, PhoneInput } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
-import { durationLabel, formatPeruPhone, money } from "@/lib/salon/format";
+import { durationLabel, formatPeruPhone, money, priceLabel } from "@/lib/salon/format";
 import { newBoardBookingSchema } from "@/lib/salon/schemas";
 import { staffForItem } from "@/lib/salon/staff-for-item";
 import { isPersonName, sanitizePersonName } from "@/lib/salon/staff-fields";
@@ -255,7 +255,7 @@ export function NewBookingDialog({
       value: `service:${s.id}`,
       label: s.name,
       group: "Servicios",
-      hint: `${money(s.priceCents, currency)} · ${durationLabel(s.durationMinutes)}`,
+      hint: `${priceLabel(s.priceMode, s.priceCents, currency)} · ${durationLabel(s.durationMinutes)}`,
     })),
     ...(options?.combos ?? []).map((c) => ({
       value: `combo:${c.id}`,

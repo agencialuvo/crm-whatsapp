@@ -2,7 +2,7 @@ import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import type { CommissionSource } from "@/lib/salon/commission";
 import type { FunnelPointDto, FunnelTotalsDto } from "@/lib/salon/funnel";
 import type { RepurchaseDto, TicketSplitDto } from "@/lib/salon/insights";
-import type { PaymentMethod, ScheduleDay } from "@/lib/salon/schemas";
+import type { PaymentMethod, PriceMode, ScheduleDay } from "@/lib/salon/schemas";
 
 /**
  * Módulo SALON — lo que viaja entre la API y las pantallas.
@@ -16,7 +16,10 @@ export type ServiceDto = {
   id: string;
   name: string;
   description: string | null;
+  /** Con precio variable, solo una referencia (0 = ninguna). */
   priceCents: number;
+  /** `fixed`: precio del catálogo. `variable`: el monto se escribe al vender. */
+  priceMode: PriceMode;
   /** `null` = sin duración definida: la agenda usa su franja estándar. */
   durationMinutes: number | null;
   /** `null` = sin comisión definida para el servicio. */
@@ -63,7 +66,7 @@ export type StaffDto = {
 /** Lo mínimo para armar una venta: SIN comisiones (lo ve todo el equipo). */
 export type SaleOptionsDto = {
   /** `staffIds` vacío = lo da todo el equipo. */
-  services: { id: string; name: string; priceCents: number; durationMinutes: number | null; staffIds: string[] }[];
+  services: { id: string; name: string; priceCents: number; priceMode: PriceMode; durationMinutes: number | null; staffIds: string[] }[];
   combos: { id: string; name: string; priceCents: number; durationMinutes: number | null; staffIds: string[] }[];
   staff: { id: string; name: string }[];
   /** Campaña de cumpleaños (Ajustes → Marketing): decide si Caja ofrece el descuento y sobre qué servicios. */
@@ -80,6 +83,8 @@ export type SaleItemDto = {
   /** «Otro»: el cobro a criterio, con su detalle en `note`. */
   other: boolean;
   note: string | null;
+  /** Servicio de precio VARIABLE: su monto se escribió al vender y al editar la venta hay que volver a darlo. */
+  variable?: boolean;
 };
 
 export type SaleRowDto = {

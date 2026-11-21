@@ -39,6 +39,7 @@ function toServiceDto(r: ServiceRow, staffIds: string[]): ServiceDto {
     name: r.name,
     description: r.description,
     priceCents: r.priceCents,
+    priceMode: r.priceMode,
     durationMinutes: r.durationMinutes,
     defaultCommissionPercentage: r.defaultCommissionPercentage ?? null,
     active: r.active,
@@ -179,6 +180,7 @@ export async function createService(
         name: input.name,
         description: input.description ?? null,
         priceCents: input.priceCents,
+        priceMode: input.priceMode ?? "fixed",
         durationMinutes: input.durationMinutes ?? null,
         defaultCommissionPercentage: input.defaultCommissionPercentage ?? null,
         active: input.active ?? true,
@@ -204,6 +206,7 @@ export async function updateService(
         ...(patch.name !== undefined && { name: patch.name }),
         ...(patch.description !== undefined && { description: patch.description }),
         ...(patch.priceCents !== undefined && { priceCents: patch.priceCents }),
+        ...(patch.priceMode !== undefined && { priceMode: patch.priceMode }),
         ...(patch.durationMinutes !== undefined && {
           durationMinutes: patch.durationMinutes,
         }),

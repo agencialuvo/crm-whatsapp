@@ -6,6 +6,7 @@ import { clampPercent } from "@/lib/percent";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { MediaImageField, type ImagenElegida } from "@/components/medios/media-picker";
 import { DurationInput, Field, fieldErrors, MoneyInput, toInt } from "@/components/negocio/fields";
@@ -13,7 +14,7 @@ import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { StaffSelect, staffIdsToSend, type StaffOption } from "@/components/negocio/staff-select";
 import { parseMoneyToCents } from "@/lib/money";
 import { centsToInput } from "@/lib/salon/format";
-import { serviceInputSchema } from "@/lib/salon/schemas";
+import { serviceInputSchema, type PriceMode } from "@/lib/salon/schemas";
 import type { ServiceDto } from "@/lib/salon/types";
 
 /**
@@ -44,7 +45,9 @@ export function ServiceDialog({
   const [staffEnabled, setStaffEnabled] = useState((item?.staffIds.length ?? 0) > 0);
   const [staffSelected, setStaffSelected] = useState<string[]>(item?.staffIds ?? []);
   const [description, setDescription] = useState(item?.description ?? "");
-  const [price, setPrice] = useState(item ? centsToInput(item.priceCents) : "");
+  const [priceMode, setPriceMode] = useState<PriceMode>(item?.priceMode ?? "fixed");
+  // Con precio variable el precio es solo una referencia; en 0 (sin referencia) el campo queda vacío.
+  const [price, setPrice] = useState(item && !(item.priceMode === "variable" && item.priceCents === 0) ? centsToInput(item.priceCents) : "");
   const [duration, setDuration] = useState(item?.durationMinutes != null ? String(item.durationMinutes) : "");
   const [commission, setCommission] = useState(item?.defaultCommissionPercentage?.toString() ?? "");
   const [active, setActive] = useState(item?.active ?? true);
@@ -58,10 +61,13 @@ export function ServiceDialog({
     const staffToSend = staffIdsToSend(staffEnabled, staffSelected);
 
     const cents = parseMoneyToCents(price);
+    const variable = priceMode === "variable";
     const parsed = serviceInputSchema.safeParse({
       name,
       description,
-      priceCents: cents ?? Number.NaN,
+      // Variable: el precio es opcional (referencia); vacío = 0.
+      priceCents: variable && price.trim() === "" ? 0 : (cents ?? Number.NaN),
+      priceMode,
       durationMinutes: duration.trim() === "" ? null : toInt(duration),
       defaultCommissionPercentage: commission.trim() === "" ? null : toInt(commission),
       active,
@@ -140,8 +146,48 @@ export function ServiceDialog({
           />
         </Field>
 
+        <fieldset>
+          <legend className="mb-1.5 text-sm font-medium">Tipo de precio</legend>
+          <div role="radiogroup" aria-label="Tipo de precio" className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["fixed", "Precio fijo"],
+                ["variable", "Precio variable"],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={priceMode === mode}
+                disabled={busy}
+                onClick={() => setPriceMode(mode)}
+                className={cn(
+                  "rounded-md border px-2 py-2 text-sm font-medium transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  priceMode === mode
+                    ? "border-brand bg-brand-tint text-brand-text"
+                    : "text-text-2 hover:bg-accent hover:text-foreground"
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-text-3">
+            {priceMode === "variable"
+              ? "El monto se escribe al cobrar, y el agente responde «Precio a consultar» en vez de un precio."
+              : "Siempre se cobra este precio."}
+          </p>
+        </fieldset>
+
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Precio" required htmlFor="srv-price" error={errors.priceCents}>
+          <Field
+            label={priceMode === "variable" ? "Precio de referencia (opcional)" : "Precio"}
+            required={priceMode !== "variable"}
+            htmlFor="srv-price"
+            error={errors.priceCents}
+          >
             <MoneyInput
               id="srv-price"
               value={price}

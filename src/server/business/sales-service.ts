@@ -66,6 +66,8 @@ type Line = {
   /** Solo «Otro»: qué fue en concreto. */
   note: string | null;
   other: boolean;
+  /** Servicio de precio VARIABLE: `baseCents` es el monto que se escribió al vender. */
+  variable: boolean;
   baseCents: number;
   defaultPct: number | null;
 };
@@ -78,6 +80,7 @@ const lineToDto = (l: Line, amountCents: number): SaleItemDto => ({
   comboId: l.comboId,
   other: l.other,
   note: l.note,
+  variable: l.variable,
 });
 
 /**
@@ -155,6 +158,15 @@ async function resolveLines(
           `${member.name} no da «${svc.name}». Elige a uno de los profesionales que lo dan.`
         );
       }
+      // Precio variable: el monto lo escribe quien vende (la pantalla lo pide; la API se puede llamar sin ella).
+      const variable = !raw.other && svc.priceMode === "variable";
+      if (variable && !(typeof raw.amountCents === "number" && raw.amountCents > 0)) {
+        throw new SalonError(
+          "price_required",
+          422,
+          `Escribe el precio cobrado de «${svc.name}»: es un servicio de precio variable.`
+        );
+      }
       lines.push({
         kind: "service",
         serviceId: svc.id,
@@ -162,7 +174,8 @@ async function resolveLines(
         name: raw.other ? otherLabel(raw.note) : svc.name,
         note: raw.other ? (raw.note?.trim() ?? null) : null,
         other: !!raw.other,
-        baseCents: raw.other ? (raw.amountCents ?? 0) : svc.priceCents,
+        variable,
+        baseCents: raw.other || variable ? (raw.amountCents ?? 0) : svc.priceCents,
         // «Otro» no tiene porcentaje propio (cobro a criterio): solo comisiona lo del profesional o el puntual.
         defaultPct: raw.other ? null : svc.defaultCommissionPercentage,
       });
@@ -197,6 +210,7 @@ async function resolveLines(
         name: cmb.name,
         note: null,
         other: false,
+        variable: false,
         baseCents: cmb.priceCents,
         defaultPct: null,
       });
@@ -322,7 +336,11 @@ export async function registerServiceSale(
       member = found;
     }
 
-    const { lines, first } = await resolveLines(tx, organizationId, member, saleItemsOf(input));
+    // En la forma de un solo ítem (sin carrito), el total cobrado ES el monto de ese ítem: lo usa un servicio variable.
+    const rawItems = saleItemsOf(input).map((i) =>
+      input.items || i.other ? i : { ...i, amountCents: input.amountCents }
+    );
+    const { lines, first } = await resolveLines(tx, organizationId, member, rawItems);
 
     // Descuento de cumpleaños: solo con la campaña encendida y sobre los servicios que ella permite
     // (la pantalla ya lo esconde; esto lo sostiene si alguien llama a la API directo).
@@ -672,6 +690,7 @@ export async function loadSaleItems(
       comboId: item.comboId,
       note: item.note,
       isOther: schema.service.isOther,
+      priceMode: schema.service.priceMode,
       serviceName: schema.service.name,
       comboName: schema.combo.name,
       amountCents: item.amountCents,
@@ -691,6 +710,7 @@ export async function loadSaleItems(
       comboId: r.comboId,
       other: !!r.isOther,
       note: r.note,
+      variable: !r.isOther && r.priceMode === "variable",
     });
     by.set(r.saleId, list);
   }
@@ -1240,6 +1260,7 @@ export async function getSaleOptions(organizationId: string): Promise<SaleOption
         id: schema.service.id,
         name: schema.service.name,
         priceCents: schema.service.priceCents,
+        priceMode: schema.service.priceMode,
         durationMinutes: schema.service.durationMinutes,
       })
       .from(schema.service)
