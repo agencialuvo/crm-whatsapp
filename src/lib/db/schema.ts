@@ -625,6 +625,55 @@ export const userUiPreferences = pgTable(
 );
 
 /* ============================================================
+ * Menú lateral personalizable (por organización)
+ * ============================================================ */
+
+/**
+ * Configuración del menú lateral de una organización. Dos tipos de fila:
+ *
+ * - `active`: el menú que se ve hoy (a lo sumo UNA por organización). Sin fila, manda el menú estándar.
+ * - `template`: una plantilla guardada por la organización (con su `name`, único sin importar mayúsculas).
+ *
+ * Las plantillas BASE del sistema NO viven aquí: están en código (`lib/menu-config.ts`) y son de solo lectura; editar
+ * una deja la copia personalizada en la fila `active` (con `base_key` = la plantilla de la que partió).
+ *
+ * `config` es solo VISIBILIDAD, orden, nombres e iconos: no concede ni quita acceso (eso lo deciden los guardias de
+ * cada pantalla, el rol, el plan y las banderas) y ocultar un ítem jamás borra datos. Se valida con `menuConfigSchema`
+ * al escribir; al leer, una configuración que ya no cumpla el esquema se ignora (vale el menú estándar).
+ */
+export const menuConfig = pgTable(
+  "menu_config",
+  {
+    id: text("id").primaryKey(), // prefix: 'mnu'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["active", "template"] }).notNull(),
+    /** Nombre de la plantilla guardada; `null` en la configuración activa. */
+    name: text("name"),
+    /** De qué plantilla partió (llave de una base del sistema o id de una guardada); informativo. */
+    baseKey: text("base_key"),
+    config: jsonb("config").$type<{ v: 1; groups: unknown[] }>().notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("menu_config_org_idx").on(t.organizationId, t.kind),
+    // A lo sumo una configuración activa por organización.
+    uniqueIndex("menu_config_active_uq").on(t.organizationId).where(sql`${t.kind} = 'active'`),
+    // Dos plantillas de una organización no se llaman igual (sin importar mayúsculas).
+    uniqueIndex("menu_config_template_name_uq")
+      .on(t.organizationId, sql`lower(${t.name})`)
+      .where(sql`${t.kind} = 'template'`),
+    check("menu_config_kind", sql`${t.kind} in ('active', 'template')`),
+    check(
+      "menu_config_name",
+      sql`(${t.kind} = 'active' and ${t.name} is null) or (${t.kind} = 'template' and char_length(${t.name}) between 1 and 60)`
+    ),
+  ]
+);
+
+/* ============================================================
  * Módulo SaaS: Suscripciones, Planes y Categorías de Sector
  * ============================================================ */
 

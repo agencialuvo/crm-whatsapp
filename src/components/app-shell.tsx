@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import type { Branding } from "@/lib/branding";
+import type { MenuConfig } from "@/lib/menu-config";
 import { AppNav } from "@/components/app-nav";
 import { BrandLogo } from "@/components/brand-mark";
 
@@ -27,6 +28,7 @@ export function AppShell({
   agenda = false,
   salon = false,
   automations = false,
+  menuConfig = null,
   aviso = null,
   children,
 }: {
@@ -41,6 +43,8 @@ export function AppShell({
   salon?: boolean;
   /** Automatizaciones (mensajes y esperas programados): lo decide el servidor. */
   automations?: boolean;
+  /** El menú personalizado de la organización (orden, nombres, iconos, ocultos); `null` = el estándar. */
+  menuConfig?: MenuConfig | null;
   /**
    * Franja de aviso por encima de TODA la aplicación (#85).
    *
@@ -89,6 +93,7 @@ export function AppShell({
         agenda={agenda}
         salon={salon}
         automations={automations}
+        menuConfig={menuConfig}
         open={navOpen}
         onClose={() => setNavOpen(false)}
       />

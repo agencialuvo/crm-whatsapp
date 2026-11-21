@@ -1,31 +1,12 @@
-import {
-  Bell,
-  CalendarDays,
-  ChartColumn,
-  FlaskConical,
-  Images,
-  Inbox,
-  Kanban,
-  KeyRound,
-  ShieldCheck,
-  UserRound,
-  Receipt,
-  LayoutDashboard,
-  ListChecks,
-  Scissors,
-  UserCheck,
-  Settings,
-  Sparkles,
-  Users,
-  UsersRound,
-  Wallet,
-  Zap,
-  type LucideIcon,
-} from "lucide-react";
+import { KeyRound, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
 import { canConfigure } from "@/lib/auth/roles";
+import { ICON_CATALOG, type IconKey } from "@/lib/icon-catalog";
+import { applyMenuConfig, type MenuConfig } from "@/lib/menu-config";
+import { NAV_ITEM_GROUP, type NavGroupKey, type NavItemKey } from "@/lib/nav-keys";
 import type { PlanModule } from "@/lib/plan-modules";
 
 export type { PlanModule };
+export type { NavGroupKey, NavItemKey };
 
 /**
  * #87 — El modelo del menú, separado del componente que lo pinta.
@@ -35,12 +16,20 @@ export type { PlanModule };
  * que bajan por prop desde el servidor) y el rol de quien mira. Tenerlo aquí,
  * sin React, deja que una prueba unitaria afirme qué aparece y qué no sin
  * dibujar nada.
+ *
+ * Bloque 3 — cada entrada y cada bloque tienen una LLAVE ESTABLE (`nav-keys.ts`) y un icono del catálogo propio
+ * (`icon-catalog.ts`). Sobre este menú base, una organización puede reordenar, ocultar y renombrar
+ * (`menu-config.ts`, `applyMenuConfig`): jamás agrega entradas ni toca lo que protegen las banderas, el rol o el plan.
  */
 
 export type NavItem = {
+  /** Llave estable: la guardan las configuraciones de menú. No cambia aunque cambie la ruta o el nombre. */
+  key: NavItemKey;
   href: string;
   label: string;
   icon: LucideIcon;
+  /** La llave del icono en el catálogo propio (`ICON_CATALOG`); `icon` es su resultado. */
+  iconKey: IconKey;
   /** Muestra el contador de no leídos (solo la Bandeja). */
   badge?: boolean;
   /** Módulo del plan que da acceso a esta entrada; sin él, la entrada es libre. */
@@ -50,6 +39,8 @@ export type NavItem = {
 };
 
 export type NavGroup = {
+  /** Llave estable del bloque. */
+  key: NavGroupKey;
   /** Encabezado pequeño; sin él, el grupo es una entrada suelta. */
   title?: string;
   items: NavItem[];
@@ -57,15 +48,69 @@ export type NavGroup = {
   bottom?: boolean;
 };
 
-/** Ajustes, la entrada de configuración del grupo «Sistema». */
-export const SETTINGS_ITEM: NavItem = {
-  href: "/ajustes",
-  label: "Ajustes",
-  icon: Settings,
-};
-
 /** Encabezado del bloque donde vive Ajustes, abajo de la barra. */
 export const SYSTEM_TITLE = "Sistema";
+
+/** Ajustes, la entrada de configuración del grupo «Sistema». Nunca se oculta (ver `PROTECTED_ITEM_KEYS`). */
+export const SETTINGS_ITEM: NavItem = {
+  key: "ajustes",
+  href: "/ajustes",
+  label: "Ajustes",
+  icon: ICON_CATALOG.settings,
+  iconKey: "settings",
+};
+
+type CatalogEntry = { href: string; label: string; iconKey: IconKey; module?: PlanModule; badge?: boolean };
+
+/**
+ * El catálogo de entradas: ruta, rótulo de siempre, icono y módulo del plan de cada una. La llave es la estable; el
+ * resto puede cambiar sin romper las configuraciones guardadas. El bloque donde nace cada entrada está en
+ * `NAV_ITEM_GROUP` (`nav-keys.ts`).
+ */
+export const NAV_ITEM_CATALOG: Record<NavItemKey, CatalogEntry> = {
+  panel: { href: "/panel", label: "Panel", iconKey: "layoutDashboard", module: "finances" },
+  bandeja: { href: "/bandeja", label: "Bandeja", iconKey: "inbox", badge: true },
+  pipeline: { href: "/pipeline", label: "Pipeline", iconKey: "kanban" },
+  caja: { href: "/caja", label: "Caja", iconKey: "wallet", module: "finances" },
+  citas: { href: "/citas", label: "Citas", iconKey: "calendarDays", module: "agenda" },
+  clientes: { href: "/clientes", label: "Clientes", iconKey: "userCheck", module: "salon" },
+  servicios: { href: "/servicios", label: "Servicios", iconKey: "scissors", module: "salon" },
+  equipo: { href: "/equipo", label: "Equipo", iconKey: "usersRound", module: "salon" },
+  gastos: { href: "/gastos", label: "Gastos", iconKey: "receipt", module: "finances" },
+  contactos: { href: "/contactos", label: "Contactos", iconKey: "users" },
+  medios: { href: "/medios", label: "Medios", iconKey: "images" },
+  automatizaciones: { href: "/automatizaciones", label: "Automatizaciones", iconKey: "zap" },
+  guia: { href: "/guia-de-inicio", label: "Guía de inicio", iconKey: "listChecks" },
+  agente: { href: "/agente", label: "Agente", iconKey: "sparkles" },
+  laboratorio: { href: "/laboratorio", label: "Laboratorio", iconKey: "flaskConical" },
+  resultados: { href: "/resultados", label: "Resultados", iconKey: "chartColumn" },
+  notificaciones: { href: "/notificaciones", label: "Notificaciones", iconKey: "bell" },
+  ajustes: { href: SETTINGS_ITEM.href, label: SETTINGS_ITEM.label, iconKey: "settings" },
+};
+
+/** La entrada del catálogo como la usa el menú base. «Ajustes» es siempre la MISMA constante `SETTINGS_ITEM`. */
+function navItem(key: NavItemKey): NavItem {
+  if (key === "ajustes") return SETTINGS_ITEM;
+  const e = NAV_ITEM_CATALOG[key];
+  return {
+    key,
+    href: e.href,
+    label: e.label,
+    icon: ICON_CATALOG[e.iconKey],
+    iconKey: e.iconKey,
+    ...(e.badge && { badge: true }),
+    ...(e.module && { module: e.module }),
+  };
+}
+
+/** El título de cada bloque (los que no tienen, son una entrada suelta). */
+export const NAV_GROUP_TITLES: Record<NavGroupKey, string | undefined> = {
+  trabajo: "Trabajo",
+  gestion: "Gestión y equipo",
+  agente: "Agente",
+  resultados: undefined,
+  sistema: SYSTEM_TITLE,
+};
 
 /**
  * Hoja de ruta v2.0: Bandeja, Pipeline y el bloque Agente (Guía de inicio,
@@ -81,6 +126,8 @@ export const NAV_V2 = process.env.NEXT_PUBLIC_NAV_V2 === "on";
  * Trabajo (Panel · Caja · Citas · Clientes), Gestión y equipo (Servicios ·
  * Equipo · Gastos · Contactos · Medios) y Sistema (Notificaciones · Ajustes),
  * este último al pie de la barra.
+ *
+ * Este es el menú BASE; la personalización de cada organización se aplica después con `applyMenuConfig`.
  */
 export function appNavGroups({
   agenda = false,
@@ -112,58 +159,41 @@ export function appNavGroups({
   // La agenda por sillas no es un ítem aparte: es la vista principal de Citas
   // (con su calendario y bloqueos en otra pestaña).
   const trabajo: NavItem[] = [
-    ...(salonManager ? [{ href: "/panel", label: "Panel", icon: LayoutDashboard, module: "finances" as const }] : []),
-    ...(NAV_V2
-      ? [
-          { href: "/bandeja", label: "Bandeja", icon: Inbox, badge: true },
-          { href: "/pipeline", label: "Pipeline", icon: Kanban },
-        ]
-      : []),
-    ...(salonManager ? [{ href: "/caja", label: "Caja", icon: Wallet, module: "finances" as const }] : []),
-    ...(agenda ? [{ href: "/citas", label: "Citas", icon: CalendarDays, module: "agenda" as const }] : []),
-    ...(salonManager ? [{ href: "/clientes", label: "Clientes", icon: UserCheck, module: "salon" as const }] : []),
+    ...(salonManager ? [navItem("panel")] : []),
+    ...(NAV_V2 ? [navItem("bandeja"), navItem("pipeline")] : []),
+    ...(salonManager ? [navItem("caja")] : []),
+    ...(agenda ? [navItem("citas")] : []),
+    ...(salonManager ? [navItem("clientes")] : []),
   ];
   const gestion: NavItem[] = [
-    ...(salonManager
-      ? [
-          { href: "/servicios", label: "Servicios", icon: Scissors, module: "salon" as const },
-          { href: "/equipo", label: "Equipo", icon: UsersRound, module: "salon" as const },
-          { href: "/gastos", label: "Gastos", icon: Receipt, module: "finances" as const },
-        ]
-      : []),
-    { href: "/contactos", label: "Contactos", icon: Users },
-    { href: "/medios", label: "Medios", icon: Images },
+    ...(salonManager ? [navItem("servicios"), navItem("equipo"), navItem("gastos")] : []),
+    navItem("contactos"),
+    navItem("medios"),
     // Configura mensajes automáticos a clientes: solo dueño o administrador, y solo con la bandera.
-    ...(automations && canConfigure(role)
-      ? [{ href: "/automatizaciones", label: "Automatizaciones", icon: Zap }]
-      : []),
+    ...(automations && canConfigure(role) ? [navItem("automatizaciones")] : []),
   ];
-  const sistema: NavItem[] = [
-    { href: "/notificaciones", label: "Notificaciones", icon: Bell },
-    SETTINGS_ITEM,
-  ];
+  const sistema: NavItem[] = [navItem("notificaciones"), navItem("ajustes")];
   // Sin entradas, un grupo no se pinta (un miembro del equipo sin agenda no tiene «Trabajo»).
-  const groups: NavGroup[] = [
-    { title: "Trabajo", items: trabajo },
-    { title: "Gestión y equipo", items: gestion },
-  ].filter((g) => g.items.length > 0);
+  const groups: NavGroup[] = (
+    [
+      { key: "trabajo", title: NAV_GROUP_TITLES.trabajo, items: trabajo },
+      { key: "gestion", title: NAV_GROUP_TITLES.gestion, items: gestion },
+    ] satisfies NavGroup[]
+  ).filter((g) => g.items.length > 0);
   if (!NAV_V2) {
-    return markLocked([...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
+    return markLocked([...groups, { key: "sistema", title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
   }
 
   const agente: NavItem[] = [];
   // Un miembro del equipo no puede hacer ninguno de los pasos de la guía.
   if (canConfigure(role)) {
-    agente.push({ href: "/guia-de-inicio", label: "Guía de inicio", icon: ListChecks });
+    agente.push(navItem("guia"));
   }
-  agente.push(
-    { href: "/agente", label: "Agente", icon: Sparkles },
-    { href: "/laboratorio", label: "Laboratorio", icon: FlaskConical }
-  );
-  groups.push({ title: "Agente", items: agente });
+  agente.push(navItem("agente"), navItem("laboratorio"));
+  groups.push({ key: "agente", title: NAV_GROUP_TITLES.agente, items: agente });
   // 019 — Se mide al final: primero se atiende y se organiza.
-  groups.push({ items: [{ href: "/resultados", label: "Resultados", icon: ChartColumn }] });
-  return markLocked([...groups, { title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
+  groups.push({ key: "resultados", items: [navItem("resultados")] });
+  return markLocked([...groups, { key: "sistema", title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
 }
 
 /** Marca como `locked` las entradas cuyo módulo no incluye el plan. Sin datos del plan, no toca nada. */
@@ -182,16 +212,29 @@ function markLocked(groups: NavGroup[], activeModules: readonly string[] | undef
  * encendido: el Panel, para quien lo ve (dueño o administrador); un miembro del
  * equipo, que no tiene Panel, va a lo primero de su menú (Citas o Contactos).
  * Siempre es una entrada visible del menú, así queda marcada como activa.
+ *
+ * Con una configuración de menú (`menu`), «visible» es la del menú EFECTIVO: si la organización ocultó esa entrada, se
+ * entra a la primera entrada de trabajo que sí se ve (nunca a Notificaciones ni a Ajustes mientras haya otra). La
+ * ruta oculta sigue existiendo —ocultar no bloquea nada—, solo deja de ser el destino inicial.
  */
 export function salonHomePath({
   agenda = false,
   role,
+  menu,
 }: {
   agenda?: boolean;
   role?: string | null;
+  menu?: MenuConfig | null;
 }): string {
-  if (canConfigure(role)) return "/panel";
-  return agenda ? "/citas" : "/contactos";
+  const home = canConfigure(role) ? "/panel" : agenda ? "/citas" : "/contactos";
+  if (!menu) return home;
+  const visible = applyMenuConfig(appNavGroups({ agenda, salon: true, role }), menu).flatMap((g) => g.items);
+  if (visible.some((i) => i.href === home)) return home;
+  return (
+    visible.find((i) => i.key !== "ajustes" && i.key !== "notificaciones")?.href ??
+    visible.find((i) => i.key === "notificaciones")?.href ??
+    SETTINGS_ITEM.href
+  );
 }
 
 export type SettingsLink = { href: string; label: string };
@@ -219,7 +262,10 @@ export function settingsSections({
   salon = false,
   sector = false,
   suscripcion = false,
+  menu = false,
 }: {
+  /** Bloque 3 — «Menú» (personalizar el menú lateral) solo para quien puede configurar el negocio. */
+  menu?: boolean;
   /** 046 — «Suscripción» existe solo con el cobro con Mercado Pago encendido (`MERCADOPAGO`). */
   suscripcion?: boolean;
   /** «Tipo de negocio» existe solo si la organización tiene perfil de sector (módulo SaaS). */
@@ -258,6 +304,7 @@ export function settingsSections({
   ];
   if (atribucion) negocio.push({ href: "/ajustes/anuncios", label: "Anuncios" });
   if (sector) negocio.push({ href: "/ajustes/sector", label: "Tipo de negocio" });
+  if (menu) negocio.push({ href: "/ajustes/menu", label: "Menú" });
   if (suscripcion) negocio.push({ href: "/ajustes/suscripcion", label: "Suscripción" });
 
   // Marketing (retención y recompra): solo con el módulo del salón, igual que la fidelización que ya tenía.
@@ -300,3 +347,6 @@ export const ACCOUNT_MENU_LINKS = [
 export function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
+
+// `NAV_ITEM_GROUP` se reexporta para quien arma pantallas del menú sin importar dos módulos.
+export { NAV_ITEM_GROUP };

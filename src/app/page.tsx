@@ -5,6 +5,7 @@ import { salonHomePath } from "@/lib/nav";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { salonEnabled } from "@/server/business/flag";
 import { guideFirst } from "@/server/onboarding/guide";
+import { getMenuConfig } from "@/server/business/menu-config";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,14 @@ export default async function Home() {
   // 045: un Super Admin SIN organización (cuenta de operador pura) no tiene sesión de negocio: entra al panel.
   if (!session && (await isSuperAdminUser())) redirect("/super-admin");
   if (session && salonEnabled()) {
-    redirect(salonHomePath({ agenda: agendaEnabled(), role: session.role }));
+    // El destino sale del menú EFECTIVO: si la organización ocultó el Panel, se entra a lo primero que sí se ve.
+    redirect(
+      salonHomePath({
+        agenda: agendaEnabled(),
+        role: session.role,
+        menu: await getMenuConfig(session.organizationId),
+      })
+    );
   }
   if (session && (await guideFirst(session))) redirect("/guia-de-inicio");
   redirect("/bandeja");

@@ -1,15 +1,15 @@
 "use client";
 
-import { Briefcase, HeartPulse, Scissors, Store, UserRound, type LucideIcon } from "lucide-react";
 import type { BusinessSector } from "@/lib/business-sector";
+import { iconFor, type IconKey } from "@/lib/icon-catalog";
 import { cn } from "@/lib/utils";
 
 /** Un icono por sector conocido; un sector nuevo del catálogo usa el genérico y no hace falta tocar esto. */
-const SECTOR_ICON: Record<string, LucideIcon> = {
-  salon: Scissors,
-  health: HeartPulse,
-  personal_brand: UserRound,
-  services: Briefcase,
+const SECTOR_ICON: Record<string, IconKey> = {
+  salon: "scissors",
+  health: "heartPulse",
+  personal_brand: "userRound",
+  services: "briefcase",
 };
 
 /**
@@ -37,7 +37,7 @@ export function SectorPicker({
       </legend>
       <div className="grid gap-2">
         {sectors.map((s) => {
-          const Icon = SECTOR_ICON[s.key] ?? Store;
+          const Icon = iconFor(SECTOR_ICON[s.key], "store");
           const selected = value === s.key;
           return (
             <label

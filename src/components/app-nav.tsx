@@ -13,6 +13,7 @@ import {
   type NavItem,
 } from "@/lib/nav";
 import { signOut } from "@/lib/auth/client";
+import { applyMenuConfig, type MenuConfig } from "@/lib/menu-config";
 import { goToSettingsAnchor } from "@/lib/settings-scroll";
 import { useEvents } from "@/components/use-events";
 import { BrandLogo } from "@/components/brand-mark";
@@ -42,6 +43,7 @@ export function AppNav({
   agenda = false,
   salon = false,
   automations = false,
+  menuConfig = null,
   open = false,
   onClose,
 }: {
@@ -59,6 +61,11 @@ export function AppNav({
   salon?: boolean;
   /** Automatizaciones: lo decide el servidor (`AUTOMATIONS`), igual que `agenda`. */
   automations?: boolean;
+  /**
+   * El menú personalizado de la organización, ya resuelto por el servidor (sin parpadeo). Solo cambia visibilidad,
+   * orden, nombres e iconos de lo que el menú base ya trae: nunca agrega entradas ni abre rutas.
+   */
+  menuConfig?: MenuConfig | null;
   /** Solo aplica por debajo de `lg`: en escritorio el lateral es fijo. */
   open?: boolean;
   onClose?: () => void;
@@ -134,13 +141,16 @@ export function AppNav({
   // #87 — Qué hay en el menú y en qué grupo lo decide `appNavGroups`; aquí
   // solo se pinta. Los módulos del plan llegan por el contexto de la organización;
   // mientras carga (o si falla) no hay datos del plan y nada se bloquea.
-  const allGroups = appNavGroups({
-    agenda,
-    salon,
-    automations,
-    role,
-    activeModules: context?.plan.features.modules,
-  });
+  const allGroups = applyMenuConfig(
+    appNavGroups({
+      agenda,
+      salon,
+      automations,
+      role,
+      activeModules: context?.plan.features.modules,
+    }),
+    menuConfig
+  );
   const groups = allGroups.filter((g) => !g.bottom);
   const bottomGroup = allGroups.find((g) => g.bottom);
 

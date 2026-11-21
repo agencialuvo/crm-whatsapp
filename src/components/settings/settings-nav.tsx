@@ -31,7 +31,10 @@ export function SettingsNav({
   salon = false,
   sector = false,
   suscripcion = false,
+  menu = false,
 }: {
+  /** «Menú»: personalizar el menú lateral (solo quien configura el negocio). */
+  menu?: boolean;
   suscripcion?: boolean;
   salon?: boolean;
   sector?: boolean;
@@ -42,7 +45,7 @@ export function SettingsNav({
   tiktok?: boolean;
 }) {
   const pathname = usePathname();
-  const sections = settingsSections({ agenda, atribucion, instagram, messenger, tiktok, salon, sector, suscripcion });
+  const sections = settingsSections({ agenda, atribucion, instagram, messenger, tiktok, salon, sector, suscripcion, menu });
   // Los enlaces con ancla (`/ajustes/perfil#seguridad`) comparten pantalla: cuál está
   // activo lo dice el `#` de la dirección, que Next no avisa al navegar con pushState.
   const [hash, setHash] = useState("");

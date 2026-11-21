@@ -40,6 +40,7 @@ export default async function SettingsLayout({
           tiktok={isChannelEnabled("tiktok")}
           salon={salonEnabled()}
           sector={sector}
+          menu={!!session && canConfigure(session.role)}
           suscripcion={billingEnabled()}
         />
         <div id={SETTINGS_SCROLL_ID} className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">

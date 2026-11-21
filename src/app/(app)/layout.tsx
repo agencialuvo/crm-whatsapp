@@ -17,6 +17,7 @@ import { isTimezoneConfigured } from "@/server/timezone";
 import { SectorSetupModal } from "@/components/onboarding/sector-setup-modal";
 import { canConfigure } from "@/lib/auth/roles";
 import { getSectorSetup, listBusinessSectors } from "@/server/business/sector-setup";
+import { getMenuConfig } from "@/server/business/menu-config";
 
 export default async function AppLayout({
   children,
@@ -35,6 +36,9 @@ export default async function AppLayout({
   // bot roto. Se resuelve en el servidor y en el layout para que se vea desde
   // CUALQUIER pantalla, no solo desde el panel de un contacto (#85).
   const aviso = await avisoIaDe(session.organizationId);
+  // El menú personalizado baja ya resuelto desde el servidor: así la barra nace con su orden y sus nombres, sin
+  // parpadear del menú estándar al personalizado. Un fallo de lectura deja el menú estándar.
+  const menuConfig = await getMenuConfig(session.organizationId);
   // Asistente de sector: solo quien configura, y solo mientras el negocio no haya elegido ni lo haya dejado
   // para después. Un fallo aquí (p. ej. migración pendiente) nunca tumba la app: simplemente no se ofrece.
   const sectorSetup = canConfigure(session.role)
@@ -64,6 +68,7 @@ export default async function AppLayout({
         agenda={agendaEnabled()}
         salon={salonEnabled()}
         automations={automationsEnabled()}
+        menuConfig={menuConfig}
         aviso={
           <>
             <AvisoSuscripcion access={suscripcion} />
