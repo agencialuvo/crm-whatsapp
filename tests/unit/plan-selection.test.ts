@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { pickInitialPlan, type PlanCandidate } from "@/server/business/plan-selection";
 import { BASE_CATEGORIES, BASE_PLANS } from "@/server/seed/platform-catalog";
@@ -55,6 +57,31 @@ describe("catálogo base: ningún sector nace bloqueado", () => {
       expect(elegido, c.key).not.toBeNull();
       for (const m of c.defaultModules ?? []) expect(elegido!.features.modules, `${c.key}:${m}`).toContain(m);
     }
+  });
+
+  it("Marca personal opera con agenda, Servicios (salon) y Caja (finances)", () => {
+    const c = BASE_CATEGORIES.find((x) => x.key === "personal_brand");
+    expect([...(c?.defaultModules ?? [])].sort()).toEqual(["agenda", "finances", "salon"]);
+    // Emprendedor no incluye finances: el plan inicial de este sector debe ser uno que sí la incluya.
+    const candidatos = BASE_PLANS.map((p, i) => ({
+      id: `plan_${i}`,
+      slug: p.slug,
+      active: p.active ?? true,
+      priceMonthlyCents: p.priceMonthlyCents ?? 0,
+      features: { modules: p.features.modules as readonly string[] },
+    }));
+    const elegido = pickInitialPlan(candidatos, c?.defaultModules ?? []);
+    expect(elegido?.slug).not.toBe("emprendedor");
+    expect(elegido?.features.modules).toContain("finances");
+  });
+
+  it("la migración 0087 deja personal_brand con los mismos módulos que BASE_CATEGORIES", () => {
+    const sql = readFileSync(join(process.cwd(), "drizzle", "0087_personal_brand_modules.sql"), "utf8");
+    const m = /SET "default_modules" = '(\[.*?\])'::jsonb/.exec(sql);
+    expect(m).not.toBeNull();
+    const c = BASE_CATEGORIES.find((x) => x.key === "personal_brand");
+    expect(JSON.parse(m![1]!)).toEqual(c?.defaultModules);
+    expect(sql).toMatch(/WHERE "key" = 'personal_brand'/);
   });
 
   it("los slugs de los planes base son únicos", () => {

@@ -53,7 +53,8 @@ export const BASE_CATEGORIES: readonly CategoryInsert[] = [
       resourceName: "Sesión",
       clientName: "Cliente",
     },
-    defaultModules: ["agenda"],
+    // Servicios (salon) y Caja (finances) además de la agenda. Alineado con la migración 0087.
+    defaultModules: ["agenda", "salon", "finances"],
   },
   {
     key: "services",
