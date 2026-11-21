@@ -28,11 +28,16 @@ import { apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog, Modal, ModalFooter } from "@/components/negocio/modal";
 import { ICON_CATALOG, ICON_KEYS, ICON_LABELS, type IconKey } from "@/lib/icon-catalog";
 import {
+  MENU_MAX_CUSTOM_GROUPS,
   MENU_NAME_MAX,
   MENU_SYSTEM_TEMPLATES,
   MENU_TEMPLATE_NAME_MAX,
+  addCustomGroup,
   configFromResolved,
+  countCustomGroups,
   findSystemTemplate,
+  moveItemToGroup,
+  removeCustomGroup,
   resolveMenu,
   type MenuConfig,
   type ResolvedGroup,
@@ -45,11 +50,14 @@ type SavedTemplate = { id: string; name: string; config: MenuConfig; updatedAt: 
 
 const ICON_OPTIONS: SearchSelectOption[] = ICON_KEYS.map((k) => ({ value: k, label: ICON_LABELS[k] }));
 
-/** El texto que se guarda: lo que se escribió, o el de siempre si se dejó vacío. */
+/** Cómo se llama una sección en las listas del editor (una sin encabezado también necesita un nombre para elegirla). */
+const groupName = (g: ResolvedGroup) => g.title?.trim() || (g.custom ? "Sección nueva" : "Sección sin encabezado");
+
+/** El texto que se guarda: lo que se escribió, o el de siempre si se dejó vacío (y ninguno si no hay título de siempre). */
 function normalized(groups: ResolvedGroup[]): ResolvedGroup[] {
   return groups.map((g) => ({
     ...g,
-    title: g.defaultTitle === undefined ? undefined : g.title?.trim() || g.defaultTitle,
+    title: g.title?.trim() || g.defaultTitle,
     items: g.items.map((r) => ({ ...r, label: r.label.trim() || r.item.label })),
   }));
 }
@@ -134,6 +142,8 @@ export function MenuSettingsClient({
   const [savedConfig, setSavedConfig] = useState<MenuConfig | null>(activeConfig);
   const [groups, setGroups] = useState<ResolvedGroup[]>(() => resolveMenu(base, activeConfig));
   const [baseKey, setBaseKey] = useState<string | null>(activeBaseKey);
+  // La plantilla de la que parte el menú que YA está guardado (no la que se está probando en el editor).
+  const [savedBaseKey, setSavedBaseKey] = useState<string | null>(activeBaseKey);
   const [templates, setTemplates] = useState<SavedTemplate[]>(initialTemplates);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,14 +163,19 @@ export function MenuSettingsClient({
   const savedTemplate = baseKey ? (templates.find((t) => t.id === baseKey) ?? null) : null;
   const baseName = savedTemplate?.name ?? findSystemTemplate(baseKey)?.name ?? null;
 
+  // «En uso» = la del menú ya guardado; sin menú guardado, el estándar. La recomendada (la del tipo de negocio) va primero.
+  const inUse = (key: string) => savedBaseKey === key || (savedBaseKey === null && savedConfig === null && key === "estandar");
+  const hintOf = (key: string, id: string = key) =>
+    [inUse(id) ? "En uso" : null, key === suggestedKey ? "Recomendada para tu tipo de negocio" : null].filter(Boolean).join(" · ");
+  const suggested = findSystemTemplate(suggestedKey);
   const templateOptions: SearchSelectOption[] = [
-    ...MENU_SYSTEM_TEMPLATES.map((t) => ({
-      value: `sys:${t.key}`,
-      label: t.name,
-      group: "Del sistema (solo lectura)",
-      ...(t.key === suggestedKey && t.key !== "estandar" ? { hint: "Recomendada" } : {}),
-    })),
-    ...templates.map((t) => ({ value: `tpl:${t.id}`, label: t.name, group: "Mis plantillas" })),
+    ...[...MENU_SYSTEM_TEMPLATES]
+      .sort((a, b) => Number(b.key === suggestedKey) - Number(a.key === suggestedKey))
+      .map((t) => {
+        const hint = hintOf(t.key);
+        return { value: `sys:${t.key}`, label: t.name, group: "Del sistema (solo lectura)", ...(hint ? { hint } : {}) };
+      }),
+    ...templates.map((t) => ({ value: `tpl:${t.id}`, label: t.name, group: "Mis plantillas", ...(inUse(t.id) ? { hint: "En uso" } : {}) })),
   ];
 
   const patchGroup = (key: string, patch: Partial<ResolvedGroup>) =>
@@ -172,19 +187,26 @@ export function MenuSettingsClient({
       )
     );
 
-  function moveItem(fromKey: string, itemKey: string, toKey: string) {
-    if (fromKey === toKey) return;
-    setGroups((gs) => {
-      const moving = gs.find((g) => g.key === fromKey)?.items.find((r) => r.item.key === itemKey);
-      if (!moving) return gs;
-      return gs.map((g) =>
-        g.key === fromKey
-          ? { ...g, items: g.items.filter((r) => r.item.key !== itemKey) }
-          : g.key === toKey
-            ? { ...g, items: [...g.items, moving] }
-            : g
-      );
-    });
+  // Mover o agregar una entrada la QUITA de donde estaba: jamás queda en dos secciones (`moveItemToGroup`).
+  function moveItem(itemKey: string, toKey: string) {
+    setGroups((gs) => moveItemToGroup(gs, itemKey, toKey));
+  }
+
+  function addSection() {
+    const next = addCustomGroup(groups);
+    if (!next) {
+      setError(`Puedes crear hasta ${MENU_MAX_CUSTOM_GROUPS} secciones propias. Elimina alguna.`);
+      return;
+    }
+    setError(null);
+    setGroups(next);
+    setNotice("Sección creada: ponle un nombre (opcional) y agrégale módulos. Una sección sin módulos visibles no se muestra.");
+  }
+
+  function removeSection(key: string) {
+    setError(null);
+    setGroups((gs) => removeCustomGroup(gs, key));
+    setNotice("Sección eliminada: sus módulos volvieron a su lugar de siempre. No se borró nada.");
   }
 
   function reorderGroups(e: DragEndEvent) {
@@ -249,6 +271,7 @@ export function MenuSettingsClient({
       () => apiFetch("/api/organization/menu", { method: "PUT", json: { config: currentConfig, baseKey } }),
       () => {
         setSavedConfig(currentConfig);
+        setSavedBaseKey(baseKey);
         setNotice("Listo: el menú se actualizó para todo el equipo.");
         router.refresh();
       }
@@ -259,6 +282,7 @@ export function MenuSettingsClient({
       () => apiFetch("/api/organization/menu", { method: "DELETE" }),
       () => {
         setSavedConfig(null);
+        setSavedBaseKey(null);
         setGroups(resolveMenu(base, null));
         setBaseKey(null);
         setNotice("Listo: volviste al menú estándar. Tus plantillas guardadas siguen ahí.");
@@ -290,14 +314,21 @@ export function MenuSettingsClient({
       : Promise.resolve();
 
   const movable = groups.filter((g) => !g.bottom);
+  const customCount = countCustomGroups(groups);
+  /** Las entradas que se pueden agregar a una sección: las de las OTRAS secciones (menos las del bloque de abajo). */
+  const addOptions = (toKey: string): SearchSelectOption[] =>
+    movable
+      .filter((x) => x.key !== toKey)
+      .flatMap((x) => x.items.map((r) => ({ value: r.item.key, label: r.label, group: groupName(x) })));
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Menú lateral</CardTitle>
         <CardDescription>
-          Ordena, oculta, renombra y cambia los iconos del menú de todo el equipo. Ocultar una entrada solo la quita de la barra:
-          la pantalla y sus datos siguen donde estaban. «Ajustes» siempre se ve.
+          Ordena, oculta, renombra y cambia los iconos del menú de todo el equipo, y arma tus propias secciones. Ocultar una
+          entrada solo la quita de la barra: la pantalla y sus datos siguen donde estaban. Cada módulo está en una sola
+          sección. «Ajustes» siempre se ve.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -318,6 +349,23 @@ export function MenuSettingsClient({
             Las plantillas del sistema no se pueden modificar: lo que cambies se guarda como el menú de tu negocio o como una
             plantilla nueva.
           </p>
+          {suggested && (
+            <p className="text-xs text-text-3" data-testid="menu-recomendada">
+              Recomendada para tu tipo de negocio: <span className="font-medium text-foreground">{suggested.name}</span>.{" "}
+              {baseKey === suggested.key ? (
+                "Es la que está cargada."
+              ) : (
+                <button
+                  type="button"
+                  className="font-medium text-brand underline-offset-2 hover:underline disabled:opacity-50"
+                  onClick={() => loadTemplate(`sys:${suggested.key}`)}
+                  disabled={busy}
+                >
+                  Cargarla en el editor
+                </button>
+              )}
+            </p>
+          )}
         </div>
 
         <DndContext id="menu-grupos" sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderGroups}>
@@ -326,28 +374,30 @@ export function MenuSettingsClient({
               {groups.map((g) => {
                 const visible = g.items.filter((r) => !r.hidden && (!g.hidden || r.protected)).length;
                 return (
-                  <Sortable key={g.key} id={g.key} disabled={g.bottom} handleLabel={`Mover el bloque ${g.title ?? g.items[0]?.label ?? ""}`} className="rounded-md border bg-subtle/40 p-3">
+                  <Sortable key={g.key} id={g.key} disabled={g.bottom} handleLabel={`Mover la sección ${groupName(g)}`} className="rounded-md border bg-subtle/40 p-3">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
-                      {g.defaultTitle !== undefined ? (
-                        <Input
-                          aria-label={`Nombre del bloque ${g.defaultTitle}`}
-                          value={g.title ?? ""}
-                          maxLength={MENU_NAME_MAX}
-                          disabled={busy}
-                          onChange={(e) => patchGroup(g.key, { title: e.target.value })}
-                          onBlur={() => patchGroup(g.key, { title: g.title?.trim() || g.defaultTitle })}
-                          className="h-8 w-48 font-semibold"
-                        />
-                      ) : (
-                        <span className="text-sm font-semibold text-text-2">Entrada suelta</span>
-                      )}
+                      <Input
+                        aria-label={g.custom ? "Nombre de la sección" : `Nombre de la sección ${g.defaultTitle ?? "sin encabezado"}`}
+                        value={g.title ?? ""}
+                        placeholder={g.defaultTitle ?? "Sin encabezado"}
+                        maxLength={MENU_NAME_MAX}
+                        disabled={busy}
+                        onChange={(e) => patchGroup(g.key, { title: e.target.value })}
+                        onBlur={() => patchGroup(g.key, { title: g.title?.trim() || g.defaultTitle })}
+                        className="h-8 w-48 font-semibold"
+                      />
                       <div className="ml-auto flex items-center gap-2 text-xs text-text-3">
                         {visible === 0 && <span>Sin entradas visibles: no se muestra</span>}
+                        {g.custom && (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => removeSection(g.key)} disabled={busy}>
+                            Eliminar sección
+                          </Button>
+                        )}
                         <Switch
                           size="sm"
                           checked={!g.hidden}
                           onCheckedChange={(on) => patchGroup(g.key, { hidden: !on })}
-                          label={`Mostrar el bloque ${g.title ?? ""}`}
+                          label={`Mostrar la sección ${groupName(g)}`}
                           disabled={busy || g.bottom}
                         />
                       </div>
@@ -386,14 +436,12 @@ export function MenuSettingsClient({
                                     {!g.bottom && movable.length > 1 && (
                                       <div className="w-40">
                                         <SearchSelect
-                                          ariaLabel={`Mover ${r.label} a otro bloque`}
+                                          ariaLabel={`Mover ${r.label} a otra sección`}
                                           value=""
-                                          onChange={(to) => moveItem(g.key, r.item.key, to)}
-                                          options={movable
-                                            .filter((x) => x.key !== g.key)
-                                            .map((x) => ({ value: x.key, label: x.title ?? "Entrada suelta" }))}
+                                          onChange={(to) => moveItem(r.item.key, to)}
+                                          options={movable.filter((x) => x.key !== g.key).map((x) => ({ value: x.key, label: groupName(x) }))}
                                           placeholder="Mover a…"
-                                          searchPlaceholder="Buscar bloque…"
+                                          searchPlaceholder="Buscar sección…"
                                           disabled={busy}
                                         />
                                       </div>
@@ -416,12 +464,34 @@ export function MenuSettingsClient({
                         </ul>
                       </SortableContext>
                     </DndContext>
+                    {!g.bottom && addOptions(g.key).length > 0 && (
+                      <div className="mt-2 w-64">
+                        <SearchSelect
+                          ariaLabel={`Agregar un módulo a ${groupName(g)}`}
+                          value=""
+                          onChange={(k) => moveItem(k, g.key)}
+                          options={addOptions(g.key)}
+                          placeholder="Agregar módulo…"
+                          searchPlaceholder="Buscar módulo…"
+                          disabled={busy}
+                        />
+                      </div>
+                    )}
                   </Sortable>
                 );
               })}
             </div>
           </SortableContext>
         </DndContext>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" onClick={addSection} disabled={busy || customCount >= MENU_MAX_CUSTOM_GROUPS}>
+            Nueva sección
+          </Button>
+          <span className="text-xs text-text-3">
+            {customCount} de {MENU_MAX_CUSTOM_GROUPS} secciones propias. Al eliminar una, sus módulos vuelven a su lugar de siempre.
+          </span>
+        </div>
 
         {error && (
           <p role="alert" className="rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text">

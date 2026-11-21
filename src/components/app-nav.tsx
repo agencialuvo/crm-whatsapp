@@ -237,12 +237,12 @@ export function AppNav({
         </div>
 
         {/* Grupos con encabezado pequeño, sin letras ni colapsables: se leen
-          de arriba abajo como una lista de lo que hay. Un grupo sin título
-          (Resultados) es una entrada suelta separada por el espacio. */}
+          de arriba abajo como una lista de lo que hay. Una sección sin título
+          (o con el título vacío) no pinta encabezado: queda separada por el espacio. */}
         <nav className="flex flex-col gap-4" aria-label="Secciones">
-          {groups.map((group, i) => (
-            <div key={group.title ?? i} className="flex flex-col gap-0.5">
-              {group.title && (
+          {groups.map((group) => (
+            <div key={group.key} className="flex flex-col gap-0.5">
+              {group.title?.trim() && (
                 <span className="kicker mb-1 block px-2.5" aria-hidden>
                   {group.title}
                 </span>
@@ -257,9 +257,11 @@ export function AppNav({
         {/* «Sistema» (Notificaciones y Ajustes) va al pie: no es trabajo del día. */}
         {bottomGroup && (
           <div className="mt-3 flex flex-col gap-0.5">
-            <span className="kicker mb-1 block px-2.5" aria-hidden>
-              {bottomGroup.title}
-            </span>
+            {bottomGroup.title?.trim() && (
+              <span className="kicker mb-1 block px-2.5" aria-hidden>
+                {bottomGroup.title}
+              </span>
+            )}
             {bottomGroup.items.map(renderItem)}
           </div>
         )}

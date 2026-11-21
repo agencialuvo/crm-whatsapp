@@ -275,10 +275,12 @@ describe("plantillas base del sistema (solo lectura)", () => {
   it("«Estándar» es el menú sin personalizar", () => {
     expect(findSystemTemplate("estandar")?.config).toBeNull();
   });
-  it("«Marca personal» renombra Servicios a Programas y esconde Equipo y Gastos, sin quitar Caja", () => {
+  it("«Marca personal» MANTIENE «Servicios» (no lo renombra) y esconde Equipo y Gastos, sin quitar Caja", () => {
     const out = applyMenuConfig(base(), findSystemTemplate("marca-personal")!.config);
     const items = out.flatMap((g) => g.items);
-    expect(items.find((i) => i.key === "servicios")?.label).toBe("Programas");
+    expect(items.find((i) => i.key === "servicios")?.label).toBe("Servicios");
+    expect(items.find((i) => i.key === "servicios")?.iconKey).toBe("briefcase");
+    expect(JSON.stringify(findSystemTemplate("marca-personal")!.config)).not.toMatch(/Programas|graduationCap/);
     expect(hrefs(out)).toEqual(expect.arrayContaining(["/panel", "/caja", "/citas", "/servicios"]));
     expect(hrefs(out)).not.toContain("/equipo");
     expect(hrefs(out)).not.toContain("/gastos");
@@ -290,10 +292,29 @@ describe("plantillas base del sistema (solo lectura)", () => {
     configFromResolved(editor);
     expect(JSON.stringify(MENU_SYSTEM_TEMPLATES)).toBe(antes);
   });
-  it("sugiere «Marca personal» solo para ese tipo de negocio", () => {
+  it("cada tipo de negocio sugiere su plantilla; los demás, «Estándar»", () => {
     expect(suggestedTemplateKey("personal_brand")).toBe("marca-personal");
-    expect(suggestedTemplateKey("salon")).toBe("estandar");
+    expect(suggestedTemplateKey("salon")).toBe("salon-barberia");
+    expect(suggestedTemplateKey("health")).toBe("estandar");
+    expect(suggestedTemplateKey("services")).toBe("estandar");
     expect(suggestedTemplateKey(null)).toBe("estandar");
+    expect(suggestedTemplateKey("__proto__")).toBe("estandar");
+  });
+  it("«Servicios» usa el icono neutro por defecto y las tijeras quedan en el catálogo y en la plantilla de salón", () => {
+    expect(NAV_ITEM_CATALOG.servicios.iconKey).toBe("briefcase");
+    expect(isIconKey("scissors")).toBe(true);
+    const out = applyMenuConfig(base(), findSystemTemplate("salon-barberia")!.config);
+    expect(out.flatMap((g) => g.items).find((i) => i.key === "servicios")?.iconKey).toBe("scissors");
+  });
+  it("«Salón / Barbería» no cambia el orden ni lo que se ve: solo el icono de Servicios", () => {
+    const std = applyMenuConfig(base(), null);
+    const salon = applyMenuConfig(base(), findSystemTemplate("salon-barberia")!.config);
+    expect(hrefs(salon)).toEqual(hrefs(std));
+    expect(labels(salon)).toEqual(labels(std));
+    expect(salon.map((g) => g.key)).toEqual(std.map((g) => g.key));
+  });
+  it("todas las plantillas del sistema cumplen el esquema", () => {
+    for (const tpl of MENU_SYSTEM_TEMPLATES) if (tpl.config) expect(menuConfigSchema.safeParse(tpl.config).success, tpl.key).toBe(true);
   });
 });
 

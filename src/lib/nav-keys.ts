@@ -10,6 +10,17 @@
 export const NAV_GROUP_KEYS = ["trabajo", "gestion", "agente", "resultados", "sistema"] as const;
 export type NavGroupKey = (typeof NAV_GROUP_KEYS)[number];
 
+/**
+ * Las secciones PROPIAS que crea una organización (además de las 5 de arriba): `sec-` + 4 a 12 minúsculas o dígitos.
+ * La llave la genera el editor y no cambia aunque la sección se renombre. Una configuración guardada antes de que
+ * existieran solo trae las 5 llaves fijas y sigue siendo válida.
+ */
+export const CUSTOM_GROUP_KEY_PATTERN = /^sec-[a-z0-9]{4,12}$/;
+
+export function isCustomGroupKey(key: string): boolean {
+  return CUSTOM_GROUP_KEY_PATTERN.test(key);
+}
+
 /** Las entradas del menú. */
 export const NAV_ITEM_KEYS = [
   "panel",

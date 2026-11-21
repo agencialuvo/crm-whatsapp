@@ -39,9 +39,9 @@ export type NavItem = {
 };
 
 export type NavGroup = {
-  /** Llave estable del bloque. */
-  key: NavGroupKey;
-  /** Encabezado pequeño; sin él, el grupo es una entrada suelta. */
+  /** Llave estable del bloque: una de `NAV_GROUP_KEYS` o la de una sección propia (`sec-…`). */
+  key: string;
+  /** Encabezado pequeño; sin él (o vacío), la sección se pinta sin encabezado. */
   title?: string;
   items: NavItem[];
   /** Va al pie de la barra, separado del resto (el grupo «Sistema»). */
@@ -74,7 +74,7 @@ export const NAV_ITEM_CATALOG: Record<NavItemKey, CatalogEntry> = {
   caja: { href: "/caja", label: "Caja", iconKey: "wallet", module: "finances" },
   citas: { href: "/citas", label: "Citas", iconKey: "calendarDays", module: "agenda" },
   clientes: { href: "/clientes", label: "Clientes", iconKey: "userCheck", module: "salon" },
-  servicios: { href: "/servicios", label: "Servicios", iconKey: "scissors", module: "salon" },
+  servicios: { href: "/servicios", label: "Servicios", iconKey: "briefcase", module: "salon" },
   equipo: { href: "/equipo", label: "Equipo", iconKey: "usersRound", module: "salon" },
   gastos: { href: "/gastos", label: "Gastos", iconKey: "receipt", module: "finances" },
   contactos: { href: "/contactos", label: "Contactos", iconKey: "users" },

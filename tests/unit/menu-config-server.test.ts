@@ -61,6 +61,7 @@ import {
   listMenuTemplates,
   resetActiveMenu,
   saveActiveMenu,
+  syncSectorMenu,
   updateMenuTemplate,
 } from "@/server/business/menu-config";
 
@@ -228,5 +229,79 @@ describe("plantillas guardadas de la organización", () => {
     expect(whereOf(ofKind("delete")[0]!).params).toEqual(expect.arrayContaining(["org_a", "mnu_x", "template"]));
     h.results = () => [{ id: "mnu_x" }];
     await expect(deleteMenuTemplate("org_a", "mnu_x")).resolves.toBeUndefined();
+  });
+});
+
+describe("el menú sigue al tipo de negocio (syncSectorMenu)", () => {
+  const tpl = (key: string) => MENU_SYSTEM_TEMPLATES.find((x) => x.key === key)!.config as MenuConfig;
+  const activa = (row: { config: unknown; baseKey: string | null } | null) => {
+    h.results = (q) => ((q as Q).kind === "select" ? (row ? [row] : []) : []);
+  };
+  const writes = () => qs().filter((q) => q.table === t && q.kind !== "select");
+
+  it("sin menú: aplica la plantilla del sector SIN pisar a otra pestaña (onConflictDoNothing) y acotada a la organización", async () => {
+    activa(null);
+    expect(await syncSectorMenu("org_a", "personal_brand")).toBe("applied");
+    const [ins] = ofKind("insert");
+    expect(ins!.values).toMatchObject({ organizationId: "org_a", kind: "active", name: null, baseKey: "marca-personal", config: tpl("marca-personal") });
+    expect(ins!.calls.some((c) => c.method === "onConflictDoNothing")).toBe(true);
+    expect(ins!.calls.some((c) => c.method === "onConflictDoUpdate")).toBe(false);
+    expect(whereOf(ofKind("select")[0]!).params).toContain("org_a");
+  });
+
+  it("sin menú y con un tipo de negocio de menú estándar: no escribe nada", async () => {
+    activa(null);
+    expect(await syncSectorMenu("org_a", "health")).toBe("none");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("con un menú PROPIO (sin plantilla de origen) no toca nada", async () => {
+    activa({ config: valido, baseKey: null });
+    expect(await syncSectorMenu("org_a", "personal_brand")).toBe("kept");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("con una plantilla del sistema EDITADA después no toca nada", async () => {
+    const editada = JSON.parse(JSON.stringify(tpl("marca-personal"))) as MenuConfig;
+    editada.groups[0]!.items.reverse();
+    activa({ config: editada, baseKey: "marca-personal" });
+    expect(await syncSectorMenu("org_a", "salon")).toBe("kept");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("con una plantilla PROPIA de la organización aplicada (baseKey = su id) no toca nada", async () => {
+    activa({ config: tpl("marca-personal"), baseKey: "mnu_abc123" });
+    expect(await syncSectorMenu("org_a", "salon")).toBe("kept");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("una plantilla del sistema que nadie tocó se cambia por la del sector nuevo, solo si la fila sigue siendo la leída", async () => {
+    activa({ config: tpl("marca-personal"), baseKey: "marca-personal" });
+    expect(await syncSectorMenu("org_a", "salon")).toBe("applied");
+    const [up] = ofKind("update");
+    expect(up!.values).toMatchObject({ config: tpl("salon-barberia"), baseKey: "salon-barberia" });
+    const w = whereOf(up!);
+    expect(w.params).toEqual(expect.arrayContaining(["org_a", "active", "marca-personal"]));
+    expect(ofKind("delete")).toHaveLength(0);
+  });
+
+  it("una plantilla del sistema intacta vuelve al estándar (se borra la activa) si el sector nuevo no tiene plantilla propia", async () => {
+    activa({ config: tpl("marca-personal"), baseKey: "marca-personal" });
+    expect(await syncSectorMenu("org_a", "services")).toBe("cleared");
+    const [del] = ofKind("delete");
+    expect(whereOf(del!).params).toEqual(expect.arrayContaining(["org_a", "active", "marca-personal"]));
+    expect(ofKind("update")).toHaveLength(0);
+  });
+
+  it("elegir el mismo sector otra vez no escribe nada", async () => {
+    activa({ config: tpl("marca-personal"), baseKey: "marca-personal" });
+    expect(await syncSectorMenu("org_a", "personal_brand")).toBe("none");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("lo guardado que ya no cumple el esquema cuenta como propio (se conserva)", async () => {
+    activa({ config: { v: 1, groups: [{ key: "inventada", items: [] }] }, baseKey: "marca-personal" });
+    expect(await syncSectorMenu("org_a", "salon")).toBe("kept");
+    expect(writes()).toHaveLength(0);
   });
 });

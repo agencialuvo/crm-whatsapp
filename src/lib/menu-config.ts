@@ -5,8 +5,8 @@ import {
   NAV_GROUP_KEYS,
   NAV_ITEM_GROUP,
   NAV_ITEM_KEYS,
+  isCustomGroupKey,
   isProtectedItem,
-  type NavGroupKey,
   type NavItemKey,
 } from "@/lib/nav-keys";
 import type { NavGroup, NavItem } from "@/lib/nav";
@@ -21,11 +21,17 @@ import type { NavGroup, NavItem } from "@/lib/nav";
  * - Nunca AGREGA entradas: parte de lo que el menú base ya trae para esta persona (banderas, rol) y solo lo reordena,
  *   oculta o renombra. Una llave que el menú base no trae para quien mira se ignora.
  * - «Ajustes» no se puede ocultar. Un bloque que se queda sin entradas visibles desaparece solo.
+ * - Una entrada vive en UNA sola sección: nunca dos. El esquema rechaza el repetido, `resolveMenu` descarta el segundo
+ *   y las operaciones del editor (`moveItemToGroup`) la quitan de donde estaba antes de ponerla en otro lado.
+ * - Además de las 5 secciones fijas, una organización puede crear secciones PROPIAS (`sec-…`, hasta
+ *   `MENU_MAX_CUSTOM_GROUPS`). Eliminarla devuelve sus entradas a su sección de siempre: no se pierde ni se borra nada.
  */
 
 export const MENU_NAME_MAX = 30;
 export const MENU_TEMPLATE_NAME_MAX = 40;
 export const MENU_MAX_TEMPLATES = 20;
+/** Cuántas secciones propias puede crear una organización (las 5 fijas no cuentan). */
+export const MENU_MAX_CUSTOM_GROUPS = 6;
 
 /** Sin caracteres de control ni `<` `>`: es un rótulo, no marcado. */
 const LABEL_CHARS = /^[^\u0000-\u001f\u007f<>]+$/;
@@ -48,9 +54,13 @@ const itemPref = z
   })
   .strict();
 
+const groupKey = z
+  .string({ invalid_type_error: "Ese bloque del menú no existe", required_error: "Ese bloque del menú no existe" })
+  .refine((k) => (NAV_GROUP_KEYS as readonly string[]).includes(k) || isCustomGroupKey(k), "Ese bloque del menú no existe");
+
 const groupPref = z
   .object({
-    key: z.enum(NAV_GROUP_KEYS, { errorMap: () => ({ message: "Ese bloque del menú no existe" }) }),
+    key: groupKey,
     title: label.nullish(),
     hidden: z.boolean().optional(),
     items: z.array(itemPref).max(NAV_ITEM_KEYS.length),
@@ -60,12 +70,19 @@ const groupPref = z
 export const menuConfigSchema = z
   .object({
     v: z.literal(1),
-    groups: z.array(groupPref).max(NAV_GROUP_KEYS.length),
+    groups: z.array(groupPref).max(NAV_GROUP_KEYS.length + MENU_MAX_CUSTOM_GROUPS),
   })
   .strict()
   .superRefine((cfg, ctx) => {
     const groups = new Set<string>();
     const items = new Set<string>();
+    if (cfg.groups.filter((g) => isCustomGroupKey(g.key)).length > MENU_MAX_CUSTOM_GROUPS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groups"],
+        message: `Puedes crear hasta ${MENU_MAX_CUSTOM_GROUPS} secciones propias`,
+      });
+    }
     cfg.groups.forEach((g, gi) => {
       if (groups.has(g.key)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["groups", gi, "key"], message: "Hay un bloque repetido" });
@@ -131,10 +148,14 @@ export type ResolvedItem = {
 };
 
 export type ResolvedGroup = {
-  key: NavGroupKey;
+  /** Una de `NAV_GROUP_KEYS` o la de una sección propia (`sec-…`). */
+  key: string;
+  /** El que se pinta; vacío o ausente = la sección no lleva encabezado. Editable en TODAS las secciones. */
   title: string | undefined;
-  /** El título de siempre; un bloque sin título (entrada suelta) no se renombra. */
+  /** El título de siempre; `undefined` en una sección sin título base (Resultados, o una propia). */
   defaultTitle: string | undefined;
+  /** Sección creada por la organización: se puede eliminar (sus entradas vuelven a su sección de siempre). */
+  custom: boolean;
   bottom: boolean;
   hidden: boolean;
   items: ResolvedItem[];
@@ -169,6 +190,7 @@ export function resolveMenu(base: readonly NavGroup[], config: MenuConfig | null
     key: g.key,
     title: g.title,
     defaultTitle: g.title,
+    custom: false,
     bottom: g.bottom === true,
     hidden: false,
     items: [],
@@ -176,16 +198,22 @@ export function resolveMenu(base: readonly NavGroup[], config: MenuConfig | null
 
   // 1. Los bloques en el orden de la configuración.
   for (const cg of config?.groups ?? []) {
-    const bg = baseGroups.get(cg.key);
-    if (!bg || out.some((o) => o.key === cg.key)) continue;
-    const rg = open(bg);
+    if (out.some((o) => o.key === cg.key)) continue;
+    // Una sección propia no existe en el menú base: nace de la configuración. Una fija solo si el base la trae.
+    const custom = isCustomGroupKey(cg.key);
+    const bg = custom ? undefined : baseGroups.get(cg.key);
+    if (!custom && !bg) continue;
+    const rg: ResolvedGroup = bg
+      ? open(bg)
+      : { key: cg.key, title: undefined, defaultTitle: undefined, custom: true, bottom: false, hidden: false, items: [] };
     rg.hidden = cg.hidden === true && !rg.bottom;
-    if (cg.title && bg.title) rg.title = cg.title.trim();
+    // El título se conserva en cualquier sección, también en las que no tienen título base.
+    if (cg.title?.trim()) rg.title = cg.title.trim();
     for (const ci of cg.items) {
       const info = itemInfo.get(ci.key);
       if (!info || placed.has(ci.key)) continue;
       // El bloque de abajo solo lleva lo suyo y lo suyo no sale de él.
-      if ((bg.bottom === true) !== (info.group.bottom === true)) continue;
+      if (rg.bottom !== (info.group.bottom === true)) continue;
       rg.items.push(toResolved(info.item, ci));
       placed.add(ci.key);
     }
@@ -245,7 +273,7 @@ export function configFromResolved(groups: readonly ResolvedGroup[]): MenuConfig
     v: 1,
     groups: groups.map((g) => ({
       key: g.key,
-      ...(g.title !== undefined && g.title !== g.defaultTitle && { title: g.title }),
+      ...(g.title?.trim() && g.title.trim() !== g.defaultTitle && { title: g.title.trim() }),
       ...(g.hidden && !g.bottom && { hidden: true }),
       items: g.items.map((r) => ({
         key: r.item.key,
@@ -255,6 +283,88 @@ export function configFromResolved(groups: readonly ResolvedGroup[]): MenuConfig
       })),
     })),
   };
+}
+
+/* ------------------------ operaciones del editor (puras) ------------------------ */
+
+/** La entrada de `itemKey` en cualquiera de las secciones, con su sección. */
+function findItem(groups: readonly ResolvedGroup[], itemKey: string) {
+  for (const g of groups) {
+    const item = g.items.find((r) => r.item.key === itemKey);
+    if (item) return { group: g, item };
+  }
+  return null;
+}
+
+/**
+ * Mueve una entrada a otra sección (la agrega al final). La QUITA de donde estaba antes de ponerla: nunca queda en dos
+ * secciones. No mueve nada si la sección de destino no existe, si la entrada es del bloque de abajo («Ajustes» y
+ * «Notificaciones» no salen de él) o si el destino es el bloque de abajo (nada más entra).
+ */
+export function moveItemToGroup(groups: readonly ResolvedGroup[], itemKey: string, toKey: string): ResolvedGroup[] {
+  const found = findItem(groups, itemKey);
+  const to = groups.find((g) => g.key === toKey);
+  if (!found || !to || found.group.key === toKey) return [...groups];
+  if (found.group.bottom || to.bottom) return [...groups];
+  return groups.map((g) => {
+    const without = g.items.filter((r) => r.item.key !== itemKey);
+    return g.key === toKey ? { ...g, items: [...without, found.item] } : { ...g, items: without };
+  });
+}
+
+/** Una llave nueva para una sección propia, que no repite ninguna de `taken`. `rand` se inyecta para probarla. */
+export function newCustomGroupKey(taken: Iterable<string>, rand: () => number = Math.random): string {
+  const used = new Set(taken);
+  for (;;) {
+    let id = "";
+    while (id.length < 6) id += Math.floor(rand() * 36).toString(36);
+    const key = `sec-${id}`;
+    if (!used.has(key)) return key;
+  }
+}
+
+export function countCustomGroups(groups: readonly { custom?: boolean }[]): number {
+  return groups.filter((g) => g.custom).length;
+}
+
+/**
+ * Agrega una sección propia vacía justo antes del bloque de abajo. `null` si ya se llegó al tope
+ * (`MENU_MAX_CUSTOM_GROUPS`). El título es opcional: sin él, la sección no lleva encabezado.
+ */
+export function addCustomGroup(
+  groups: readonly ResolvedGroup[],
+  title?: string,
+  rand: () => number = Math.random
+): ResolvedGroup[] | null {
+  if (countCustomGroups(groups) >= MENU_MAX_CUSTOM_GROUPS) return null;
+  const clean = title?.trim().slice(0, MENU_NAME_MAX);
+  const fresh: ResolvedGroup = {
+    key: newCustomGroupKey(groups.map((g) => g.key), rand),
+    title: clean || undefined,
+    defaultTitle: undefined,
+    custom: true,
+    bottom: false,
+    hidden: false,
+    items: [],
+  };
+  return [...groups.filter((g) => !g.bottom), fresh, ...groups.filter((g) => g.bottom)];
+}
+
+/**
+ * Elimina una sección PROPIA. Sus entradas no se pierden ni se borran: vuelven al final de la sección donde nacen
+ * (`NAV_ITEM_GROUP`) conservando nombre, icono y si estaban ocultas; si esa sección no está para quien mira, a la
+ * primera sección que no sea la de abajo. Una sección fija no se elimina.
+ */
+export function removeCustomGroup(groups: readonly ResolvedGroup[], key: string): ResolvedGroup[] {
+  const doomed = groups.find((g) => g.key === key);
+  if (!doomed || !doomed.custom) return [...groups];
+  const rest = groups.filter((g) => g.key !== key).map((g) => ({ ...g, items: [...g.items] }));
+  const fallback = rest.find((g) => !g.bottom);
+  for (const r of doomed.items) {
+    const home = rest.find((g) => g.key === NAV_ITEM_GROUP[r.item.key]) ?? fallback;
+    if (home && !rest.some((g) => g.items.some((x) => x.item.key === r.item.key))) home.items.push(r);
+  }
+  return rest;
 }
 
 /* --------------------------- plantillas del sistema --------------------------- */
@@ -283,7 +393,7 @@ export const MENU_SYSTEM_TEMPLATES: readonly MenuTemplate[] = [
     key: "marca-personal",
     name: "Marca personal",
     description:
-      "Para asesorías, consultoría y diagnósticos: Panel, Caja y Citas primero, «Programas» en lugar de Servicios, y sin Equipo ni Gastos a la vista.",
+      "Para asesorías, consultoría y diagnósticos: Panel, Caja y Citas primero, Servicios con el nombre de siempre, y sin Equipo ni Gastos a la vista.",
     config: {
       v: 1,
       groups: [
@@ -291,7 +401,7 @@ export const MENU_SYSTEM_TEMPLATES: readonly MenuTemplate[] = [
         {
           key: "gestion",
           items: [
-            { key: "servicios", label: "Programas", iconKey: "graduationCap" },
+            { key: "servicios" },
             { key: "contactos" },
             { key: "medios" },
             { key: "automatizaciones" },
@@ -303,13 +413,38 @@ export const MENU_SYSTEM_TEMPLATES: readonly MenuTemplate[] = [
       ],
     },
   },
+  {
+    key: "salon-barberia",
+    name: "Salón / Barbería",
+    description: "El menú de siempre, con Servicios con el icono de tijeras.",
+    config: {
+      v: 1,
+      groups: [
+        { key: "trabajo", items: [] },
+        { key: "gestion", items: [{ key: "servicios", iconKey: "scissors" }] },
+        { key: "agente", items: [] },
+        { key: "resultados", items: [] },
+        { key: "sistema", items: [] },
+      ],
+    },
+  },
 ];
 
 export function findSystemTemplate(key: string | null | undefined): MenuTemplate | null {
   return MENU_SYSTEM_TEMPLATES.find((t) => t.key === key) ?? null;
 }
 
-/** La plantilla que se recomienda para un tipo de negocio (solo una sugerencia: nada se aplica solo). */
+/**
+ * La plantilla de sistema que corresponde a cada tipo de negocio. Sin entrada, «Estándar». Es lo que se recomienda en
+ * Ajustes → Menú y lo que se aplica al ELEGIR el tipo de negocio si la organización no tiene un menú propio
+ * (`syncSectorMenu`).
+ */
+const SECTOR_TEMPLATE: Readonly<Record<string, string>> = {
+  personal_brand: "marca-personal",
+  salon: "salon-barberia",
+};
+
 export function suggestedTemplateKey(categoryKey: string | null | undefined): string {
-  return categoryKey === "personal_brand" ? "marca-personal" : "estandar";
+  // hasOwn: una llave como «__proto__» o «constructor» no debe resolverse contra el prototipo del objeto.
+  return categoryKey && Object.hasOwn(SECTOR_TEMPLATE, categoryKey) ? SECTOR_TEMPLATE[categoryKey]! : "estandar";
 }

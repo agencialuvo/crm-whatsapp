@@ -109,6 +109,52 @@ describe.skipIf(!live)("menú personalizable contra Postgres", () => {
     expect((await svc.listMenuTemplates(orgA)).length).toBeGreaterThan(0);
   });
 
+  it("una configuración con SECCIONES PROPIAS se guarda y se lee igual", async () => {
+    const conPropias = {
+      v: 1,
+      groups: [
+        { key: "trabajo", items: [{ key: "panel" }] },
+        { key: "sec-abc123", title: "Mis cobros", items: [{ key: "caja" }, { key: "servicios", label: "Servicios" }] },
+        { key: "sec-def456", items: [] },
+      ],
+    };
+    await svc.saveActiveMenu(orgA, { config: conPropias, baseKey: null });
+    expect((await svc.getActiveMenu(orgA))?.config).toEqual(conPropias);
+    // un módulo repetido en dos secciones no entra
+    await expect(
+      svc.saveActiveMenu(orgA, { config: { v: 1, groups: [{ key: "trabajo", items: [{ key: "caja" }] }, { key: "sec-abc123", items: [{ key: "caja" }] }] } })
+    ).rejects.toMatchObject({ status: 422 });
+    expect((await svc.getActiveMenu(orgA))?.config).toEqual(conPropias);
+    await svc.resetActiveMenu(orgA);
+  });
+
+  it("syncSectorMenu: aplica la plantilla del sector, la cambia si nadie la tocó y NUNCA pisa un menú propio", async () => {
+    await svc.resetActiveMenu(orgA);
+    // sin menú → la del sector
+    expect(await svc.syncSectorMenu(orgA, "personal_brand")).toBe("applied");
+    expect((await svc.getActiveMenu(orgA))?.baseKey).toBe("marca-personal");
+    // mismo sector otra vez → nada
+    expect(await svc.syncSectorMenu(orgA, "personal_brand")).toBe("none");
+    // otro sector con plantilla → se cambia (nadie la tocó)
+    expect(await svc.syncSectorMenu(orgA, "salon")).toBe("applied");
+    expect((await svc.getActiveMenu(orgA))?.baseKey).toBe("salon-barberia");
+    // sector sin plantilla propia → vuelve al estándar
+    expect(await svc.syncSectorMenu(orgA, "health")).toBe("cleared");
+    expect(await svc.getActiveMenu(orgA)).toBeNull();
+    // un menú PROPIO nunca se toca
+    const propio = { v: 1, groups: [{ key: "sec-abc123", title: "Mío", items: [{ key: "caja" }] }] };
+    await svc.saveActiveMenu(orgA, { config: propio, baseKey: null });
+    for (const sector of ["personal_brand", "salon", "health"]) expect(await svc.syncSectorMenu(orgA, sector)).toBe("kept");
+    expect((await svc.getActiveMenu(orgA))?.config).toEqual(propio);
+    // una plantilla del sistema EDITADA tampoco
+    await svc.saveActiveMenu(orgA, { config: { ...base()!, groups: [...base()!.groups].reverse() }, baseKey: "marca-personal" });
+    expect(await svc.syncSectorMenu(orgA, "salon")).toBe("kept");
+    expect((await svc.getActiveMenu(orgA))?.baseKey).toBe("marca-personal");
+    await svc.resetActiveMenu(orgA);
+    const filas = await db.select().from(schema.menuConfig).where(eq(schema.menuConfig.organizationId, orgA));
+    expect(filas.filter((r) => r.kind === "active")).toHaveLength(0);
+  });
+
   it("borrar la organización limpia sus filas (cascada)", async () => {
     await db.delete(schema.organization).where(eq(schema.organization.id, orgB));
     const left = await db.select().from(schema.menuConfig).where(eq(schema.menuConfig.organizationId, orgB));

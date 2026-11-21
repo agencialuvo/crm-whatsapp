@@ -8,7 +8,9 @@ import {
   menuBaseKeySchema,
   menuConfigSchema,
   menuTemplateNameSchema,
+  findSystemTemplate,
   parseMenuConfig,
+  suggestedTemplateKey,
   type MenuConfig,
 } from "@/lib/menu-config";
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
@@ -109,6 +111,62 @@ export async function saveActiveMenu(
 /** Vuelve al menú estándar. Las plantillas guardadas no se tocan. */
 export async function resetActiveMenu(organizationId: string): Promise<void> {
   await getDb().delete(t).where(scoped(t.organizationId, organizationId, eq(t.kind, "active")));
+}
+
+/* ------------------------- el menú sigue al tipo de negocio ------------------------- */
+
+/** `applied`: se aplicó la plantilla del sector · `cleared`: se volvió al estándar · `kept`: había un menú propio, no se toca · `none`: nada que hacer. */
+export type SectorMenuSync = "applied" | "cleared" | "kept" | "none";
+
+const canonical = (raw: unknown): string | null => {
+  const parsed = parseMenuConfig(raw);
+  return parsed ? JSON.stringify(parsed) : null;
+};
+
+/**
+ * Adapta el menú al tipo de negocio que se acaba de elegir, SIN pisar lo que la organización personalizó:
+ * - sin menú activo → se aplica la plantilla del sector (`insert … onConflictDoNothing`: si otra pestaña guardó un
+ *   menú entre la lectura y la escritura, gana el de la persona);
+ * - con un menú activo que es EXACTAMENTE una plantilla del sistema aplicada antes (`baseKey` de una base y mismo
+ *   contenido) → nadie lo tocó, así que se cambia por la del sector nuevo (o vuelve al estándar);
+ * - con cualquier otro menú activo → se conserva tal cual.
+ * Es una forma conservadora: un menú que se cargó en el editor y se guardó pasa por `configFromResolved` y casi nunca
+ * coincide byte a byte con la plantilla, así que se trata como personalizado y no se toca.
+ */
+export async function syncSectorMenu(organizationId: string, categoryKey: string): Promise<SectorMenuSync> {
+  const target = findSystemTemplate(suggestedTemplateKey(categoryKey));
+  if (!target) return "none";
+  const db = getDb();
+  const [row] = await db
+    .select({ config: t.config, baseKey: t.baseKey })
+    .from(t)
+    .where(scoped(t.organizationId, organizationId, eq(t.kind, "active")))
+    .limit(1);
+
+  const targetConfig = target.config ? checkConfig(target.config) : null;
+
+  if (!row) {
+    if (!targetConfig) return "none";
+    await db
+      .insert(t)
+      .values({ id: newId("menuConfig"), organizationId, kind: "active", name: null, baseKey: target.key, config: targetConfig })
+      .onConflictDoNothing({ target: [t.organizationId], where: sql`${t.kind} = 'active'` });
+    return "applied";
+  }
+
+  const previous = findSystemTemplate(row.baseKey);
+  const untouched = !!previous && !!previous.config && canonical(row.config) === canonical(previous.config);
+  if (!untouched) return "kept";
+  if (previous.key === target.key) return "none";
+
+  // Se escribe solo si la fila sigue siendo la que se leyó (otra pestaña pudo cambiarla entre tanto).
+  const same = scoped(t.organizationId, organizationId, eq(t.kind, "active"), eq(t.baseKey, previous.key));
+  if (!targetConfig) {
+    await db.delete(t).where(same);
+    return "cleared";
+  }
+  await db.update(t).set({ config: targetConfig, baseKey: target.key, updatedAt: new Date() }).where(same);
+  return "applied";
 }
 
 /* ------------------------------ plantillas guardadas ------------------------------ */

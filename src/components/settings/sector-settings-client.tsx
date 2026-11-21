@@ -28,12 +28,18 @@ export function SectorSettingsClient({
     setError(null);
     setNotice(null);
     try {
-      await apiFetch("/api/organization/sector", {
+      const res = await apiFetch<{ menu?: string }>("/api/organization/sector", {
         method: "PUT",
         json: { action: "choose", categoryKey: selected },
       });
       setSaved(selected);
-      setNotice("Listo: tu tipo de negocio se actualizó.");
+      setNotice(
+        res?.menu === "applied" || res?.menu === "cleared"
+          ? "Listo: tu tipo de negocio se actualizó y el menú se adaptó. Puedes ajustarlo en Ajustes → Menú."
+          : res?.menu === "kept"
+            ? "Listo: tu tipo de negocio se actualizó. Tu menú personalizado no cambió."
+            : "Listo: tu tipo de negocio se actualizó."
+      );
       window.dispatchEvent(new Event(ORG_CONTEXT_CHANGED_EVENT));
       router.refresh();
     } catch (err) {
