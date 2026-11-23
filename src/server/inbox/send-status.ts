@@ -12,6 +12,7 @@ export const SEND_ERROR_STATUS: Record<SendError["code"], number> = {
   window_closed: 409,
   message_limit: 409,
   text_too_long: 422,
+  no_credit: 402,
   meta_error: 422,
   meta_unavailable: 503,
   upload_failed: 502,

@@ -9,6 +9,8 @@ export class SendError extends Error {
     | "message_limit"
     /** 022: el texto no cabe en el canal de esa conversación. */
     | "text_too_long"
+    /** Monedas: sin saldo y con el corte activo, no sale la plantilla (que Meta cobra). */
+    | "no_credit"
     | "meta_error"
     | "meta_unavailable"
     | "upload_failed";

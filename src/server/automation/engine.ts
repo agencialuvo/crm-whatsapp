@@ -188,6 +188,9 @@ export function classifyError(err: unknown): Classified {
 }
 
 const MAX_ERROR_CHARS = 500;
+/** Monedas: cada cuánto se reintenta una tarea retenida por falta de saldo, y cuánto se la retiene antes de descartarla. */
+const NO_CREDIT_RETRY_MS = 60 * 60_000;
+const NO_CREDIT_HOLD_MS = 48 * 60 * 60_000;
 const clip = (s: string) => (s.length > MAX_ERROR_CHARS ? `${s.slice(0, MAX_ERROR_CHARS)}…` : s);
 
 export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
@@ -618,6 +621,18 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
 async function handleFailure(row: Row, err: unknown, deps: Deps, now: Date): Promise<Outcome> {
   const c = classifyError(err);
   const reason = clip(`${c.code}: ${c.message}`);
+
+  // Monedas: sin saldo (y con el corte activo) la plantilla no sale. No es un fallo del paso ni gasta intentos: se
+  // retiene y se reintenta cada hora por si se recarga; pasado un par de días se descarta.
+  if (c.code === "no_credit") {
+    const heldTooLong = !!row.createdAt && now.getTime() - row.createdAt.getTime() > NO_CREDIT_HOLD_MS;
+    if (heldTooLong) {
+      await deps.markCancelled(row, "skipped_no_credit");
+      return "cancelled";
+    }
+    await deps.defer(row, new Date(now.getTime() + NO_CREDIT_RETRY_MS), "skipped_no_credit");
+    return "retry";
+  }
 
   if (c.recoverable && row.attempts < row.maxAttempts) {
     await deps.reschedule(row, new Date(now.getTime() + backoffMs(row.attempts)), reason);

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { chatJson, type ChatJsonResult, type ChatMessage } from "@/lib/ai";
+import { chatJson, type ChatJsonResult, type ChatMessage, type ChatUsageOpts } from "@/lib/ai";
 import { REPLY_INTENTS, type ReplyIntent } from "@/lib/automation";
 
 /**
@@ -96,7 +96,7 @@ export function buildIntentPrompt(text: string): ChatMessage[] {
 type Chat = (
   schema: z.ZodType<z.infer<typeof llmSchema>>,
   messages: ChatMessage[],
-  opts?: { timeoutMs?: number; organizationId?: string; judge?: boolean }
+  opts?: { timeoutMs?: number; organizationId?: string; judge?: boolean; usage?: ChatUsageOpts }
 ) => Promise<ChatJsonResult<z.infer<typeof llmSchema>>>;
 
 /** Reglas → LLM → `other`. `chat` se inyecta en las pruebas. */
@@ -115,6 +115,8 @@ export async function classifyReplyIntent(
       timeoutMs: CLASSIFY_TIMEOUT_MS,
       // Un clasificador corto no necesita el modelo grande: el «juez» del negocio suele ser el barato.
       judge: true,
+      // Solo medido: clasificar una respuesta no consume monedas en esta etapa.
+      usage: { service: "ai", refType: "automation_intent" },
     });
     if (!result.ok) return { intent: "other", source: "fallback" };
     const { intent, confidence } = result.data;

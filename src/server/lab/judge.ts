@@ -47,7 +47,8 @@ export async function judgeCase(input: {
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    { judge: true, organizationId: input.organizationId }
+    // El juez es del Laboratorio: se mide (`ai_lab`), nunca se cobra.
+    { judge: true, organizationId: input.organizationId, usage: { service: "ai_lab", refType: "lab_judge", refId: input.personaKey } }
   );
   if (!result.ok) {
     // Diagnóstico operativo: el caso queda visible como judge_failed y aquí

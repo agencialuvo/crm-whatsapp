@@ -39,6 +39,7 @@ import { getPlanAccess } from "@/server/business/saas-guard";
 import { notifyHandoff } from "@/server/notifications/service";
 import { getComboTriggerInstruction } from "@/server/ai/barbershop-context";
 import { isConversationSilenced } from "@/server/ai/ignored";
+import { beginAiTurnMeter } from "@/server/ai/metering";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -350,9 +351,23 @@ export async function runAgentTurn(
     { role: "system", content: TURN_FORMAT_REMINDER },
   ];
 
+  // Monedas: ¿alcanza el saldo? Con el corte activo y sin saldo el agente se calla (sin traspaso ni acuse: el turno
+  // cuenta como leído, así que tampoco hay bucle). Apagadas las monedas, no hace nada y no toca la base.
+  const meter = await beginAiTurnMeter({
+    organizationId,
+    conversationId,
+    lastInboundId: lastInbound.id,
+    isTest: conversation.isTest,
+  });
+  if (meter.blocked) return leido;
+
   const result = await chatJson(agentActionSchema(agenda), messages, {
     organizationId,
+    usage: meter.usage,
   });
+  // El cobro va tras una respuesta VÁLIDA y antes de entregarla: lo que el modelo ya gastó se registra aunque la
+  // entrega falle después. Idempotente: repetir el turno no cobra dos veces.
+  await meter.settle(result);
   if (!result.ok) {
     if (result.error === "not_configured") return leido;
     // Fallo persistente del proveedor o salida imposible → escalar (FR-022).

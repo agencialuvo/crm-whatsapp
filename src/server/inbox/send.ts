@@ -367,6 +367,7 @@ export async function sendText(input: {
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    consumo: { channel: target.conversation.channel },
     automatico: input.automatico,
     fila: {
       type: "text",
@@ -458,6 +459,7 @@ export async function sendMediaMessage(input: {
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    consumo: { channel: target.conversation.channel },
     automatico: input.automatico,
     fila: {
       type: kind,
@@ -558,6 +560,7 @@ export async function sendLibraryMedia(input: {
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    consumo: { channel: target.conversation.channel },
     automatico: input.automatico,
     fila: { type: kind, text: null, origin: "operator", mediaAssetId: asset.id, media: asset },
     estadoAlAceptar: "pending",
@@ -666,6 +669,7 @@ export async function sendStructured(
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
+    consumo: { channel: target.conversation.channel },
     fila: {
       type: input.kind,
       text: null,

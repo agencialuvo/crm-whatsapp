@@ -7,6 +7,7 @@ import { serializeMessage } from "@/server/inbox/ingest";
 import { SendError } from "@/server/inbox/send-error";
 import { reclaimOrphanStatus } from "@/server/inbox/status";
 import { avanzarPorRespuesta } from "@/server/leads/auto-stage";
+import { medirEnvio, type ConsumoEnvio } from "@/server/inbox/metering";
 
 /**
  * 041 — El registro de todo lo que sale por la bandeja.
@@ -192,6 +193,8 @@ export async function enviarYRegistrar(input: {
   confirmar?: OpcionesConfirmar;
   /** 044 — Lo envía un flujo de automatización: NO cuenta como «primera respuesta» del operador/IA. */
   automatico?: boolean;
+  /** Monedas: qué se mide (y, si es una plantilla de WhatsApp, se cobra) cuando Meta acepta el mensaje. */
+  consumo?: ConsumoEnvio;
 }): Promise<{ messageId: string; waMessageId: string }> {
   const registrada = await registrarIntento(
     input.organizationId,
@@ -209,6 +212,16 @@ export async function enviarYRegistrar(input: {
     throw err;
   }
   await confirmarEnvio(registrada, waMessageId, input.estadoAlAceptar, input.confirmar);
+  // Monedas: con el id de Meta en mano el envío es un hecho. No lanza, y apagadas no toca la base.
+  if (input.consumo) {
+    await medirEnvio({
+      organizationId: input.organizationId,
+      conversationId: input.conversationId,
+      messageId: registrada.id,
+      waMessageId,
+      consumo: input.consumo,
+    });
+  }
   // 044: la primera respuesta humana o de la IA avanza el lead de «Nuevo» a «En conversación». Tras el
   // envío confirmado y sin poder fallar hacia arriba (el mensaje ya salió).
   if (!input.automatico) await avanzarPorRespuesta(input.organizationId, input.conversationId);

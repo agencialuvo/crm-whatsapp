@@ -8,6 +8,7 @@ import {
   type EstadoIa,
 } from "@/lib/ai/provider";
 import { marcarEstadoPorRespuesta } from "@/server/ai/credentials";
+import { recordUsage } from "@/server/credits";
 
 /**
  * Adaptador LLM OpenRouter-compatible — ÚNICA frontera con el proveedor de IA
@@ -24,9 +25,46 @@ export type ChatMessage = {
   content: string;
 };
 
+/**
+ * Monedas — lo que costó la llamada, sumando los reintentos. Opcional: quien no lo lee (y los mocks de las
+ * pruebas) no se entera. `estimated` = el proveedor no informó tokens y se calcularon por longitud.
+ */
+export type AiUsageMeta = {
+  /** De quién es la llave con la que se pagó: solo `env` consume monedas. */
+  source: "org" | "env";
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+  estimated: boolean;
+  /** Llamadas al proveedor que devolvieron una respuesta (cada una se midió). */
+  attempts: number;
+};
+
+/** Cómo se mide una llamada. Sin esto `chatJson` no registra nada (no hay a quién atribuirlo). */
+export type ChatUsageOpts = {
+  /** `ai_lab` = Laboratorio y juez: se mide, nunca se cobra. */
+  service: "ai" | "ai_lab";
+  conversationId?: string | null;
+  refType?: string | null;
+  refId?: string | null;
+  /** Misma clave = misma llamada lógica: un reintento del turno no duplica la medición. Cada intento añade `#n`. */
+  key?: string | null;
+  /** Lo que se va a cobrar si la respuesta es válida y la llave es del entorno. Solo se ANOTA aquí; descontar es del llamador. */
+  chargeUnits?: number;
+  /** Con el corte activo esta llamada se habría bloqueado (modo sombra). */
+  wouldCut?: boolean;
+};
+
 export type ChatJsonResult<T> =
-  | { ok: true; data: T; raw: string }
-  | { ok: false; error: "not_configured" | "provider_error" | "invalid_output"; detail: string };
+  | { ok: true; data: T; raw: string; meta?: AiUsageMeta }
+  | {
+      ok: false;
+      error: "not_configured" | "provider_error" | "invalid_output";
+      detail: string;
+      meta?: AiUsageMeta;
+    };
+
+type ProviderUsage = { tokensIn: number; tokensOut: number };
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
@@ -54,6 +92,8 @@ export async function chatJson<T>(
      * solo cuenta el entorno: no hay fila que consultar ni que pausar.
      */
     organizationId?: string;
+    /** Monedas: cómo medir esta llamada. */
+    usage?: ChatUsageOpts;
   }
 ): Promise<ChatJsonResult<T>> {
   const resolved = await resolveAiProvider(opts?.organizationId);
@@ -76,6 +116,8 @@ export async function chatJson<T>(
   }
 
   let lastDetail = "";
+  const total: AiUsageMeta = { source: provider.source, model, tokensIn: 0, tokensOut: 0, estimated: false, attempts: 0 };
+  const meta = (): AiUsageMeta | undefined => (total.attempts > 0 ? { ...total } : undefined);
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const attemptMessages: ChatMessage[] =
       attempt === 1
@@ -89,25 +131,38 @@ export async function chatJson<T>(
             },
           ];
     try {
-      const raw = await callProvider(
+      const call = await callProvider(
         provider,
         model,
         attemptMessages,
         opts?.timeoutMs
       );
+      const raw = call.content;
+      // Tokens: lo que informó el proveedor o, si no informó nada, una estimación por longitud (≈4 caracteres/token).
+      const tokens = call.usage ?? {
+        tokensIn: estimateTokens(attemptMessages.map((m) => m.content).join("\n")),
+        tokensOut: estimateTokens(raw),
+      };
+      total.attempts += 1;
+      total.tokensIn += tokens.tokensIn;
+      total.tokensOut += tokens.tokensOut;
+      if (!call.usage) total.estimated = true;
       const extracted = extractJson(raw);
       if (extracted === null) {
+        await medirIntento(opts, provider, model, attempt, tokens, !call.usage, false);
         lastDetail = `sin JSON extraíble (raw=${truncate(raw)})`;
         continue;
       }
       const parsed = schema.safeParse(extracted);
       if (!parsed.success) {
+        await medirIntento(opts, provider, model, attempt, tokens, !call.usage, false);
         lastDetail = `no cumple el esquema: ${parsed.error.issues
           .map((i) => i.path.join(".") + " " + i.message)
           .join("; ")} (raw=${truncate(raw)})`;
         continue;
       }
-      return { ok: true, data: parsed.data, raw };
+      await medirIntento(opts, provider, model, attempt, tokens, !call.usage, true);
+      return { ok: true, data: parsed.data, raw, meta: meta() };
     } catch (err) {
       lastDetail = err instanceof Error ? err.message : String(err);
       /**
@@ -144,7 +199,51 @@ export async function chatJson<T>(
       ? "invalid_output"
       : "provider_error",
     detail: lastDetail,
+    meta: meta(),
   };
+}
+
+/** ≈4 caracteres por token: una estimación honrada y marcada como tal, solo cuando el proveedor no informa. */
+function estimateTokens(text: string): number {
+  return Math.max(Math.ceil(text.length / 4), 1);
+}
+
+/**
+ * Monedas — anota un intento en `credit_usage`. NUNCA lanza ni retrasa de más: medir es secundario a contestar, y con
+ * `CREDITS` apagada `recordUsage` ni toca la base. Solo la llamada que dio una respuesta válida con llave del entorno
+ * lleva `chargedUnits`: es la que el llamador descuenta.
+ */
+async function medirIntento(
+  opts: { organizationId?: string; usage?: ChatUsageOpts } | undefined,
+  provider: AiProvider,
+  model: string,
+  attempt: number,
+  tokens: ProviderUsage,
+  estimated: boolean,
+  valid: boolean
+): Promise<void> {
+  const u = opts?.usage;
+  if (!u || !opts?.organizationId) return;
+  try {
+    await recordUsage({
+      organizationId: opts.organizationId,
+      service: u.service,
+      source: provider.source,
+      model,
+      tokensIn: tokens.tokensIn,
+      tokensOut: tokens.tokensOut,
+      estimated,
+      conversationId: u.conversationId ?? null,
+      refType: u.refType ?? null,
+      refId: u.refId ?? null,
+      chargedUnits: valid && u.service === "ai" && provider.source === "env" ? (u.chargeUnits ?? 0) : 0,
+      wouldCut: u.wouldCut ?? false,
+      idempotencyKey: u.key ? `${u.key}#${attempt}` : null,
+      meta: { attempt, valid },
+    });
+  } catch (err) {
+    console.error("[monedas] no se pudo medir la llamada a la IA:", err instanceof Error ? err.message : err);
+  }
 }
 
 function detalleNoConfigurado(estado: Exclude<EstadoIa, { activa: true }>): string {
@@ -163,7 +262,7 @@ async function callProvider(
   model: string,
   messages: ChatMessage[],
   timeoutMs = 60_000
-): Promise<string> {
+): Promise<{ content: string; usage?: ProviderUsage }> {
   // La base URL de una ORGANIZACIÓN la escribió quien configura: se revalida aquí (puede venir de antes de la guarda).
   // La del entorno la fija quien opera el servidor y puede ser local.
   if (provider.source === "org") {
@@ -189,12 +288,20 @@ async function callProvider(
     }
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
     };
     const content = json.choices?.[0]?.message?.content;
     if (typeof content !== "string" || content.length === 0) {
       throw new Error("respuesta del proveedor sin contenido");
     }
-    return content;
+    // OpenRouter y compatibles informan `usage`; si falta o no es numérico, quien llama estima.
+    const pin = Number(json.usage?.prompt_tokens);
+    const pout = Number(json.usage?.completion_tokens);
+    const usage =
+      Number.isFinite(pin) && Number.isFinite(pout) && (pin > 0 || pout > 0)
+        ? { tokensIn: Math.floor(pin), tokensOut: Math.floor(pout) }
+        : undefined;
+    return { content, usage };
   } finally {
     clearTimeout(timer);
   }

@@ -83,10 +83,45 @@ describe("las tablas credit_* entran por la puerta única", () => {
   });
 });
 
-describe("las monedas existen pero todavía no están conectadas al flujo (Paso 2)", () => {
-  it("nadie fuera de server/credits/ y de las pruebas importa la puerta aún", () => {
+describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3)", () => {
+  /**
+   * Quién puede importar la puerta. Cada uno es un punto de conexión deliberado: medir la IA, cobrar un turno,
+   * medir/cobrar un envío y mantener la cuota al día. Ampliarlo es una decisión, no un descuido: el cobro del
+   * Paso 4+ (recargas, webhooks, interfaz) se suma aquí a propósito.
+   */
+  const PUNTOS_DE_CONEXION = [
+    "lib/ai/index.ts", // mide cada llamada a la IA (credit_usage)
+    "server/ai/metering.ts", // el turno del agente: pre-chequeo, medición y cobro
+    "server/inbox/metering.ts", // los envíos: pre-chequeo de plantillas, medición y cobro
+    "server/saas/credits-sync.ts", // la cuota del periodo sigue a la suscripción
+  ];
+
+  it("nadie fuera de server/credits/ y de los puntos de conexión importa la puerta", () => {
     const importadores = todos.filter((f) => !rel(f).startsWith("server/credits/") && /from "@\/server\/credits(\/[^"]*)?"/.test(leer(f)));
-    expect(importadores.map(rel), "Conectar el flujo (pipeline, outbox, sweeper, webhooks) es del paso siguiente").toEqual([]);
+    expect(importadores.map(rel).sort(), "Un archivo nuevo que usa la puerta debe agregarse a PUNTOS_DE_CONEXION a propósito").toEqual([...PUNTOS_DE_CONEXION].sort());
+  });
+
+  it("pipeline, outbox y el barrido no hablan con la puerta directo: pasan por su módulo de medición", () => {
+    for (const f of ["server/ai/pipeline.ts", "server/inbox/outbox.ts", "server/saas/subscription-sweeper.ts", "server/whatsapp/templates.ts"]) {
+      expect(leer(path.join(SRC, f)), f).not.toMatch(/from "@\/server\/credits/);
+    }
+    expect(leer(path.join(SRC, "server/ai/pipeline.ts"))).toContain("beginAiTurnMeter");
+    expect(leer(path.join(SRC, "server/inbox/outbox.ts"))).toContain("medirEnvio");
+    expect(leer(path.join(SRC, "server/saas/subscription-sweeper.ts"))).toContain("syncAllQuotas");
+  });
+
+  it("la suscripción no llama a las monedas: la cuota la pone al día un módulo aparte, nunca dentro de su transacción", () => {
+    expect(leer(path.join(SRC, "server/saas/subscription.ts"))).not.toMatch(/credits/i);
+  });
+
+  it("el módulo que sigue a la suscripción solo LEE subscription/plan", () => {
+    const code = sinComentarios(leer(path.join(SRC, "server/saas/credits-sync.ts")));
+    expect(code).not.toMatch(/\.(insert|update|delete)\(\s*schema\.(subscription|plan)\b/);
+  });
+
+  it("solo se cobra por la puerta (spendCredits) y nunca en un camino que no sea el turno o el envío", () => {
+    const quienCobra = todos.filter((f) => !rel(f).startsWith("server/credits/") && /\bspendCredits\(/.test(sinComentarios(leer(f))));
+    expect(quienCobra.map(rel).sort()).toEqual(["server/ai/metering.ts", "server/inbox/metering.ts"]);
   });
 
   it("la puerta no importa el flujo que algún día la llamará (sin dependencias circulares)", () => {

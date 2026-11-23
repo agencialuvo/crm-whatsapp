@@ -16,6 +16,7 @@ import {
 } from "@/server/whatsapp/credentials";
 import { callGraphSend, SendError } from "@/server/inbox/send";
 import { enviarYRegistrar } from "@/server/inbox/outbox";
+import { puedeEnviar } from "@/server/inbox/metering";
 import type { WebhookValue } from "@/server/inbox/webhook";
 
 /** Errores tipados del servicio de plantillas → HTTP en la capa de API. */
@@ -367,11 +368,20 @@ export async function sendTemplate(input: {
     );
   }
 
+  // Monedas: la plantilla es lo que Meta cobra. Con el corte activo y sin saldo no sale (antes de crear la fila:
+  // no queda una burbuja fallida por algo que no es del envío). En modo sombra deja pasar y lo anota.
+  const consumo = { channel: "whatsapp", template: true, templateCategory: template.category } as const;
+  const permiso = await puedeEnviar(input.organizationId, consumo);
+  if (!permiso.allow) {
+    throw new SendError("no_credit", "Sin monedas suficientes para enviar plantillas. Recarga tu saldo para continuar.");
+  }
+
   // 041: la fila existe antes de llamar a Graph; un fallo deja una burbuja `failed` con el motivo.
   const { messageId } = await enviarYRegistrar({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
     automatico: input.automatico,
+    consumo,
     fila: {
       type: "template",
       text: renderBody(template.body, values),
