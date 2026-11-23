@@ -116,11 +116,11 @@ describe("una sola puerta escribe la suscripción", () => {
     expect(/insert\(\s*schema\.subscriptionEvent\s*\)/.test(code)).toBe(true);
   });
 
-  it("el rastro del Super Admin solo lo escriben la puerta de la suscripción y el comando de línea de comandos", () => {
+  it("el rastro del Super Admin solo lo escriben la puerta de la suscripción y la del catálogo de paquetes (cada una en la transacción de su cambio)", () => {
     const infractores: string[] = [];
     for (const f of todos) {
       const r = rel(f);
-      if (r === "server/saas/subscription.ts") continue;
+      if (r === "server/saas/subscription.ts" || r === "server/credits/packs.ts") continue;
       if (/insert\(\s*schema\.superAdminAudit\s*\)/.test(leer(f))) infractores.push(r);
     }
     expect(infractores).toEqual([]);

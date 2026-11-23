@@ -166,6 +166,26 @@ export const idemKey = {
   secondRow: (key: string) => `${key}~topup`,
 } as const;
 
+/* ───────────────────────── Catálogo de paquetes de recarga ───────────────────────── */
+
+/** Los límites del catálogo: los comparten la validación de la API y la puerta. */
+export const PACK_LIMITS = {
+  nameMin: 2,
+  nameMax: 60,
+  maxPacks: 50,
+  /** 1.000.000 de monedas por paquete. */
+  maxUnits: 1_000_000 * UNITS_PER_COIN,
+  /** 100.000 en la moneda del paquete (en centavos). */
+  maxPriceCents: 10_000_000,
+  maxSort: 9999,
+  currencies: ["PEN", "USD"] as readonly string[],
+} as const;
+
+/** Cuánto cuesta una moneda en este paquete (en centavos), para compararlos. */
+export function pricePerCoinCents(pack: { units: number; priceCents: number }): number {
+  return pack.units > 0 ? (pack.priceCents / pack.units) * UNITS_PER_COIN : 0;
+}
+
 /* ───────────────────────── Valores provisionales (modo sombra) ───────────────────────── */
 
 /**

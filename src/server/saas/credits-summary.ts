@@ -1,6 +1,7 @@
 import { estadoIaDe } from "@/lib/ai/provider";
 import { RATE_KEYS, templateRateKey, TEMPLATE_CATEGORIES } from "@/lib/credits";
-import { checkCredit, creditsEnabled, getAlertState, getCreditBalance, getPeriodSpend, priceFor, type PeriodSpend } from "@/server/credits";
+import type { PublicPackDto } from "@/lib/super-admin-credits";
+import { checkCredit, creditsEnabled, getAlertState, getCreditBalance, getPeriodSpend, listPacks, priceFor, type PeriodSpend } from "@/server/credits";
 import { ensureCreditAccount } from "@/server/saas/credits-sync";
 
 /**
@@ -87,6 +88,21 @@ export async function creditSummary(organizationId: string, now: Date = new Date
   } catch (err) {
     console.error(`[monedas] resumen de ${organizationId}:`, err instanceof Error ? err.message : err);
     return { enabled: false };
+  }
+}
+
+/**
+ * Los paquetes de recarga a la venta: solo los ACTIVOS y solo lo que un cliente necesita (id, nombre, monedas,
+ * precio). Con `CREDITS` apagada, `{ enabled: false, packs: [] }` sin tocar la base. Nunca lanza.
+ */
+export async function activePacks(): Promise<{ enabled: boolean; packs: PublicPackDto[] }> {
+  if (!creditsEnabled()) return { enabled: false, packs: [] };
+  try {
+    const rows = await listPacks({ activeOnly: true });
+    return { enabled: true, packs: rows.map((p) => ({ id: p.id, name: p.name, units: p.units, priceCents: p.priceCents, currency: p.currency })) };
+  } catch (err) {
+    console.error("[monedas] paquetes activos:", err instanceof Error ? err.message : err);
+    return { enabled: false, packs: [] };
   }
 }
 

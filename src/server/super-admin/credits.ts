@@ -1,6 +1,10 @@
-import { coinsToUnits } from "@/lib/credits";
-import type { CreditsActionInput } from "@/lib/super-admin-credits";
+import { coinsToUnits, pricePerCoinCents } from "@/lib/credits";
+import type { CreditsActionInput, PackCreateInput, PackDto, PackUpdateInput } from "@/lib/super-admin-credits";
 import {
+  createPack,
+  listPacks,
+  updatePack,
+  type PackRow,
   adjustCredits,
   calibrationReport,
   configureCut,
@@ -72,6 +76,55 @@ export async function applyCreditsAction(
   if (res.status === "disabled") return OFF;
   console.info(`[monedas] corte de ${organizationId} ${input.cutEnabled ? "ACTIVADO" : "desactivado"} por ${admin.userId}`);
   return { ok: true, duplicate: false };
+}
+
+/* ───────────────────── Catálogo de paquetes de recarga ───────────────────── */
+
+const toPackDto = (p: PackRow): PackDto => ({
+  id: p.id,
+  name: p.name,
+  units: p.units,
+  priceCents: p.priceCents,
+  currency: p.currency,
+  active: p.active,
+  sortOrder: p.sortOrder,
+  pricePerCoinCents: Math.round(pricePerCoinCents(p) * 100) / 100,
+  createdAt: p.createdAt.toISOString(),
+});
+
+/** Todo el catálogo (activos e inactivos), en el orden en que se muestra. */
+export async function packsOverview(): Promise<PackDto[]> {
+  return (await listPacks()).map(toPackDto);
+}
+
+export type PackOutcome = { ok: true; pack: PackDto; changed: boolean } | { ok: false; status: 404 | 409 | 422; code: string; message: string };
+type Actor = { userId: string; email?: string; ip?: string | null };
+
+const NAME_TAKEN: PackOutcome = { ok: false, status: 409, code: "name_taken", message: "Ya existe un paquete con ese nombre." };
+
+export async function packCreate(actor: Actor, input: PackCreateInput): Promise<PackOutcome> {
+  const res = await createPack({
+    name: input.name,
+    units: coinsToUnits(input.coins),
+    priceCents: input.priceCents,
+    currency: input.currency,
+    sortOrder: input.sortOrder,
+    active: input.active,
+  }, actor);
+  if (res.status === "name_taken") return NAME_TAKEN;
+  if (res.status === "limit_reached") return { ok: false, status: 409, code: "limit_reached", message: "Se alcanzó el máximo de paquetes; desactiva o reutiliza uno." };
+  if (res.status !== "created") return { ok: false, status: 422, code: "invalid", message: "No se pudo crear el paquete." };
+  return { ok: true, pack: toPackDto(res.pack), changed: true };
+}
+
+export async function packUpdate(actor: Actor, id: string, input: PackUpdateInput): Promise<PackOutcome> {
+  const { coins, ...rest } = input;
+  const res = await updatePack(id, { ...rest, ...(coins !== undefined ? { units: coinsToUnits(coins) } : {}) }, actor);
+  if (res.status === "not_found") return { ok: false, status: 404, code: "not_found", message: "Paquete no encontrado" };
+  if (res.status === "name_taken") return NAME_TAKEN;
+  if (res.status === "nothing") return { ok: true, pack: toPackDto(res.pack), changed: false };
+  if (res.status !== "updated") return { ok: false, status: 422, code: "invalid", message: "No se pudo actualizar el paquete." };
+  return { ok: true, pack: toPackDto(res.pack), changed: true };
 }
 
 /** Concilia ahora, a pedido del operador. `null` con las monedas apagadas. */
