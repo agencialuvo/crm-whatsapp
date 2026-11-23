@@ -1,6 +1,7 @@
 import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import type { CommissionSource } from "@/lib/salon/commission";
 import type { FunnelPointDto, FunnelTotalsDto } from "@/lib/salon/funnel";
+import type { BreakEvenDto } from "@/lib/salon/break-even";
 import type { RepurchaseDto } from "@/lib/salon/insights";
 import type { PaymentMethod, PriceMode, ScheduleDay } from "@/lib/salon/schemas";
 
@@ -306,6 +307,8 @@ export type DashboardComparisonDto = {
 
 /** El panel ejecutivo: reporte del periodo, citas y cumpleaños del mes. */
 export type SalonDashboardDto = {
+  /** Punto de equilibrio del NEGOCIO (no usa los filtros de profesional ni de servicio). */
+  breakEven: BreakEvenDto;
   /** Cada cuántos días vuelve un cliente y a quién ya le toca volver. */
   repurchase: RepurchaseDto;
   /** Retención del periodo: clientes atendidos con 2 o más visitas en total. */

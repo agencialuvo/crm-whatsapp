@@ -13,6 +13,7 @@ import { addDaysISO } from "@/lib/time/slots";
 import { resolvePeriod, type ResolvedPeriod } from "@/server/analytics/period";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { getFunnelDaily, funnelTotals, type FunnelDay, type FunnelFilters } from "@/server/business/financial-funnel";
+import { getBreakEven } from "@/server/business/break-even";
 import { getRepurchaseCycle } from "@/server/business/business-insights";
 import { getSalesReport } from "@/server/business/sales-service";
 
@@ -214,7 +215,7 @@ export async function getDashboard(
   const previous = resolvePeriod({ from: cmp.from, to: cmp.to, timezone: period.timezone });
   // «Hoy» para contar los días sin venir: el de hoy, o el último del periodo si este ya pasó.
   const asOf = period.dto.to < today ? period.dto.to : today;
-  const [report, appointments, clients, retention, days, previousDays, previousRetention, repurchase] =
+  const [report, appointments, clients, retention, days, previousDays, previousRetention, repurchase, breakEven] =
     await Promise.all([
     getSalesReport(organizationId, period, staffId, false),
     agendaEnabled() ? countAppointments(organizationId, period, staffId) : Promise.resolve(null),
@@ -224,6 +225,7 @@ export async function getDashboard(
     getFunnelDaily(organizationId, previous, filters),
     getRetention(organizationId, previous, staffId),
     getRepurchaseCycle(organizationId, period, asOf),
+    getBreakEven(organizationId, period, today),
   ]);
   const funnel = funnelTotals(days, filters);
   const previousFunnel = funnelTotals(previousDays, filters);
@@ -239,6 +241,7 @@ export async function getDashboard(
   return {
     retention,
     repurchase,
+    breakEven,
     comparison,
     funnel,
     series: buildSeries(period, days),

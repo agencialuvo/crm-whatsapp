@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { BreakEvenCard } from "@/components/negocio/dashboard-break-even";
 import { FunnelCards } from "@/components/negocio/dashboard-funnel";
 import { RepurchaseCard } from "@/components/negocio/dashboard-insights";
 import {
@@ -309,6 +310,13 @@ export function DashboardClient({
 
       {(data || !error) && (
         <>
+          <BreakEvenCard
+            data={data?.breakEven ?? null}
+            currency={currency}
+            loading={loading}
+            filtersActive={filtersActive}
+          />
+
           <div className="grid gap-5 lg:grid-cols-3">
             <div className="lg:col-span-2">
               <Section
