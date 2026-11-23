@@ -84,7 +84,8 @@ export const POST = withAuth(async (session, req: Request, ctx: Params) => {
       return apiError(templateErrorStatus(err), err.code, err.message);
     }
     if (err instanceof SendError) {
-      return apiError(409, err.code, err.message);
+      // Sin monedas (corte activo) no es un conflicto de la conversación: es 402, como en el envío de plantillas.
+      return apiError(err.code === "no_credit" ? 402 : 409, err.code, err.message);
     }
     throw err;
   }

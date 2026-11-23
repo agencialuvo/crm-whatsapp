@@ -11,6 +11,8 @@ import { automationsEnabled } from "@/server/automation/flag";
 import { avisoIaDe } from "@/server/ai/aviso";
 import { AvisoIaBanner } from "@/components/avisos/aviso-ia";
 import { AvisoSuscripcion } from "@/components/avisos/aviso-suscripcion";
+import { AvisoMonedasBanner } from "@/components/avisos/aviso-monedas";
+import { avisoMonedasDe } from "@/server/saas/credits-summary";
 import { enforcementEnabled, getSubscriptionAccess } from "@/server/saas/enforcement";
 import { TimezoneDetector } from "@/components/onboarding/timezone-detector";
 import { isTimezoneConfigured } from "@/server/timezone";
@@ -36,6 +38,8 @@ export default async function AppLayout({
   // bot roto. Se resuelve en el servidor y en el layout para que se vea desde
   // CUALQUIER pantalla, no solo desde el panel de un contacto (#85).
   const aviso = await avisoIaDe(session.organizationId);
+  // Monedas: solo con el corte activo y sin saldo. Apagadas (lo normal) o en modo sombra, no consulta nada y no aparece.
+  const avisoMonedas = await avisoMonedasDe(session.organizationId);
   // El menú personalizado baja ya resuelto desde el servidor: así la barra nace con su orden y sus nombres, sin
   // parpadear del menú estándar al personalizado. Un fallo de lectura deja el menú estándar.
   const menuConfig = await getMenuConfig(session.organizationId);
@@ -73,6 +77,7 @@ export default async function AppLayout({
           <>
             <AvisoSuscripcion access={suscripcion} />
             <AvisoIaBanner aviso={aviso} />
+            <AvisoMonedasBanner aviso={avisoMonedas} puedeConfigurar={canConfigure(session.role)} />
           </>
         }
       >

@@ -96,6 +96,7 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     "server/saas/credits-sync.ts", // la cuota del periodo sigue a la suscripción
     "server/notifications/credit-alerts.ts", // los avisos de saldo (campanita y correo)
     "server/super-admin/credits.ts", // lo que ve y hace el Super Admin (reporte, ajuste manual, corte)
+    "server/saas/credits-summary.ts", // lo que ve el cliente (saldo, consumo, costos) — solo lectura
   ];
 
   it("nadie fuera de server/credits/ y de los puntos de conexión importa la puerta", () => {
@@ -135,6 +136,14 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     for (const f of todos.filter((f) => rel(f).startsWith("app/api/super-admin/credits/"))) {
       expect(leer(f), rel(f)).not.toMatch(/from "@\/server\/credits/);
       expect(leer(f), rel(f)).toContain("withSuperAdmin(");
+    }
+  });
+
+  it("lo que ve el cliente es SOLO LECTURA: credits-summary no mueve saldo, y las pantallas no hablan con la puerta", () => {
+    const code = sinComentarios(leer(path.join(SRC, "server/saas/credits-summary.ts")));
+    expect(code).not.toMatch(/\b(spendCredits|adjustCredits|grantPeriodQuota|adjustPeriodQuota|applyTopup|refundTopup|configureCut|expirePeriodQuota|claimAlert)\b/);
+    for (const f of todos.filter((f) => rel(f).startsWith("components/credits/") || rel(f).startsWith("components/avisos/aviso-monedas") || rel(f).startsWith("app/api/credits/") || rel(f).startsWith("app/(app)/ajustes/monedas"))) {
+      expect(sinComentarios(leer(f)), rel(f)).not.toMatch(/from "@\/server\/credits/);
     }
   });
 

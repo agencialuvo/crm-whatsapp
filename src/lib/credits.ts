@@ -37,6 +37,11 @@ export function formatCoins(units: number): string {
   return unitsToCoins(units).toLocaleString("es-PE", { maximumFractionDigits: 2 });
 }
 
+/** «1 moneda», «3 monedas», «0,5 monedas»: el costo dicho para una persona. */
+export function formatCoinsLabel(units: number): string {
+  return `${formatCoins(units)} ${units === UNITS_PER_COIN ? "moneda" : "monedas"}`;
+}
+
 /* ───────────────────────── Saldo ───────────────────────── */
 
 export type Balances = { planBalance: number; topupBalance: number };

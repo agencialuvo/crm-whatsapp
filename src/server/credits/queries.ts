@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -76,6 +76,33 @@ export async function getAlertState(organizationId: string): Promise<AlertState 
       )
     );
   return { planBalance: acc.planBalance, topupBalance: acc.topupBalance, quota: row?.quota ?? 0, periodStart: acc.planPeriodStart, cutEnabled: acc.cutEnabled };
+}
+
+export type PeriodSpend = { ai: { count: number; units: number }; whatsapp: { count: number; units: number } };
+
+/**
+ * Lo que se ha descontado desde `from` (normalmente el inicio del periodo), por servicio: cuántos turnos o envíos y
+ * cuántas unidades. Sale del LIBRO —lo que de verdad se cobró—, no de la medición; un gasto repartido entre cuota y
+ * recargas cuenta una sola vez. Solo lectura. `null` con `CREDITS` apagada.
+ */
+export async function getPeriodSpend(organizationId: string, from: Date): Promise<PeriodSpend | null> {
+  if (!creditsEnabled()) return null;
+  const l = schema.creditLedger;
+  const rows = await getDb()
+    .select({
+      service: l.service,
+      count: sql<number>`count(*) filter (where ${l.idempotencyKey} not like '%~topup')::int`,
+      units: sql<number>`coalesce(sum(-${l.amount}), 0)::int`,
+    })
+    .from(l)
+    .where(scoped(l.organizationId, organizationId, eq(l.kind, "spend"), gte(l.createdAt, from)))
+    .groupBy(l.service);
+  const out: PeriodSpend = { ai: { count: 0, units: 0 }, whatsapp: { count: 0, units: 0 } };
+  for (const r of rows) {
+    if (r.service === "ai") out.ai = { count: r.count, units: r.units };
+    if (r.service === "whatsapp") out.whatsapp = { count: r.count, units: r.units };
+  }
+  return out;
 }
 
 /**

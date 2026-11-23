@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchSelect } from "@/components/ui/search-select";
+import { templateCostLabel, templateSendError, useTemplateCosts } from "@/components/credits/template-cost";
 
 /**
  * Selector de plantilla aprobada para conversaciones con ventana cerrada
@@ -25,6 +26,7 @@ export function TemplateSender({
   const [variables, setVariables] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const costs = useTemplateCosts();
 
   useEffect(() => {
     let cancelled = false;
@@ -86,9 +88,10 @@ export function TemplateSender({
     setSending(false);
     if (!res.ok) {
       const data = (await res.json().catch(() => null)) as {
-        error?: { message?: string };
+        error?: { code?: string; message?: string };
       } | null;
-      setError(data?.error?.message ?? "No se pudo enviar la plantilla");
+      // 402 `no_credit`: sin monedas no es un fallo del envío; se dice qué pasó y qué sigue funcionando.
+      setError(templateSendError(res.status, data?.error, "No se pudo enviar la plantilla", costs, selected.category));
       return;
     }
     setSelectedId("");
@@ -119,6 +122,11 @@ export function TemplateSender({
       {selected && (
         <p className="rounded-md bg-subtle p-2.5 text-xs text-muted-foreground">
           {selected.body}
+        </p>
+      )}
+      {selected && templateCostLabel(costs, selected.category) && (
+        <p className="text-xs text-text-3" data-testid="template-cost">
+          Costo: {templateCostLabel(costs, selected.category)}
         </p>
       )}
       {values.map((value, i) => (

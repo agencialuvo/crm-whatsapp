@@ -263,7 +263,10 @@ export function settingsSections({
   sector = false,
   suscripcion = false,
   menu = false,
+  monedas = false,
 }: {
+  /** Monedas — «Mis monedas»: existe con `CREDITS` encendida y solo para quien configura el negocio. */
+  monedas?: boolean;
   /** Bloque 3 — «Menú» (personalizar el menú lateral) solo para quien puede configurar el negocio. */
   menu?: boolean;
   /** 046 — «Suscripción» existe solo con el cobro con Mercado Pago encendido (`MERCADOPAGO`). */
@@ -306,6 +309,7 @@ export function settingsSections({
   if (sector) negocio.push({ href: "/ajustes/sector", label: "Tipo de negocio" });
   if (menu) negocio.push({ href: "/ajustes/menu", label: "Menú" });
   if (suscripcion) negocio.push({ href: "/ajustes/suscripcion", label: "Suscripción" });
+  if (monedas) negocio.push({ href: "/ajustes/monedas", label: "Monedas" });
 
   // Marketing (retención y recompra): solo con el módulo del salón, igual que la fidelización que ya tenía.
   const marketing: SettingsLink[] = salon

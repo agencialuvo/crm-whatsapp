@@ -7,6 +7,7 @@ import type { TemplateDto } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SearchSelect } from "@/components/ui/search-select";
+import { templateCostLabel, templateSendError, useTemplateCosts } from "@/components/credits/template-cost";
 
 /** Cuenta {{1}}..{{n}} igual que el servidor, para pedir sus valores. */
 function countVariables(body: string): number {
@@ -35,6 +36,7 @@ export function StartConversation({
   const [vars, setVars] = useState<string[]>([]);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const costs = useTemplateCosts();
 
   useEffect(() => {
     void (async () => {
@@ -63,12 +65,12 @@ export function StartConversation({
     }).catch(() => null);
     setEnviando(false);
     const data = (await res?.json().catch(() => null)) as
-      | { error?: { message?: string }; conversationId?: string }
+      | { error?: { code?: string; message?: string }; conversationId?: string }
       | null;
     if (!res?.ok) {
-      // El fallo de Meta se explica aquí mismo (plantilla en pausa, número
-      // que no la recibe…) en vez de perderse.
-      setError(data?.error?.message ?? "No se pudo iniciar la conversación");
+      // 402 `no_credit`: sin monedas, dicho claro (cuánto cuesta y qué sigue funcionando). El fallo de Meta se
+      // explica aquí mismo (plantilla en pausa, número que no la recibe…) en vez de perderse.
+      setError(templateSendError(res?.status, data?.error, "No se pudo iniciar la conversación", costs, elegida?.category));
       return;
     }
     onStarted(data?.conversationId ?? "");
@@ -115,6 +117,12 @@ export function StartConversation({
       {elegida && (
         <p className="rounded-md border bg-subtle px-3 py-2 text-[12px] text-text-2">
           {elegida.body}
+        </p>
+      )}
+
+      {elegida && templateCostLabel(costs, elegida.category) && (
+        <p className="text-xs text-text-3" data-testid="template-cost">
+          Costo: {templateCostLabel(costs, elegida.category)}
         </p>
       )}
 
