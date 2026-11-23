@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { idemKey, splitSpend, UNLIMITED, type Bucket, type LedgerService } from "@/lib/credits";
@@ -118,6 +118,82 @@ export async function grantPeriodQuota(input: {
     plan += input.units;
     await saveAccount(tx, org, { ...base, planBalance: plan, unlimited: false });
     return { status: "applied", balance: balanceOf({ planBalance: plan, topupBalance: acc.topupBalance }) };
+  });
+}
+
+/**
+ * Ajusta la cuota del periodo YA cargado cuando la suscripción cambia de plan a mitad de periodo. Solo SUBE: si el
+ * plan nuevo da más, entra la diferencia (`planchange:<sub>:<inicio>:<cuota nueva>`); si da menos, no se le quita
+ * nada a mitad de periodo (una bajada rige al corte y la cuota nueva entra con la renovación). Pasar a «sin tope»
+ * lo marca ilimitado; salir de él carga la cuota nueva completa. Repetirlo con la misma cuota no hace nada.
+ *
+ * Solo actúa si el periodo cargado es el de la suscripción: si la cuota de este periodo aún no se cargó, la
+ * carga normal (`grantPeriodQuota`) ya usará el plan vigente.
+ */
+export async function adjustPeriodQuota(input: {
+  organizationId: string;
+  subscriptionId: string;
+  periodStart: Date;
+  units: number;
+  actorUserId?: string | null;
+}): Promise<OpResult> {
+  if (!creditsEnabled()) return DISABLED;
+  if (input.units !== UNLIMITED) {
+    assertInt(input.units, "units");
+    if (input.units < 0) throw new Error("units no puede ser negativo (usa UNLIMITED para «sin tope»)");
+  }
+
+  return getDb().transaction(async (tx): Promise<OpResult> => {
+    const org = input.organizationId;
+    const acc = await lockAccount(tx, org);
+    if (!acc.planPeriodStart || acc.planPeriodStart.getTime() !== input.periodStart.getTime()) {
+      return { status: "stale", balance: balanceOf(acc) };
+    }
+
+    if (input.units === UNLIMITED) {
+      if (acc.unlimited) return { status: "nothing", reason: "already_unlimited", balance: balanceOf(acc) };
+      await saveAccount(tx, org, { unlimited: true });
+      return { status: "unlimited", balance: balanceOf(acc) };
+    }
+
+    // Lo que ya se concedió de ESTE periodo (concesión inicial + ajustes previos). Un plan que siempre fue sin tope no concedió nada.
+    const [granteds] = await tx
+      .select({ granted: sql<number>`coalesce(sum(${schema.creditLedger.amount}), 0)::int` })
+      .from(schema.creditLedger)
+      .where(
+        scoped(
+          schema.creditLedger.organizationId,
+          org,
+          and(
+            eq(schema.creditLedger.kind, "grant"),
+            eq(schema.creditLedger.bucket, "plan"),
+            eq(schema.creditLedger.periodStart, input.periodStart)
+          )
+        )
+      );
+    const current = granteds?.granted ?? 0;
+    const delta = input.units - current;
+    if (delta <= 0) {
+      if (acc.unlimited) await saveAccount(tx, org, { unlimited: false });
+      return { status: "nothing", reason: "no_increase", balance: balanceOf(acc) };
+    }
+
+    const inserted = await insertLedgerRow(tx, {
+      organizationId: org,
+      kind: "grant",
+      bucket: "plan",
+      amount: delta,
+      key: idemKey.planChange(input.subscriptionId, input.periodStart, input.units),
+      refType: "subscription",
+      refId: input.subscriptionId,
+      periodStart: input.periodStart,
+      actorUserId: input.actorUserId,
+      note: "Cambio de plan: ajuste de la cuota del periodo",
+    });
+    if (!inserted) return { status: "duplicate", balance: balanceOf(acc) };
+    const planBalance = acc.planBalance + delta;
+    await saveAccount(tx, org, { planBalance, unlimited: false });
+    return { status: "applied", balance: balanceOf({ planBalance, topupBalance: acc.topupBalance }) };
   });
 }
 

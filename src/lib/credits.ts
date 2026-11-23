@@ -155,6 +155,8 @@ export const idemKey = {
   topup: (topupId: string) => `topup:${topupId}`,
   /** Un reembolso de una recarga. */
   refund: (topupId: string) => `refund:${topupId}`,
+  /** El ajuste de cuota por un cambio de plan a mitad de periodo (la clave lleva la cuota nueva: repetirlo no suma). */
+  planChange: (subscriptionId: string, periodStart: Date, units: number) => `planchange:${subscriptionId}:${iso(periodStart)}:${units}`,
   /** La segunda fila de un gasto que toca los dos saldos. */
   secondRow: (key: string) => `${key}~topup`,
 } as const;

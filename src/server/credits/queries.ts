@@ -1,3 +1,4 @@
+import { and, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -35,6 +36,46 @@ export async function getCreditBalance(organizationId: string): Promise<CreditBa
     planPeriodStart: acc.planPeriodStart,
     planPeriodEnd: acc.planPeriodEnd,
   };
+}
+
+/** Lo que hace falta para decidir un aviso de saldo: los saldos y la cuota que se concedió en el periodo vigente. */
+export type AlertState = {
+  planBalance: number;
+  topupBalance: number;
+  /** Cuota concedida en el periodo vigente (concesión inicial + ajustes de plan), en unidades. */
+  quota: number;
+  periodStart: Date;
+  /** El corte está activo (no es modo sombra): cambia lo que se le dice al dueño. */
+  cutEnabled: boolean;
+};
+
+/**
+ * El estado para los avisos, o `null` si no corresponde avisar: `CREDITS` apagada, sin cuenta, plan sin tope o aún
+ * sin periodo cargado. Solo lectura.
+ */
+export async function getAlertState(organizationId: string): Promise<AlertState | null> {
+  if (!creditsEnabled()) return null;
+  const [acc] = await getDb()
+    .select()
+    .from(schema.creditAccount)
+    .where(scoped(schema.creditAccount.organizationId, organizationId))
+    .limit(1);
+  if (!acc || acc.unlimited || !acc.planPeriodStart) return null;
+  const [row] = await getDb()
+    .select({ quota: sql<number>`coalesce(sum(${schema.creditLedger.amount}), 0)::int` })
+    .from(schema.creditLedger)
+    .where(
+      scoped(
+        schema.creditLedger.organizationId,
+        organizationId,
+        and(
+          eq(schema.creditLedger.kind, "grant"),
+          eq(schema.creditLedger.bucket, "plan"),
+          eq(schema.creditLedger.periodStart, acc.planPeriodStart)
+        )
+      )
+    );
+  return { planBalance: acc.planBalance, topupBalance: acc.topupBalance, quota: row?.quota ?? 0, periodStart: acc.planPeriodStart, cutEnabled: acc.cutEnabled };
 }
 
 /**

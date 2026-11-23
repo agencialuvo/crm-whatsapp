@@ -62,11 +62,11 @@ describe("las tablas credit_* entran por la puerta única", () => {
     const internal = leer(path.join(SRC, "server/credits/internal.ts"));
     expect(internal).toContain('.for("update")');
     const ledger = sinComentarios(leer(path.join(SRC, "server/credits/ledger.ts")));
-    const operaciones = ledger.match(/export async function (grantPeriodQuota|expirePeriodQuota|spendCredits|applyTopup|refundTopup|adjustCredits|configureCut)\b/g) ?? [];
-    expect(operaciones).toHaveLength(7);
+    const operaciones = ledger.match(/export async function (grantPeriodQuota|adjustPeriodQuota|expirePeriodQuota|spendCredits|applyTopup|refundTopup|adjustCredits|configureCut)\b/g) ?? [];
+    expect(operaciones).toHaveLength(8);
     // Cada una abre su transacción y toma la cuenta con `lockAccount`.
-    expect((ledger.match(/getDb\(\)\.transaction\(/g) ?? []).length).toBe(7);
-    expect((ledger.match(/await lockAccount\(/g) ?? []).length).toBe(7);
+    expect((ledger.match(/getDb\(\)\.transaction\(/g) ?? []).length).toBe(8);
+    expect((ledger.match(/await lockAccount\(/g) ?? []).length).toBe(8);
   });
 
   it("toda consulta de una organización lleva scoped()", () => {
@@ -94,6 +94,7 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     "server/ai/metering.ts", // el turno del agente: pre-chequeo, medición y cobro
     "server/inbox/metering.ts", // los envíos: pre-chequeo de plantillas, medición y cobro
     "server/saas/credits-sync.ts", // la cuota del periodo sigue a la suscripción
+    "server/notifications/credit-alerts.ts", // los avisos de saldo (campanita y correo)
   ];
 
   it("nadie fuera de server/credits/ y de los puntos de conexión importa la puerta", () => {
@@ -110,8 +111,16 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     expect(leer(path.join(SRC, "server/saas/subscription-sweeper.ts"))).toContain("syncAllQuotas");
   });
 
-  it("la suscripción no llama a las monedas: la cuota la pone al día un módulo aparte, nunca dentro de su transacción", () => {
-    expect(leer(path.join(SRC, "server/saas/subscription.ts"))).not.toMatch(/credits/i);
+  it("la suscripción solo avisa a credits-sync DESPUÉS de confirmar, nunca dentro de su transacción ni hablando con la puerta", () => {
+    const code = sinComentarios(leer(path.join(SRC, "server/saas/subscription.ts")));
+    // No importa la puerta de monedas: solo el módulo que sigue a la suscripción.
+    expect(code).not.toMatch(/from "@\/server\/credits"/);
+    expect(code).toContain('from "@/server/saas/credits-sync"');
+    // Tres caminos cambian plan o periodo (acción del panel, cobro, cambio del dueño) y los tres avisan al terminar.
+    const llamadas = code.match(/^ {2}afterSubscriptionCommit\(/gm) ?? [];
+    expect(llamadas).toHaveLength(3);
+    // Y ninguna aparece más adentro (indentación mayor = dentro de la transacción).
+    expect((code.match(/afterSubscriptionCommit\(/g) ?? []).length).toBe(3);
   });
 
   it("el módulo que sigue a la suscripción solo LEE subscription/plan", () => {
@@ -148,7 +157,7 @@ describe("la bandera CREDITS (ADR-001)", () => {
 
   it("toda operación de la puerta comprueba la bandera antes de tocar la base", () => {
     const ledger = sinComentarios(leer(path.join(SRC, "server/credits/ledger.ts")));
-    expect((ledger.match(/if \(!creditsEnabled\(\)\) return DISABLED;/g) ?? []).length).toBe(7);
+    expect((ledger.match(/if \(!creditsEnabled\(\)\) return DISABLED;/g) ?? []).length).toBe(8);
     for (const nombre of ["usage.ts", "queries.ts", "catalog.ts", "reconcile.ts"]) {
       expect(leer(path.join(SRC, "server/credits", nombre)), nombre).toContain("creditsEnabled()");
     }

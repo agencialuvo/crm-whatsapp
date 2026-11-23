@@ -1,6 +1,7 @@
 import { idemKey, RATE_KEYS, templateRateKey } from "@/lib/credits";
 import { checkCredit, creditsEnabled, priceFor, recordUsage, spendCredits } from "@/server/credits";
 import { ensureCreditAccount } from "@/server/saas/credits-sync";
+import { notifyBalanceIfNeeded } from "@/server/notifications/credit-alerts";
 
 /**
  * Monedas — los envíos. Solo se COBRA la plantilla de WhatsApp, por su categoría de Meta; el mensaje libre dentro de
@@ -94,6 +95,7 @@ export async function medirEnvio(input: {
         refId: messageId,
         meta: { category: categoryOf(consumo), waMessageId: input.waMessageId },
       });
+      void notifyBalanceIfNeeded(organizationId); // sin esperar: avisar no retrasa el envío
     }
   } catch (err) {
     console.error(`[monedas] no se pudo medir el envío ${messageId}:`, err instanceof Error ? err.message : err);

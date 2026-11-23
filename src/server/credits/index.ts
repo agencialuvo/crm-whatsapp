@@ -8,6 +8,7 @@
 export { creditsEnabled, parseCreditsFlag } from "./flag";
 export {
   adjustCredits,
+  adjustPeriodQuota,
   applyTopup,
   configureCut,
   expirePeriodQuota,
@@ -19,7 +20,7 @@ export {
   type SpendResult,
 } from "./ledger";
 export { recordUsage, usageSummary, type UsageInput, type UsageResult, type UsageSummaryRow } from "./usage";
-export { claimAlert, checkCredit, getCreditBalance, type CreditBalance } from "./queries";
+export { claimAlert, checkCredit, getAlertState, getCreditBalance, type AlertState, type CreditBalance } from "./queries";
 export { priceFor, clearRateCache } from "./pricing";
 export { createTopupIntent, ensureDefaultRates, getRate, getTopup, setRate, TOPUP_TTL_MS, type RateRow, type TopupRow } from "./catalog";
 export { reconcileCredits, type Drift, type ReconcileResult } from "./reconcile";

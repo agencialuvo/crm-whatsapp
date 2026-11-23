@@ -2,6 +2,7 @@ import { and, eq, gt, isNull, lte, notInArray, or, sql, type SQL } from "drizzle
 import { getDb, schema } from "@/lib/db";
 import { quotaForPlan } from "@/lib/credits";
 import {
+  adjustPeriodQuota,
   creditsEnabled,
   ensureDefaultRates,
   expirePeriodQuota,
@@ -56,14 +57,21 @@ async function loadRows(where: SQL, limit: number): Promise<Row[]> {
 
 async function applyRow(r: Row, now: Date): Promise<boolean> {
   if ((LIVE as readonly string[]).includes(r.status)) {
+    const units = quotaForPlan({ slug: r.slug, features: r.features });
     const res = await grantPeriodQuota({
       organizationId: r.orgId,
       subscriptionId: r.subId,
       periodStart: r.start,
       periodEnd: r.end,
-      units: quotaForPlan({ slug: r.slug, features: r.features }),
+      units,
     });
-    return res.status !== "disabled" && res.status !== "stale";
+    if (res.status === "disabled" || res.status === "stale") return false;
+    // Mismo periodo ya cargado con otra cuota (cambio de plan a mitad de periodo): se ajusta, solo hacia arriba.
+    if (res.status !== "applied") {
+      const adj = await adjustPeriodQuota({ organizationId: r.orgId, subscriptionId: r.subId, periodStart: r.start, units });
+      if (adj.status === "applied" || adj.status === "unlimited") return true;
+    }
+    return true;
   }
   // Suspendida, cancelada o vencida: lo que quede de la cuota del periodo cumplido no se arrastra.
   if (r.accPeriodStart && r.end.getTime() <= now.getTime()) {
@@ -127,6 +135,19 @@ export async function syncAllQuotas(now: Date = new Date()): Promise<number> {
     console.error("[monedas] la barrida de cuotas falló:", err instanceof Error ? err.message : err);
   }
   return touched;
+}
+
+/* ───────────────────── Cambio de plan a mitad de periodo ───────────────────── */
+
+/**
+ * Se llama DESPUÉS de que una transacción de la suscripción confirmó (cambio de plan, cobro, acción del panel). Pone
+ * al día la cuota con el plan vigente: si subió, entra la diferencia en el mismo periodo, idempotente. NO espera ni
+ * lanza: la suscripción ya quedó escrita y, si las monedas fallan, la barrida o el siguiente consumo lo corrigen. Con
+ * `CREDITS` apagada no hace nada.
+ */
+export function afterSubscriptionCommit(organizationId: string): void {
+  if (!creditsEnabled()) return;
+  void syncOrgQuota(organizationId).catch(() => {});
 }
 
 /* ───────────────────── Primera consulta de un consumo ───────────────────── */

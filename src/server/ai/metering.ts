@@ -3,6 +3,7 @@ import type { ChatJsonResult, ChatUsageOpts } from "@/lib/ai";
 import { idemKey, RATE_KEYS } from "@/lib/credits";
 import { checkCredit, creditsEnabled, priceFor, spendCredits } from "@/server/credits";
 import { ensureCreditAccount } from "@/server/saas/credits-sync";
+import { notifyBalanceIfNeeded } from "@/server/notifications/credit-alerts";
 
 /**
  * Monedas — el turno del agente. Une tres cosas que `pipeline.ts` no debe saber hacer por su cuenta:
@@ -28,6 +29,25 @@ export type AiTurnMeter = {
 };
 
 const NOOP: AiTurnMeter = { blocked: false, settle: async () => {} };
+
+/**
+ * ¿Hay que cortar a esta organización ahora mismo? La pregunta de las puertas que NO pasan por `runAgentTurn`
+ * (`/api/bot/messages`: un cerebro externo que escribe por nosotros). Solo es `true` con el corte activo y sin saldo
+ * para un turno; en modo sombra, con `CREDITS` apagada, sin cuenta o ante cualquier fallo, deja pasar. No mira de
+ * quién es la llave: ese cerebro no usa la nuestra, pero el agente de la organización sí se detiene por falta de saldo.
+ */
+export async function aiBlockedByCredit(organizationId: string): Promise<boolean> {
+  if (!creditsEnabled()) return false;
+  try {
+    const price = await priceFor(RATE_KEYS.aiTurn);
+    if (price <= 0) return false;
+    await ensureCreditAccount(organizationId);
+    return !(await checkCredit(organizationId, { amount: price })).allow;
+  } catch (err) {
+    console.error("[monedas] aiBlockedByCredit:", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
 
 export async function beginAiTurnMeter(input: {
   organizationId: string;
@@ -55,6 +75,7 @@ export async function beginAiTurnMeter(input: {
     const gate = price > 0 ? await checkCredit(organizationId, { amount: price }) : null;
     if (gate && !gate.allow) {
       console.warn(`[monedas] ${organizationId} sin saldo: el agente no contesta en ${conversationId}`);
+      void notifyBalanceIfNeeded(organizationId); // por si el saldo llegó a cero por otro camino: una vez por periodo
       return { blocked: true, settle: async () => {} };
     }
     const key = idemKey.aiTurn(conversationId, lastInboundId);
@@ -79,6 +100,7 @@ export async function beginAiTurnMeter(input: {
               attempts: result.meta.attempts,
             },
           });
+          void notifyBalanceIfNeeded(organizationId); // sin esperar: avisar no retrasa la respuesta
         } catch (err) {
           console.error(`[monedas] no se pudo cobrar el turno ${key}:`, err instanceof Error ? err.message : err);
         }

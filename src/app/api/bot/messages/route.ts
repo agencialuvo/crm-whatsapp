@@ -9,6 +9,7 @@ import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
 import { SendError, sendText } from "@/server/inbox/send";
 import { isConversationSilenced } from "@/server/ai/ignored";
+import { aiBlockedByCredit } from "@/server/ai/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +72,11 @@ export async function POST(req: Request) {
     return apiError(409, "ai_paused", "El agente no responde a este contacto (número ignorado)", {
       reason: "ignored_number",
     });
+  }
+
+  // Monedas: con el corte activo y sin saldo el agente de la organización está detenido. 409, como la pausa de IA.
+  if (await aiBlockedByCredit(organizationId)) {
+    return apiError(409, "ai_paused", "El agente no responde: la organización se quedó sin monedas", { reason: "no_credit" });
   }
 
   try {

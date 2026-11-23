@@ -3,6 +3,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import { afterSubscriptionCommit } from "@/server/saas/credits-sync";
 import {
   decidePayment,
   decideTransition,
@@ -177,7 +178,7 @@ export async function applySubscriptionAction(input: {
   actor: Actor;
   now?: Date;
 }): Promise<ApplyResult> {
-  return getDb().transaction(async (tx): Promise<ApplyResult> => {
+  const result = await getDb().transaction(async (tx): Promise<ApplyResult> => {
     const [org] = await tx
       .select({ id: schema.organization.id, name: schema.organization.name })
       .from(schema.organization)
@@ -314,6 +315,9 @@ export async function applySubscriptionAction(input: {
       eventType: d.eventType,
     };
   });
+  // Monedas: ya confirmó. La cuota sigue al plan vigente; no espera ni puede deshacer nada de lo de arriba.
+  afterSubscriptionCommit(input.organizationId);
+  return result;
 }
 
 const BATCH = 200;
@@ -406,7 +410,7 @@ const toFacts = (sub: typeof schema.subscription.$inferSelect): SubFacts => ({
  * aplicado, todo o nada. Dos avisos simultáneos del mismo cobro se serializan y el segundo ve `applied_at`.
  */
 export async function applyPaymentEvent(input: PaymentApplyInput): Promise<PaymentApplyResult> {
-  return getDb().transaction(async (tx): Promise<PaymentApplyResult> => {
+  const result = await getDb().transaction(async (tx): Promise<PaymentApplyResult> => {
     await tx
       .select({ id: schema.organization.id })
       .from(schema.organization)
@@ -524,6 +528,9 @@ export async function applyPaymentEvent(input: PaymentApplyInput): Promise<Payme
     }
     return { ok: true, outcome: "applied", status: d.status, eventType: d.eventType };
   });
+  // Monedas: ya confirmó. La cuota sigue al plan vigente; no espera ni puede deshacer nada de lo de arriba.
+  afterSubscriptionCommit(input.organizationId);
+  return result;
 }
 
 export type ClientChangeInput =
@@ -539,7 +546,7 @@ export type ClientChangeResult =
  * prorrateo: subir rige ya y el precio nuevo desde el próximo cobro; bajar queda programado para el corte.
  */
 export async function applyClientBillingChange(input: ClientChangeInput): Promise<ClientChangeResult> {
-  return getDb().transaction(async (tx): Promise<ClientChangeResult> => {
+  const result = await getDb().transaction(async (tx): Promise<ClientChangeResult> => {
     await tx.select({ id: schema.organization.id }).from(schema.organization).where(eq(schema.organization.id, input.organizationId)).for("update").limit(1);
     const now = input.now ?? new Date();
     const [row] = await tx
@@ -617,6 +624,9 @@ export async function applyClientBillingChange(input: ClientChangeInput): Promis
     });
     return { ok: true, mode: immediate ? "immediate" : "scheduled", eventType: "plan_changed", planName: target.name };
   });
+  // Monedas: ya confirmó. La cuota sigue al plan vigente; no espera ni puede deshacer nada de lo de arriba.
+  afterSubscriptionCommit(input.organizationId);
+  return result;
 }
 
 /**
