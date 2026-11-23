@@ -86,10 +86,13 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<{ status: 
 export function InboxClient({
   channels,
   canDelete = false,
+  canIgnore = false,
 }: {
   channels: readonly Channel[];
   /** 026 — Eliminar es irreversible: solo quien administra ve la opción. */
   canDelete?: boolean;
+  /** Números ignorados: solo quien configura puede agregar o quitar; el resto solo ve el estado. */
+  canIgnore?: boolean;
 }) {
   const multiChannel = channels.length > 1;
 
@@ -812,6 +815,7 @@ export function InboxClient({
               refreshKey={detailRev}
               onPatchConversation={patchConversation}
               onDeleteConversation={canDelete ? deleteConversation : undefined}
+              canIgnore={canIgnore}
               onClose={() => togglePanel(false)}
             />
           </div>

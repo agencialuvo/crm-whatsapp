@@ -10,6 +10,7 @@ import {
   Sparkles,
   Trash2,
   UserRound,
+  UserX,
 } from "lucide-react";
 import {
   externalAnswerLabel,
@@ -34,6 +35,7 @@ import { FichaPanel } from "@/components/ficha-panel";
 import { LoyaltyCardPanel } from "@/components/negocio/loyalty-card";
 import { TagPicker } from "@/components/tags/tag-picker";
 import type { TagDto } from "@/lib/tags";
+import type { IgnoredEntryDto } from "@/components/agent/ignored-numbers-card";
 import { DeleteConversationDialog } from "./delete-conversation-dialog";
 
 const HANDOFF_LABELS: Record<string, string> = {
@@ -49,6 +51,7 @@ export function ContactPanel({
   refreshKey = 0,
   onPatchConversation,
   onDeleteConversation,
+  canIgnore = false,
   onClose,
 }: {
   conversation: ConversationDto;
@@ -60,6 +63,8 @@ export function ContactPanel({
   }) => Promise<void>;
   /** 026 — Ausente = quien mira no puede eliminar: no se le ofrece. */
   onDeleteConversation?: (alsoContact: boolean) => Promise<string | null>;
+  /** Números ignorados: ausente = quien mira solo ve el estado, no puede agregar ni quitar. */
+  canIgnore?: boolean;
   onClose: () => void;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -80,6 +85,10 @@ export function ContactPanel({
   // toggle "Respondiendo" mentiría cuando el agente aún no se ha
   // configurado/encendido, y pediría la clave de IA aunque conteste Nea.
   const [brain, setBrain] = useState<BrainStatusDto | null>(null);
+  // Números ignorados: la entrada que calla al agente con este contacto (null = no está en la lista).
+  const [ignored, setIgnored] = useState<IgnoredEntryDto | null>(null);
+  const [ignoredBusy, setIgnoredBusy] = useState(false);
+  const [ignoredError, setIgnoredError] = useState<string | null>(null);
 
   const contactId = conversation.contact.id;
 
@@ -91,6 +100,41 @@ export function ContactPanel({
   // y cualquier cerebro externo conectado por /api/bot/* respetan este flag,
   // así que el toggle opera siempre — `agentReady` solo matiza el texto.
   const aiActive = conversation.aiEnabled && !conversation.handoffAt;
+
+  // Si el agente está callado con este contacto porque su número está en la lista. Se lee de la lista (la fuente de
+  // verdad), no de la conversación: ignorar no pausa nada. Un fallo no cambia lo que ya se mostraba.
+  const loadIgnored = useCallback(async () => {
+    const r = await fetch(`/api/agent/ignored-numbers?contactId=${encodeURIComponent(contactId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null);
+    if (r) setIgnored(r.entry ?? null);
+  }, [contactId]);
+
+  async function ignoreContact() {
+    setIgnoredBusy(true);
+    setIgnoredError(null);
+    const res = await fetch("/api/agent/ignored-numbers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contactId }),
+    }).catch(() => null);
+    const body = res ? await res.json().catch(() => null) : null;
+    if (res?.ok && body?.entry) setIgnored(body.entry);
+    // Ya estaba (otra persona lo agregó antes): se muestra su estado real en vez de un error.
+    else if (res?.status === 409 && body?.error?.code === "duplicate") await loadIgnored();
+    else setIgnoredError(body?.error?.message ?? "No se pudo ignorar este número. Inténtalo de nuevo.");
+    setIgnoredBusy(false);
+  }
+
+  async function unignoreContact() {
+    if (!ignored) return;
+    setIgnoredBusy(true);
+    setIgnoredError(null);
+    const res = await fetch(`/api/agent/ignored-numbers/${ignored.id}`, { method: "DELETE" }).catch(() => null);
+    if (res?.ok || res?.status === 404) setIgnored(null);
+    else setIgnoredError("No se pudo quitar de la lista. Inténtalo de nuevo.");
+    setIgnoredBusy(false);
+  }
 
   // Aparte del resto: consultar el /health del cerebro externo puede tardar
   // hasta 2 s, y eso no debe demorar la etapa ni la ficha.
@@ -104,6 +148,7 @@ export function ContactPanel({
   // Carga inicial (incluye notas): se re-ejecuta al cambiar de contacto.
   const refetch = useCallback(async () => {
     void loadBrain();
+    void loadIgnored();
     const [detail, stagesRes] = await Promise.all([
       fetch(`/api/contacts/${contactId}`).then((r) => (r.ok ? r.json() : null)),
       fetch("/api/pipeline/stages").then((r) => (r.ok ? r.json() : null)),
@@ -119,12 +164,13 @@ export function ContactPanel({
     }
     if (stagesRes) setStages(stagesRes.stages);
     setNotesLoaded(true);
-  }, [contactId, loadBrain]);
+  }, [contactId, loadBrain, loadIgnored]);
 
   // Refetch en vivo (etapa/lead + quién responde) SIN tocar las notas, para
   // no pisar lo que el operador esté escribiendo. Lo dispara el SSE.
   const refreshLive = useCallback(async () => {
     void loadBrain();
+    void loadIgnored();
     const detail = await fetch(`/api/contacts/${contactId}`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
@@ -141,12 +187,14 @@ export function ContactPanel({
       // refetch en vivo es lo que la hace aparecer sin recargar.
       setAnuncio(detail.anuncio ?? null);
     }
-  }, [contactId, loadBrain]);
+  }, [contactId, loadBrain, loadIgnored]);
 
   useEffect(() => {
     setNotesLoaded(false);
     // Al cambiar de contacto no puede asomarse el anuncio del anterior.
     setAnuncio(null);
+    setIgnored(null);
+    setIgnoredError(null);
     setContactTags([]);
     void refetch();
   }, [refetch]);
@@ -256,7 +304,9 @@ export function ContactPanel({
               <div className="min-w-0">
                 <p className="text-[13px] font-medium">IA en esta conversación</p>
                 <p className="text-[11px] text-text-3">
-                  {conversation.handoffAt
+                  {ignored
+                    ? "No responde · número ignorado"
+                    : conversation.handoffAt
                     ? "En pausa · atención humana"
                     : !conversation.aiEnabled
                       ? "En pausa"
@@ -267,7 +317,8 @@ export function ContactPanel({
               </div>
               <Switch
                 size="sm"
-                checked={aiActive}
+                checked={aiActive && !ignored}
+                disabled={ignored !== null}
                 label="IA en esta conversación"
                 onCheckedChange={() => {
                   void onPatchConversation({
@@ -277,7 +328,47 @@ export function ContactPanel({
               />
             </div>
 
-            {brain?.warning === "doble_respuesta" ? (
+            {ignored ? (
+              <div className="mt-2.5 rounded-md border border-warning-soft bg-warning-tint p-2.5">
+                <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] leading-relaxed text-warning-text">
+                  <UserX className="h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />
+                  <span className="font-semibold">Número ignorado</span>
+                  {canIgnore && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <button
+                        type="button"
+                        disabled={ignoredBusy}
+                        onClick={() => void unignoreContact()}
+                        className="font-medium underline underline-offset-2 hover:opacity-80 disabled:opacity-50"
+                      >
+                        Quitar de la lista
+                      </button>
+                    </>
+                  )}
+                </p>
+                <p className="mt-1 text-[11px] text-warning-text opacity-80">
+                  El agente no le contesta; sus mensajes llegan aquí.
+                </p>
+              </div>
+            ) : canIgnore ? (
+              <button
+                type="button"
+                disabled={ignoredBusy}
+                onClick={() => void ignoreContact()}
+                className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-text-2 underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
+              >
+                <UserX className="h-3.5 w-3.5" strokeWidth={1.7} />
+                Ignorar este número
+              </button>
+            ) : null}
+            {ignoredError && (
+              <p role="alert" className="mt-1.5 text-[11px] text-danger-text">
+                {ignoredError}
+              </p>
+            )}
+
+            {ignored ? null : brain?.warning === "doble_respuesta" ? (
               <div className="mt-2.5 flex items-start gap-2 rounded-md border border-danger-soft bg-danger-tint p-2.5">
                 <AlertTriangle
                   className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger-text"

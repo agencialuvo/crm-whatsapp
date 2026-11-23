@@ -38,6 +38,7 @@ import { salonEnabled } from "@/server/business/flag";
 import { getPlanAccess } from "@/server/business/saas-guard";
 import { notifyHandoff } from "@/server/notifications/service";
 import { getComboTriggerInstruction } from "@/server/ai/barbershop-context";
+import { isConversationSilenced } from "@/server/ai/ignored";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -181,6 +182,12 @@ export async function runAgentTurn(
   // El toggle global aplica a conversaciones reales; el Laboratorio evalúa el
   // comportamiento configurado aunque el agente aún no esté encendido.
   if (!conversation.isTest && !profile.enabled) return;
+
+  // Números ignorados: red de seguridad. `maybeRunAgentTurn` ya filtra antes de programar, pero un turno que se
+  // programó (el debounce espera unos segundos) ANTES de que el dueño agregara el número llega hasta aquí. Se calla
+  // sin traspaso ni acuse, y también si la lista no se pudo consultar. El Laboratorio no la aplica: sus contactos
+  // son sintéticos.
+  if (!conversation.isTest && (await isConversationSilenced(organizationId, conversationId))) return;
 
   // De qué anuncio llegó (si llegó de uno). Es contexto: si la consulta falla, el turno sigue sin él.
   const attribution = await getAttributionForConversation(organizationId, conversationId).catch(

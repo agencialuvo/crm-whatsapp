@@ -8,6 +8,7 @@ import { getDb, schema } from "@/lib/db";
 import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
 import { SendError, sendText } from "@/server/inbox/send";
+import { isConversationSilenced } from "@/server/ai/ignored";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,11 @@ const bodySchema = z.object({
  * que el mensaje queda en el hilo marcado como IA, respeta la ventana de 24 h
  * y hereda el guard de sandbox del Laboratorio.
  *
- * 409 tipados: ai_paused (un humano tomó la conversación) · window_closed ·
+ * Números ignorados: si el contacto está en la lista de Agente → Números ignorados, o la lista no se pudo
+ * consultar, responde 409 `ai_paused` (con `reason: "ignored_number"`): es el código que un cerebro ya sabe tratar
+ * como «no hables aquí», así que no hace falta que aprenda uno nuevo.
+ *
+ * 409 tipados: ai_paused (un humano tomó la conversación, o el número está ignorado) · window_closed ·
  * sandbox_violation · message_limit (022: el canal no admite más mensajes
  * hasta que el cliente escriba; hoy, el tope de TikTok).
  */
@@ -61,6 +66,11 @@ export async function POST(req: Request) {
   if (!conv) return apiError(404, "not_found", "Conversación no encontrada");
   if (!conv.aiEnabled || conv.handoffAt) {
     return apiError(409, "ai_paused", "La IA está en pausa en esta conversación");
+  }
+  if (await isConversationSilenced(organizationId, body.data.conversationId)) {
+    return apiError(409, "ai_paused", "El agente no responde a este contacto (número ignorado)", {
+      reason: "ignored_number",
+    });
   }
 
   try {

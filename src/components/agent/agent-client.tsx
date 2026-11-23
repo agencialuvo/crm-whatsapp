@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Cable, Plus, Sparkles, Trash2 } from "lucide-react";
 import { BrainStatusCard } from "@/components/agent/brain-status-card";
+import { IgnoredNumbersCard } from "@/components/agent/ignored-numbers-card";
 import {
   externalAnswerLabel,
   externalAnswering,
@@ -35,7 +36,7 @@ type KbEntry = {
   content: string | null;
 };
 
-export function AgentClient() {
+export function AgentClient({ canConfigure = false }: { canConfigure?: boolean } = {}) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [aiMensaje, setAiMensaje] = useState<string | null>(null);
@@ -173,6 +174,11 @@ export function AgentClient() {
       <div className="grid gap-4 p-4 sm:gap-6 sm:p-6 lg:grid-cols-2">
         <ProfileSection profile={profile} onSave={saveProfile} />
         <KbSection entries={entries} kbSize={kbSize} onChanged={() => void refetch()} />
+      </div>
+
+      {/* Una excepción, no el trabajo de todos los días: plegada, al final. */}
+      <div className="px-4 pb-4 sm:px-6 sm:pb-6">
+        <IgnoredNumbersCard canConfigure={canConfigure} />
       </div>
     </div>
   );

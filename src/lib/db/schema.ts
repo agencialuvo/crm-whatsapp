@@ -1864,6 +1864,41 @@ export const agentTestRun = pgTable(
   ]
 );
 
+/**
+ * Números que el agente de IA ignora: ni el agente incluido ni el cerebro externo contestan a estas personas
+ * (familia, proveedores, números personales). El mensaje sigue entrando a la Bandeja y a las automatizaciones.
+ *
+ * Es la fuente de verdad: se consulta al evaluar cada turno y NO toca `contact.ai_paused`, así que quitar un número de
+ * la lista surte efecto de inmediato y no deja ninguna pausa colgada.
+ *
+ * `key` es lo que se compara, ya normalizado: el teléfono en dígitos con código de país (521→52, sin «+») o, para
+ * quien no tiene teléfono, su identidad cruda (`bsuid:…`, `ig:…`, `fb:…`, `tt:…`). Por eso lleva `channel`: la misma
+ * llave no significa lo mismo en dos canales.
+ */
+export const ignoredNumber = pgTable(
+  "ignored_number",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    channel: text("channel", { enum: ["whatsapp", "instagram", "messenger", "tiktok"] })
+      .notNull()
+      .default("whatsapp"),
+    key: text("key").notNull(),
+    /** Nota opcional para recordar quién es («Mamá», «Proveedor de harina»). */
+    label: text("label"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    /** Quién la agregó. Si esa cuenta se elimina, la entrada se conserva. */
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+  },
+  (t) => [
+    uniqueIndex("ignored_number_org_channel_key_uq").on(t.organizationId, t.channel, t.key),
+    check("ignored_number_key_nonempty", sql`length(trim(${t.key})) > 0`),
+    check("ignored_number_label_len", sql`${t.label} is null or length(${t.label}) <= 80`),
+  ]
+);
+
 /* ============================================================
  * 015 — Motor de agenda (detrás de la bandera AGENDA)
  *

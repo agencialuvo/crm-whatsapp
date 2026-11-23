@@ -20,6 +20,8 @@ const prefixes = {
   template: "tpl",
   testRun: "run",
   testCase: "case",
+  // Agente — números que el agente de IA ignora
+  ignoredNumber: "ign",
   mediaAsset: "ma",
   // SaaS & Multi-sector
   plan: "plan",

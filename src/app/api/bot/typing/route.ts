@@ -5,6 +5,7 @@ import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
 import { getCredentialsByOrg } from "@/server/whatsapp/credentials";
 import { graphRequest } from "@/lib/meta/client";
+import { isConversationSilenced } from "@/server/ai/ignored";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,10 @@ export async function POST(req: Request) {
     // Handoff/IA pausada: un humano atiende — "escribiendo…" aquí sería
     // mentirle al cliente. Se omite sin tocar Meta.
     return Response.json({ ok: false, reason: "ai_paused" });
+  }
+  // Números ignorados: el agente no le contesta a esta persona, así que tampoco se le muestra «escribiendo…».
+  if (await isConversationSilenced(organizationId, conv.id)) {
+    return Response.json({ ok: false, reason: "ai_paused", ignored: true });
   }
 
   const msgs = await db

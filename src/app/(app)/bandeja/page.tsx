@@ -21,5 +21,6 @@ export default async function InboxPage() {
   // servidor lo exige en la ruta; esto solo decide si la opción se enseña.
   const session = await getSessionOrNull();
 
-  return <InboxClient channels={channels} canDelete={canConfigure(session?.role)} />;
+  // Ignorar a un contacto (que el agente no le conteste) también es de quien configura.
+  return <InboxClient channels={channels} canDelete={canConfigure(session?.role)} canIgnore={canConfigure(session?.role)} />;
 }

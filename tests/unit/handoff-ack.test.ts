@@ -36,6 +36,9 @@ vi.mock("@/lib/meta/client", async (importOriginal) => {
 
 vi.mock("@/lib/ai", () => ({ chatJson }));
 
+// Números ignorados: su consulta no es parte de lo que esta prueba mide y consumiría la cola de selects simulados.
+vi.mock("@/server/ai/ignored", () => ({ isConversationSilenced: async () => false }));
+
 // #85 — la resolución del proveedor mira primero la fila de Ajustes → IA. Sin
 // fila cae al entorno (`OPENROUTER_API_TOKEN`, abajo), sin tocar la cola de
 // selects de la BD simulada.
