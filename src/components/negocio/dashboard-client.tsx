@@ -31,7 +31,19 @@ import { SearchSelect } from "@/components/ui/search-select";
 const NONE: never[] = [];
 const BIRTHDAY_NOUN = { one: "cumpleaños", other: "cumpleaños" };
 
-/** Atajos del Panel: hoy, la semana (de lunes a hoy), el mes y el mes pasado. Las fechas sueltas están en el selector. */
+/** Último día del mes de un día AAAA-MM-DD (sin pasar por la zona del navegador). */
+function endOfMonth(day: string): string {
+  const y = Number(day.slice(0, 4));
+  const m = Number(day.slice(5, 7)); // 1-12
+  const nextFirst = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  return addDaysISO(nextFirst, -1);
+}
+
+/**
+ * Atajos del Panel: hoy, la semana (de lunes a hoy), el mes y el mes pasado. Las fechas sueltas están en el selector.
+ * «Este mes» es el mes COMPLETO (del 1 al último día), igual que «Mes completo» en Gastos: así la «Ganancia neta»
+ * incluye los gastos fechados más adelante en el mes y coincide con la de Gastos.
+ */
 function dashboardPresets(today: string): { label: string; range: Range }[] {
   const weekday = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = domingo
   const monday = addDaysISO(today, -((weekday + 6) % 7));
@@ -40,7 +52,7 @@ function dashboardPresets(today: string): { label: string; range: Range }[] {
   return [
     { label: "Hoy", range: { from: today, to: today } },
     { label: "Esta semana", range: { from: monday, to: today } },
-    { label: "Este mes", range: { from: monthStart, to: today } },
+    { label: "Este mes", range: { from: monthStart, to: endOfMonth(today) } },
     { label: "Mes pasado", range: { from: `${lastMonthEnd.slice(0, 8)}01`, to: lastMonthEnd } },
   ];
 }
@@ -69,7 +81,7 @@ export function DashboardClient({
   currency: string;
   today: string;
 }) {
-  const [range, setRange] = useState<Range>({ from: `${today.slice(0, 8)}01`, to: today });
+  const [range, setRange] = useState<Range>({ from: `${today.slice(0, 8)}01`, to: endOfMonth(today) });
   // Auditoría rápida: acota las tarjetas, el equipo y el ranking a un profesional.
   const [staffId, setStaffId] = useState("");
   const [staffOptions, setStaffOptions] = useState<SaleOptionsDto["staff"]>([]);
