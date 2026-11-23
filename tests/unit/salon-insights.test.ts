@@ -2,46 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_CYCLE_INTERVALS,
   computeRepurchase,
-  computeTicketSplit,
   daysBetween,
   isBirthdayMonth,
   reminderStatus,
   sortBirthdaysByProximity,
   type CycleClientInput,
 } from "@/lib/salon/insights";
-
-describe("ticket: servicios sueltos vs ofertas", () => {
-  it("promedio por grupo y diferencia en centavos y porcentaje", () => {
-    const s = computeTicketSplit({
-      services: { count: 4, revenueCents: 10_000 }, // 2500 c/u
-      offers: { count: 2, revenueCents: 7_000 }, // 3500 c/u
-    });
-    expect(s.services).toEqual({ count: 4, revenueCents: 10_000, avgCents: 2_500 });
-    expect(s.offers.avgCents).toBe(3_500);
-    expect(s.liftCents).toBe(1_000);
-    expect(s.liftPercent).toBe(40);
-  });
-
-  it("las ofertas pueden dejar menos que un servicio suelto", () => {
-    const s = computeTicketSplit({ services: { count: 1, revenueCents: 4_000 }, offers: { count: 1, revenueCents: 3_000 } });
-    expect(s.liftCents).toBe(-1_000);
-    expect(s.liftPercent).toBe(-25);
-  });
-
-  it("sin ventas de un lado no hay comparación ni división por cero", () => {
-    const solo = computeTicketSplit({ services: { count: 3, revenueCents: 9_000 }, offers: { count: 0, revenueCents: 0 } });
-    expect(solo.offers.avgCents).toBeNull();
-    expect(solo.liftCents).toBeNull();
-    expect(solo.liftPercent).toBeNull();
-    const nada = computeTicketSplit({ services: { count: 0, revenueCents: 0 }, offers: { count: 0, revenueCents: 0 } });
-    expect(nada.services.avgCents).toBeNull();
-    expect(nada.liftPercent).toBeNull();
-  });
-
-  it("redondea el promedio a centavos enteros", () => {
-    expect(computeTicketSplit({ services: { count: 3, revenueCents: 1_000 }, offers: { count: 0, revenueCents: 0 } }).services.avgCents).toBe(333);
-  });
-});
 
 describe("días entre visitas", () => {
   it("cuenta días enteros, también entre meses y años", () => {

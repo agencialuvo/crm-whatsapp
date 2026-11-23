@@ -192,7 +192,7 @@ Descripción técnica detallada en la sección 5.
 
 | Pantalla | Quién la ve | Qué hace |
 |---|---|---|
-| **Panel** (`/panel`) | Dueño / administrador | Panel ejecutivo: ingresos, comisiones y gastos del periodo, embudo financiero con gráfica por día, filtros por profesional y servicio, ticket de ventas con oferta vs. servicios sueltos, citas del periodo y clientes que cumplen años |
+| **Panel** (`/panel`) | Dueño / administrador | Panel ejecutivo: ingresos, comisiones y gastos del periodo, embudo financiero con gráfica por día, filtros por profesional y servicio, citas del periodo y clientes que cumplen años |
 | **Citas** (`/citas`) | Todo el equipo | **Agenda por sillas**: una columna por profesional, franjas con cupos libres, en vivo; asignar profesional, agendar y cobrar desde la cita. Pestaña de calendario general y bloqueos |
 | **Caja** (`/caja`, `/caja/historial`) | Dueño / administrador | Cierre por rango (hoy, ayer, 7 días, mes, personalizado): ingresos, comisiones, ganancia neta, pago por profesional, cuadre por método (efectivo, Yape, Plin, tarjeta, otro), tabla de ventas, exportación CSV, edición y anulación de ventas, **turnos de caja** (apertura con efectivo inicial y cierre con efectivo contado) |
 | **Clientes** (`/clientes`) | Dueño / administrador | Ficha única del cliente (ojo/nombre abre la misma ficha), historial, cumpleaños, tarjeta de fidelidad |

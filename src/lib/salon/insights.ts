@@ -1,48 +1,9 @@
 /**
- * Módulo SALON — métricas de negocio del Panel: el ticket de los servicios sueltos contra el de las
- * ofertas, y el ciclo de recompra de los clientes. Solo cuentas puras (sin base de datos), para poder
+ * Módulo SALON — métricas de negocio del Panel: el ciclo de recompra de los clientes. Solo cuentas puras (sin base de datos), para poder
  * probarlas; las consultas viven en `src/server/business/business-insights.ts`.
  *
  * Todo el dinero va en centavos enteros.
  */
-
-/* --------------------------- ticket: servicios vs ofertas --------------------------- */
-
-export type TicketSideDto = {
-  /** Ventas de este grupo en el periodo. */
-  count: number;
-  revenueCents: number;
-  /** Ticket promedio (ingresos ÷ ventas), en centavos; `null` sin ventas. */
-  avgCents: number | null;
-};
-
-export type TicketSplitDto = {
-  /** Ventas SIN ninguna oferta: solo servicios sueltos. */
-  services: TicketSideDto;
-  /** Ventas que llevan al menos una oferta (sola o con servicios). */
-  offers: TicketSideDto;
-  /** Cuánto más (o menos) deja cada visita con oferta que con servicios sueltos; `null` si falta un lado. */
-  liftCents: number | null;
-  liftPercent: number | null;
-};
-
-export type TicketSideInput = { count: number; revenueCents: number };
-
-function side({ count, revenueCents }: TicketSideInput): TicketSideDto {
-  return { count, revenueCents, avgCents: count > 0 ? Math.round(revenueCents / count) : null };
-}
-
-export function computeTicketSplit(input: { services: TicketSideInput; offers: TicketSideInput }): TicketSplitDto {
-  const services = side(input.services);
-  const offers = side(input.offers);
-  const both = services.avgCents !== null && offers.avgCents !== null && services.avgCents > 0;
-  return {
-    services,
-    offers,
-    liftCents: both ? offers.avgCents! - services.avgCents! : null,
-    liftPercent: both ? Math.round(((offers.avgCents! - services.avgCents!) / services.avgCents!) * 100) : null,
-  };
-}
 
 /* ------------------------------ ciclo de recompra ------------------------------ */
 

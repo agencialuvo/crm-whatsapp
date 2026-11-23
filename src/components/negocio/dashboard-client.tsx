@@ -7,7 +7,7 @@ import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-tabl
 import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { FunnelCards } from "@/components/negocio/dashboard-funnel";
-import { RepurchaseCard, TicketSplitCard } from "@/components/negocio/dashboard-insights";
+import { RepurchaseCard } from "@/components/negocio/dashboard-insights";
 import {
   KpiCard,
   PaymentMix,
@@ -328,8 +328,8 @@ export function DashboardClient({
                   <div className="flex gap-1" role="group" aria-label="Qué mostrar en la gráfica">
                     {(
                       [
-                        ["revenue", "Ver Ingresos"],
-                        ["net", "Ver Ganancia Neta"],
+                        ["revenue", "Ver ingresos"],
+                        ["net", "Ver ganancia neta"],
                       ] as const
                     ).map(([key, label]) => (
                       <button
@@ -383,10 +383,7 @@ export function DashboardClient({
             <TeamBars report={report} currency={currency} loading={loading} />
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-2">
-            <TicketSplitCard split={data?.ticketSplit ?? null} currency={currency} loading={loading} />
-            <RepurchaseCard cycle={data?.repurchase ?? null} loading={loading} />
-          </div>
+          <RepurchaseCard cycle={data?.repurchase ?? null} loading={loading} />
 
           <div>
             <Section
