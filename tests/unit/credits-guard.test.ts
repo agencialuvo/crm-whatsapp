@@ -95,10 +95,13 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     "server/inbox/metering.ts", // los envíos: pre-chequeo de plantillas, medición y cobro
     "server/saas/credits-sync.ts", // la cuota del periodo sigue a la suscripción
     "server/notifications/credit-alerts.ts", // los avisos de saldo (campanita y correo)
+    "server/super-admin/credits.ts", // lo que ve y hace el Super Admin (reporte, ajuste manual, corte)
   ];
 
   it("nadie fuera de server/credits/ y de los puntos de conexión importa la puerta", () => {
-    const importadores = todos.filter((f) => !rel(f).startsWith("server/credits/") && /from "@\/server\/credits(\/[^"]*)?"/.test(leer(f)));
+    // `import type` no cuenta: no trae código (la pantalla del panel solo lee los tipos del reporte).
+    const sinTipos = (code: string) => code.replace(/^import type [^;]*;/gm, "");
+    const importadores = todos.filter((f) => !rel(f).startsWith("server/credits/") && /from "@\/server\/credits(\/[^"]*)?"/.test(sinTipos(leer(f))));
     expect(importadores.map(rel).sort(), "Un archivo nuevo que usa la puerta debe agregarse a PUNTOS_DE_CONEXION a propósito").toEqual([...PUNTOS_DE_CONEXION].sort());
   });
 
@@ -128,6 +131,13 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     expect(code).not.toMatch(/\.(insert|update|delete)\(\s*schema\.(subscription|plan)\b/);
   });
 
+  it("las rutas de Super Admin no hablan con la puerta: pasan por server/super-admin/credits.ts", () => {
+    for (const f of todos.filter((f) => rel(f).startsWith("app/api/super-admin/credits/"))) {
+      expect(leer(f), rel(f)).not.toMatch(/from "@\/server\/credits/);
+      expect(leer(f), rel(f)).toContain("withSuperAdmin(");
+    }
+  });
+
   it("solo se cobra por la puerta (spendCredits) y nunca en un camino que no sea el turno o el envío", () => {
     const quienCobra = todos.filter((f) => !rel(f).startsWith("server/credits/") && /\bspendCredits\(/.test(sinComentarios(leer(f))));
     expect(quienCobra.map(rel).sort()).toEqual(["server/ai/metering.ts", "server/inbox/metering.ts"]);
@@ -139,6 +149,17 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
       for (const prohibido of ["@/server/ai/", "@/server/inbox/", "@/server/saas/", "@/server/billing/", "@/server/automation/", "@/server/whatsapp/"]) {
         expect(code, `${rel(f)} importa ${prohibido}`).not.toContain(`from "${prohibido}`);
       }
+    }
+  });
+});
+
+describe("importar la puerta no lee la base", () => {
+  it("ningún archivo de server/credits/ lee `schema.*` al cargarse (rompería a quien mockea @/lib/db con un esquema parcial)", () => {
+    for (const nombre of readdirSync(path.join(SRC, "server/credits"))) {
+      const code = sinComentarios(leer(path.join(SRC, "server/credits", nombre)));
+      // Una declaración en la columna 0 que toca `schema.` se evalúa al importar; dentro de funciones va indentada.
+      const alCargar = code.split("\n").filter((l) => /^(export )?(const|let|var) /.test(l) && /\bschema\./.test(l) && !/=\s*(async\s*)?\([^)]*\)\s*(:[^=]+)?=>/.test(l));
+      expect(alCargar, nombre).toEqual([]);
     }
   });
 });

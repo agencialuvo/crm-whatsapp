@@ -18,6 +18,14 @@ export default async function SuperAdminLayout({ children }: Readonly<{ children
           <p className="text-xs text-text-3">Plataforma · planes y membresías</p>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          <nav className="flex items-center gap-3" aria-label="Secciones del panel">
+            <Link href="/super-admin" className="font-medium text-brand-text hover:underline">
+              Organizaciones
+            </Link>
+            <Link href="/super-admin/monedas" className="font-medium text-brand-text hover:underline" data-testid="nav-monedas">
+              Monedas
+            </Link>
+          </nav>
           <span className="text-text-3" data-testid="admin-name">
             {admin.name}
           </span>

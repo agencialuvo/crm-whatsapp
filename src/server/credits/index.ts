@@ -24,4 +24,15 @@ export { claimAlert, checkCredit, getAlertState, getCreditBalance, type AlertSta
 export { priceFor, clearRateCache } from "./pricing";
 export { createTopupIntent, ensureDefaultRates, getRate, getTopup, setRate, TOPUP_TTL_MS, type RateRow, type TopupRow } from "./catalog";
 export { reconcileCredits, type Drift, type ReconcileResult } from "./reconcile";
+export {
+  calibrationReport,
+  orgCreditDetail,
+  type AccountView,
+  type CalibrationReport,
+  type LedgerEntryView,
+  type OrgCalibrationRow,
+  type OrgCreditDetail,
+  type ServiceUsage,
+  type WouldCutView,
+} from "./report";
 export type { Balance } from "./internal";

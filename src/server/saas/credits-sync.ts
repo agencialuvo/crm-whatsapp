@@ -8,6 +8,8 @@ import {
   expirePeriodQuota,
   getCreditBalance,
   grantPeriodQuota,
+  reconcileCredits,
+  type ReconcileResult,
 } from "@/server/credits";
 
 /**
@@ -135,6 +137,59 @@ export async function syncAllQuotas(now: Date = new Date()): Promise<number> {
     console.error("[monedas] la barrida de cuotas falló:", err instanceof Error ? err.message : err);
   }
   return touched;
+}
+
+/* ───────────────────── Conciliación diaria ───────────────────── */
+
+const RECONCILE_EVERY_MS = 24 * 60 * 60 * 1000;
+
+export type ReconcileState = { at: string; checked: number; drifts: ReconcileResult["drifts"]; repaired: number; error: string | null };
+const rg = globalThis as unknown as { __creditReconcile?: { last: ReconcileState | null; running: boolean } };
+const rstate = () => (rg.__creditReconcile ??= { last: null, running: false });
+
+/** El último resultado de la conciliación en este proceso (`null` si aún no corrió). */
+export function lastReconcile(): ReconcileState | null {
+  return rstate().last;
+}
+
+/**
+ * Concilia el saldo guardado de TODAS las cuentas medidas contra su libro. Nunca lanza: un fallo se guarda en el
+ * estado (`error`) y se registra. Los descuadres se registran como error —son un bug, no un dato— y solo se
+ * reparan (el libro manda) si se pide expresamente (`repair`): reparar sin mirar escondería la causa.
+ */
+export async function runReconcile(opts: { repair?: boolean; now?: Date } = {}): Promise<ReconcileState | null> {
+  if (!creditsEnabled()) return null;
+  const s = rstate();
+  if (s.running) return s.last;
+  s.running = true;
+  try {
+    const r = await reconcileCredits({ repair: opts.repair === true });
+    s.last = { at: (opts.now ?? new Date()).toISOString(), checked: r.checked, drifts: r.drifts, repaired: r.repaired, error: null };
+    if (r.drifts.length > 0) {
+      console.error(
+        `[monedas] ${r.drifts.length} cuenta(s) no cuadran con su libro: ${r.drifts.map((d) => d.organizationId).join(", ")}${opts.repair ? " (reparadas)" : ""}`
+      );
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    s.last = { at: (opts.now ?? new Date()).toISOString(), checked: 0, drifts: [], repaired: 0, error: message };
+    console.error("[monedas] la conciliación falló:", message);
+  } finally {
+    s.running = false;
+  }
+  return s.last;
+}
+
+/**
+ * La conciliación DIARIA: la corre el barrido horario y solo actúa si pasó un día desde la última (o nunca corrió en
+ * este proceso). `CREDITS` apagada: nada. Nunca lanza ni retiene al barrido.
+ */
+export async function reconcileIfDue(now: Date = new Date()): Promise<boolean> {
+  if (!creditsEnabled()) return false;
+  const last = rstate().last;
+  if (last && now.getTime() - new Date(last.at).getTime() < RECONCILE_EVERY_MS) return false;
+  await runReconcile({ now });
+  return true;
 }
 
 /* ───────────────────── Cambio de plan a mitad de periodo ───────────────────── */

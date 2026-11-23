@@ -1,6 +1,6 @@
 import { reconcileBilling } from "@/server/billing/reconcile";
 import { closeCancelledPeriods, expireTrials } from "@/server/saas/subscription";
-import { syncAllQuotas } from "@/server/saas/credits-sync";
+import { reconcileIfDue, syncAllQuotas } from "@/server/saas/credits-sync";
 
 /**
  * 045 — El temporizador del vencimiento de pruebas (ver `expireTrials`).
@@ -40,6 +40,8 @@ export async function tickSubscriptions(now = new Date()): Promise<number> {
     // suscripción ya quedó resuelta. Con `CREDITS` apagada no hace nada.
     const cuotas = await syncAllQuotas(now);
     if (cuotas > 0) console.log(`[monedas] ${cuotas} cuota(s) de periodo al día`);
+    // Y una vez al día, la conciliación del saldo contra el libro (nunca lanza).
+    await reconcileIfDue(now);
     return total;
   } catch (err) {
     console.error("[saas] el vencimiento de pruebas falló:", err instanceof Error ? err.message : err);

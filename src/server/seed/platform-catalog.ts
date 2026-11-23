@@ -1,6 +1,7 @@
-import { eq, isNull } from "drizzle-orm";
+import { eq, isNull, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { DEFAULT_PLAN_QUOTA_UNITS } from "@/lib/credits";
 
 type Db = ReturnType<typeof getDb>;
 
@@ -93,6 +94,7 @@ export const DEMO_PLAN: PlanInsert = {
   features: {
     maxStaff: 3,
     maxMonthlyAiTurns: 1000,
+    monthlyCoins: DEFAULT_PLAN_QUOTA_UNITS.demo,
     channels: ["whatsapp", "instagram", "messenger"],
     modules: ["agenda", "salon", "loyalty", "finances", "atribucion"],
   },
@@ -110,6 +112,7 @@ export const EMPRENDEDOR_PLAN: PlanInsert = {
   features: {
     maxStaff: 3,
     maxMonthlyAiTurns: 1000,
+    monthlyCoins: DEFAULT_PLAN_QUOTA_UNITS.emprendedor,
     channels: ["whatsapp"],
     modules: ["agenda", "salon", "loyalty"],
   },
@@ -127,6 +130,7 @@ export const PRO_PLAN: PlanInsert = {
   features: {
     maxStaff: 10,
     maxMonthlyAiTurns: 5000,
+    monthlyCoins: DEFAULT_PLAN_QUOTA_UNITS.pro,
     channels: ["whatsapp", "instagram", "messenger"],
     modules: ["agenda", "salon", "loyalty", "finances", "atribucion"],
   },
@@ -144,6 +148,7 @@ export const ENTERPRISE_PLAN: PlanInsert = {
   features: {
     maxStaff: -1,
     maxMonthlyAiTurns: -1,
+    monthlyCoins: DEFAULT_PLAN_QUOTA_UNITS.enterprise,
     channels: ["whatsapp", "instagram", "messenger", "tiktok"],
     modules: ["agenda", "salon", "loyalty", "finances", "atribucion"],
   },
@@ -151,6 +156,26 @@ export const ENTERPRISE_PLAN: PlanInsert = {
 };
 
 export const BASE_PLANS: readonly PlanInsert[] = [DEMO_PLAN, EMPRENDEDOR_PLAN, PRO_PLAN, ENTERPRISE_PLAN];
+
+/**
+ * Monedas — siembra la cuota mensual (`features.monthlyCoins`, en unidades) en los planes base que AÚN no la
+ * declaran. Idempotente y respetuoso: solo toca un plan con ese `slug` y SIN `monthlyCoins` (nunca pisa una cuota
+ * que alguien ya fijó, ni siquiera `0` o `-1`), conserva el resto de `features` (`||` sobre el JSON) y no toca
+ * planes de otros slugs. Devuelve cuántos planes actualizó (0 en un arranque normal). No depende de `CREDITS`: es un
+ * dato del plan, y con las monedas apagadas no hace nada más.
+ */
+export async function backfillPlanQuotas(db: Db = getDb()): Promise<number> {
+  let updated = 0;
+  for (const [slug, units] of Object.entries(DEFAULT_PLAN_QUOTA_UNITS)) {
+    const rows = await db
+      .update(schema.plan)
+      .set({ features: sql`${schema.plan.features} || jsonb_build_object('monthlyCoins', ${units}::int)` })
+      .where(sql`${schema.plan.slug} = ${slug} and (${schema.plan.features} -> 'monthlyCoins') is null`)
+      .returning({ id: schema.plan.id });
+    updated += rows.length;
+  }
+  return updated;
+}
 
 /** Inserta lo que falte. Devuelve cuántas filas nuevas entraron (0 en un arranque normal). */
 export async function seedPlatformCatalog(
@@ -166,6 +191,8 @@ export async function seedPlatformCatalog(
     .values(BASE_PLANS.map((p) => ({ ...p, id: newId("plan") })))
     .onConflictDoNothing({ target: schema.plan.slug })
     .returning({ id: schema.plan.id });
+  // Los planes que ya existían (sembrados antes de las monedas) reciben su cuota sin pisar nada.
+  await backfillPlanQuotas(db);
   return { categories: categories.length, plans: plans.length };
 }
 
