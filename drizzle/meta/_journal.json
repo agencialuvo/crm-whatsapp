@@ -624,6 +624,13 @@
       "when": 1795440505653,
       "tag": "0088_numeros_ignorados",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1795446477900,
+      "tag": "0089_monedas_base",
+      "breakpoints": true
     }
   ]
 }

@@ -92,6 +92,14 @@ const prefixes = {
   automationEdge: "edg",
   automationRun: "arn",
   automationExecutionLog: "log",
+  // Monedas (IA y WhatsApp): bolsa, libro de movimientos, medición, tarifas y recargas
+  creditAccount: "cra",
+  creditLedger: "crl",
+  creditUsage: "cru",
+  creditRate: "crr",
+  creditPack: "crk",
+  creditTopup: "crt",
+  creditAlert: "cral",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

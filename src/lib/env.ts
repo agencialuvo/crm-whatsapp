@@ -33,6 +33,11 @@ export const envSchema = z.object({
   // 015: motor de agenda. Apagado por defecto — sin el, toda la superficie de
   // agenda responde 404 y la UI no la menciona. Ej.: AGENDA=on
   AGENDA: z.string().optional(),
+  // Monedas (IA y WhatsApp): la bolsa, el libro de movimientos y la medición de consumo. Apagado por defecto
+  // (ADR-001): sin esta variable no se mide, no se descuenta ni se corta nada, y todo funciona como siempre.
+  // Encendido, el corte se activa por organización (`credit_account.cut_enabled`): empieza en modo sombra.
+  // Ej.: CREDITS=on
+  CREDITS: z.string().optional(),
   // Módulo SALON (barberías, salones, manicure): catálogo de servicios y
   // combos, equipo con comisiones, caja y agenda por sillas. Apagado por
   // defecto — sin él toda su superficie responde 404 y la UI no lo menciona.

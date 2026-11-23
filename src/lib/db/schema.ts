@@ -694,6 +694,8 @@ export const plan = pgTable(
     features: jsonb("features").$type<{
       maxStaff?: number; // Límite de personal (-1 = ilimitado)
       maxMonthlyAiTurns?: number; // Límite de turnos de IA al mes
+      /** Monedas: cuota mensual en UNIDADES (1 moneda = 100 unidades). -1 = ilimitada; ausente = el plan no mide. */
+      monthlyCoins?: number;
       channels: ("whatsapp" | "instagram" | "messenger" | "tiktok")[];
       modules: ("agenda" | "salon" | "atribucion" | "loyalty" | "finances")[];
     }>().notNull(),
@@ -2992,4 +2994,231 @@ export const billingWebhookEvent = pgTable(
     uniqueIndex("bwh_request_uq").on(t.requestId),
     index("bwh_status_received_idx").on(t.status, t.receivedAt),
   ]
+);
+
+/* ============================================================
+ * Monedas (IA y WhatsApp) — detrás de la bandera CREDITS
+ *
+ * Las tablas se crean SIEMPRE, encendida o apagada la bandera (ADR-001): una tabla vacía es inerte, y a cambio
+ * todas las instancias comparten la misma estructura y la misma cadena de migraciones.
+ *
+ * Las escribe SOLO `src/server/credits/` (una prueba de vigilancia lo comprueba). Cantidades en UNIDADES enteras:
+ * 1 moneda = 100 unidades, para cobrar fracciones sin números decimales.
+ * ============================================================ */
+
+/**
+ * La bolsa de una organización: un saldo de la cuota del plan (vence al cerrar el periodo, no se acumula) y otro de
+ * recargas (no vence). Es una CACHÉ del libro: se actualiza en la misma transacción que el movimiento, y
+ * `reconcileCredits` comprueba que siga cuadrando. Sin fila = la organización no está medida (nunca se corta).
+ */
+export const creditAccount = pgTable(
+  "credit_account",
+  {
+    id: text("id").primaryKey(), // prefix: 'cra'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** Lo que queda de la cuota del periodo. Nunca baja de 0: lo que falta se toma de las recargas. */
+    planBalance: integer("plan_balance").notNull().default(0),
+    /** Recargas. Puede quedar en negativo (deuda) hasta que el gasto ya hecho se salde con la siguiente recarga. */
+    topupBalance: integer("topup_balance").notNull().default(0),
+    /** Plan sin tope (`monthlyCoins = -1`): se mide todo, no se descuenta nada y jamás se corta. */
+    unlimited: boolean("unlimited").notNull().default(false),
+    /**
+     * Modo sombra: con `false` (por defecto) la contabilidad es completa pero NO se corta nada. Se enciende por
+     * organización, cuando las tarifas ya se calibraron con datos reales.
+     */
+    cutEnabled: boolean("cut_enabled").notNull().default(false),
+    /** Cuánto puede quedar en negativo antes de cortar: absorbe la carrera entre turnos simultáneos. */
+    overdraftLimit: integer("overdraft_limit").notNull().default(0),
+    /** El periodo de suscripción cuya cuota está cargada ahora. */
+    planPeriodStart: timestamp("plan_period_start"),
+    planPeriodEnd: timestamp("plan_period_end"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("credit_account_org_uq").on(t.organizationId),
+    check("credit_account_plan_nonneg", sql`${t.planBalance} >= 0`),
+    check("credit_account_overdraft_nonneg", sql`${t.overdraftLimit} >= 0`),
+  ]
+);
+
+/**
+ * El libro: inmutable, solo se agregan filas. `idempotency_key` es ÚNICO por organización: repetir una operación
+ * (un reintento, un webhook duplicado) no cobra ni abona dos veces. Un gasto que toca los dos saldos deja DOS filas
+ * (la segunda con la clave `<clave>~topup`); la primera decide si la operación ya existía.
+ */
+export const creditLedger = pgTable(
+  "credit_ledger",
+  {
+    id: text("id").primaryKey(), // prefix: 'crl'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["grant", "expire", "spend", "topup", "refund", "adjustment", "reversal"] }).notNull(),
+    bucket: text("bucket", { enum: ["plan", "topup"] }).notNull(),
+    service: text("service", { enum: ["ai", "whatsapp"] }),
+    /** Con signo, en unidades. Nunca 0. */
+    amount: integer("amount").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    /** Qué lo originó: `message`, `turn`, `subscription`, `topup`… y su id. Sin FK: el libro sobrevive a lo que referencia. */
+    refType: text("ref_type"),
+    refId: text("ref_id"),
+    periodStart: timestamp("period_start"),
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    note: text("note"),
+    meta: jsonb("meta").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("credit_ledger_org_idem_uq").on(t.organizationId, t.idempotencyKey),
+    index("credit_ledger_org_created_idx").on(t.organizationId, t.createdAt),
+    index("credit_ledger_org_service_idx").on(t.organizationId, t.service, t.createdAt),
+    check("credit_ledger_amount_nonzero", sql`${t.amount} <> 0`),
+    check(
+      "credit_ledger_kind_sign",
+      sql`(${t.kind} in ('grant', 'topup') and ${t.amount} > 0) or (${t.kind} in ('expire', 'spend', 'refund') and ${t.amount} < 0) or ${t.kind} in ('adjustment', 'reversal')`
+    ),
+  ]
+);
+
+/**
+ * La medición cruda: una fila por llamada a la IA y por envío de WhatsApp, se cobre o no (llave del cliente,
+ * Laboratorio, mensajes libres a tarifa 0). Es lo que permite calibrar las tarifas antes de cortar. Independiente
+ * del libro: registrar uso nunca mueve el saldo.
+ */
+export const creditUsage = pgTable(
+  "credit_usage",
+  {
+    id: text("id").primaryKey(), // prefix: 'cru'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    service: text("service", { enum: ["ai", "ai_lab", "whatsapp"] }).notNull(),
+    /** IA: de quién es la llave — `org` (la del cliente) o `env` (la de la plataforma). */
+    source: text("source", { enum: ["org", "env"] }),
+    model: text("model"),
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
+    /** Los tokens se estimaron (el proveedor no mandó `usage`). */
+    estimated: boolean("estimated").notNull().default(false),
+    /** WhatsApp: `text` o la categoría de la plantilla. */
+    category: text("category"),
+    quantity: integer("quantity").notNull().default(1),
+    conversationId: text("conversation_id"),
+    refType: text("ref_type"),
+    refId: text("ref_id"),
+    /** Unidades que se descontaron por esto (0 = solo medido). */
+    chargedUnits: integer("charged_units").notNull().default(0),
+    /** Con el corte activo, esto habría sido bloqueado (saldo agotado): el dato del modo sombra. */
+    wouldCut: boolean("would_cut").notNull().default(false),
+    idempotencyKey: text("idempotency_key"),
+    meta: jsonb("meta").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("credit_usage_org_created_idx").on(t.organizationId, t.createdAt),
+    index("credit_usage_service_created_idx").on(t.service, t.createdAt),
+    uniqueIndex("credit_usage_org_idem_uq")
+      .on(t.organizationId, t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} is not null`),
+    check("credit_usage_charged_nonneg", sql`${t.chargedUnits} >= 0`),
+  ]
+);
+
+/**
+ * Tarifas versionadas, de la PLATAFORMA (no de una organización). La vigente de una clave es la de `effective_from`
+ * más reciente que ya empezó: cambiar un precio es agregar una fila, y cada cobro anota qué tarifa usó.
+ */
+export const creditRate = pgTable(
+  "credit_rate",
+  {
+    id: text("id").primaryKey(), // prefix: 'crr'
+    /** `ai.turn`, `wa.template.marketing`, `wa.template.utility`, `wa.template.authentication`, `wa.text`… */
+    key: text("key").notNull(),
+    service: text("service", { enum: ["ai", "whatsapp"] }).notNull(),
+    category: text("category"),
+    unitKind: text("unit_kind", { enum: ["per_turn", "per_1k_tokens", "per_message"] }).notNull(),
+    /** Unidades por `unit_kind`. 0 = se mide pero no se cobra (mensajes libres). */
+    amount: integer("amount").notNull(),
+    effectiveFrom: timestamp("effective_from").notNull().defaultNow(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    note: text("note"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("credit_rate_key_from_uq").on(t.key, t.effectiveFrom),
+    check("credit_rate_amount_nonneg", sql`${t.amount} >= 0`),
+  ]
+);
+
+/** Paquetes de recarga que se pueden comprar. De la plataforma. */
+export const creditPack = pgTable(
+  "credit_pack",
+  {
+    id: text("id").primaryKey(), // prefix: 'crk'
+    name: text("name").notNull(),
+    /** Unidades que abona. */
+    units: integer("units").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    currency: text("currency").notNull().default("PEN"),
+    active: boolean("active").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    check("credit_pack_units_pos", sql`${t.units} > 0`),
+    check("credit_pack_price_nonneg", sql`${t.priceCents} >= 0`),
+  ]
+);
+
+/**
+ * Un intento de comprar un paquete. Su id es el `external_reference` opaco ante la pasarela: la organización y las
+ * unidades se leen de AQUÍ, nunca del texto que viaja por fuera. Copia las unidades y el precio del paquete: un
+ * cambio posterior del catálogo no altera una compra ya hecha.
+ */
+export const creditTopup = pgTable(
+  "credit_topup",
+  {
+    id: text("id").primaryKey(), // prefix: 'crt'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    packId: text("pack_id").references(() => creditPack.id),
+    units: integer("units").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    status: text("status", { enum: ["pending", "paid", "failed", "abandoned", "refunded"] }).notNull().default("pending"),
+    mpPaymentId: text("mp_payment_id"),
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    expiresAt: timestamp("expires_at").notNull(),
+    completedAt: timestamp("completed_at"),
+  },
+  (t) => [
+    index("credit_topup_org_created_idx").on(t.organizationId, t.createdAt),
+    uniqueIndex("credit_topup_mp_payment_uq").on(t.mpPaymentId).where(sql`${t.mpPaymentId} is not null`),
+    check("credit_topup_units_pos", sql`${t.units} > 0`),
+  ]
+);
+
+/**
+ * Qué avisos de saldo ya se mandaron: uno por organización, periodo y umbral. Quien avisa «reclama» la fila primero
+ * (`INSERT … ON CONFLICT DO NOTHING`): si la reclamó, manda; si no, otro ya lo hizo. Así un barrido que corre dos
+ * veces, o dos turnos simultáneos, no avisan dos veces.
+ */
+export const creditAlert = pgTable(
+  "credit_alert",
+  {
+    id: text("id").primaryKey(), // prefix: 'cral'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    periodStart: timestamp("period_start").notNull(),
+    threshold: text("threshold", { enum: ["warn80", "exhausted", "zero"] }).notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("credit_alert_org_period_threshold_uq").on(t.organizationId, t.periodStart, t.threshold)]
 );
