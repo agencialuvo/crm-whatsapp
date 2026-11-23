@@ -34,6 +34,8 @@ export type BreakEvenDto = {
   state: BreakEvenState;
   /** El mes calendario que se cubre (`AAAA-MM`): el del último día del rango consultado. */
   month: string;
+  /** El rango consultado abarca el mes entero. Si no, los gastos fijos (de todo el mes) pueden diferir de «Gastos operativos». */
+  coversWholeMonth: boolean;
   /**
    * Gastos fijos (`expense_item.isFixed`) de ese mes; si no había, los del mes anterior. Es el único costo
    * fijo de la cuenta: la publicidad, como cualquier otro gasto, se registra en Gastos (fija o variable).
@@ -197,6 +199,7 @@ export function computeBreakEven(input: {
   return {
     state,
     month: input.to.slice(0, 7),
+    coversWholeMonth: input.from <= month.from && input.to >= month.to,
     fixedExpensesMonthCents: input.fixedExpensesMonthCents,
     usingPreviousMonthFixedExpenses: input.usingPreviousMonthFixedExpenses,
     commissionRate: input.commissionRate,

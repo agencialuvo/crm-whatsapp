@@ -142,7 +142,7 @@ export function CashClient({
 
   function exportCsv() {
     if (!report) return;
-    const header = ["Fecha", "Cliente", "Servicio u oferta", "Profesional", "Pago", "Monto", "Comisión", "Neto"];
+    const header = ["Fecha", "Cliente", "Servicio u oferta", "Profesional", "Pago", "Monto", "Comisión", "Ganancia antes de gastos"];
     // Se exporta lo que se ve: con una búsqueda activa, solo esas ventas.
     const lines = filteredRows.map((r) =>
       [
@@ -385,7 +385,7 @@ export function CashClient({
                           Comisión
                         </th>
                         <th scope="col" className="px-2 py-2 text-right">
-                          Neto
+                          Ganancia antes de gastos
                         </th>
                         <th scope="col" className="px-2 py-2 sm:pr-5">
                           <span className="sr-only">Acciones</span>

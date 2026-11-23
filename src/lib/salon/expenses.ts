@@ -193,10 +193,10 @@ export type ExpenseItemDto = {
 /**
  * Lo que entró contra lo que salió en un periodo:
  *
- *   ganancia neta real = ingresos − comisiones del equipo − gastos operativos
+ *   ganancia neta = ingresos − comisiones del equipo − gastos operativos
  *
- * (`netBeforeExpensesCents` es la «ganancia neta» de Caja: ingresos menos
- * comisiones, antes de descontar los gastos.)
+ * (`netBeforeExpensesCents` es la «ganancia antes de gastos»: ingresos menos
+ * comisiones, antes de descontar los gastos. Solo `realNetCents` se llama «ganancia neta».)
  */
 export type ExpenseKindTotal = { count: number; totalCents: number };
 

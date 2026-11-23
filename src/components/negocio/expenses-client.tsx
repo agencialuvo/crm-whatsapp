@@ -45,16 +45,17 @@ function endOfMonth(day: string): string {
 }
 
 /**
- * Atajos de Gastos. Los gastos se devengan: uno fechado más adelante en el mes ya cuenta en
- * «Este mes» (el periodo llega al último día), para ver el punto de equilibrio real desde el
- * día uno sin esperar a la fecha de pago. Las ventas no cambian: aún no existen las futuras.
+ * Atajos de Gastos. «Este mes» es lo mismo que en el Panel: del día 1 a hoy. «Mes completo» llega al
+ * último día: los gastos se devengan, y uno fechado más adelante en el mes ya cuenta ahí (es el mes
+ * con el que se calcula el punto de equilibrio del Panel). Las ventas no cambian: aún no existen las futuras.
  */
 function expensePresets(today: string): { label: string; range: Range }[] {
   const first = `${today.slice(0, 8)}01`;
   const prevEnd = addDaysISO(first, -1);
   const nextFirst = addDaysISO(endOfMonth(today), 1);
   return [
-    { label: "Este mes", range: { from: first, to: endOfMonth(today) } },
+    { label: "Este mes", range: { from: first, to: today } },
+    { label: "Mes completo", range: { from: first, to: endOfMonth(today) } },
     { label: "Mes pasado", range: { from: `${prevEnd.slice(0, 8)}01`, to: prevEnd } },
     { label: "Próximo mes", range: { from: nextFirst, to: endOfMonth(nextFirst) } },
     { label: "7 días", range: { from: addDaysISO(today, -6), to: today } },
@@ -65,8 +66,7 @@ function expensePresets(today: string): { label: string; range: Range }[] {
  * Módulo SALON — egresos y gastos operativos (solo dueño/administrador).
  *
  * Responde a «¿cuánto me queda de verdad?»: lo que entró, lo que se llevó el
- * equipo en comisiones, lo que se gastó en operar y, al final, la ganancia neta
- * real. Los gastos son fijos o variables (insumos). Los días se cuentan en la zona
+ * equipo en comisiones, lo que se gastó en operar y, al final, la ganancia neta. Los gastos son fijos o variables (insumos). Los días se cuentan en la zona
  * del negocio, no en la del navegador.
  */
 export function ExpensesClient({
@@ -79,7 +79,10 @@ export function ExpensesClient({
   /** Llega desde Caja: el periodo que se estaba revisando. */
   initialRange?: Range;
 }) {
-  const [range, setRange] = useState<Range>(() => initialRange ?? expensePresets(today)[0]!.range);
+  const [range, setRange] = useState<Range>(
+    // Abre en el mes completo: un gasto recién registrado con fecha de fin de mes no debe «desaparecer» de la lista.
+    () => initialRange ?? expensePresets(today).find((p) => p.label === "Mes completo")!.range
+  );
   const presetList = useMemo(() => expensePresets(today), [today]);
   const [kindFilter, setKindFilter] = useState("");
   const [query, setQuery] = useState("");
@@ -205,9 +208,9 @@ export function ExpensesClient({
                 />
               )}
               <Tile
-                label="Ganancia neta"
+                label="Ganancia antes de gastos"
                 value={s ? money(s.netBeforeExpensesCents, currency) : "…"}
-                hint="antes de gastos"
+                hint="ingresos − comisiones"
               />
               <Tile
                 label="Gastos operativos"
@@ -217,7 +220,7 @@ export function ExpensesClient({
               <Tile
                 strong
                 negative={negative}
-                label="Ganancia neta real"
+                label="Ganancia neta"
                 value={s ? money(s.realNetCents, currency) : "…"}
                 hint="ingresos − comisiones − gastos"
               />
@@ -231,7 +234,7 @@ export function ExpensesClient({
                 <div
                   className="flex h-3 w-full overflow-hidden rounded-full bg-border"
                   role="img"
-                  aria-label={`Comisiones ${commissionsPct}%, gastos ${expensesPct}%, ganancia real ${negative ? 0 : realPct}%`}
+                  aria-label={`Comisiones ${commissionsPct}%, gastos ${expensesPct}%, ganancia neta ${negative ? 0 : realPct}%`}
                 >
                   <span className="bg-brand-soft" style={{ width: `${Math.min(commissionsPct, 100)}%` }} />
                   <span
@@ -253,7 +256,7 @@ export function ExpensesClient({
                   </li>
                   <li className="flex items-center gap-1.5">
                     <span aria-hidden className="h-2 w-2 rounded-full bg-success" />
-                    Ganancia real {negative ? "negativa" : `${realPct}%`}
+                    Ganancia neta {negative ? "negativa" : `${realPct}%`}
                   </li>
                 </ul>
                 {negative && (
@@ -458,7 +461,7 @@ export function ExpensesClient({
           message={
             <>
               ¿Borrar el gasto <strong>{deleting.name}</strong> por{" "}
-              <strong>{money(deleting.totalPriceCents, currency)}</strong>? La ganancia neta real del
+              <strong>{money(deleting.totalPriceCents, currency)}</strong>? La ganancia neta del
               periodo se recalcula.
               {" "}
               No se puede deshacer.

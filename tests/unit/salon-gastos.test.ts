@@ -196,7 +196,7 @@ describe("gastos — fijo o variable", () => {
   });
 });
 
-describe("gastos — ganancia neta real", () => {
+describe("gastos — ganancia neta (después de gastos)", () => {
   it("ingresos − comisiones − gastos", () => {
     const s = buildExpenseSummary({
       revenueCents: 100_000,

@@ -162,6 +162,9 @@ export function DashboardClient({
   const birthdays = data?.birthdays;
   // Los cumpleaños del mes pueden ser muchos: van paginados como cualquier lista.
   const birthdayTable = useDataTable(birthdays?.clients ?? NONE, { view: "panel-cumpleanos", defaultPageSize: 10 });
+  // Con un filtro de profesional o de servicio los gastos del negocio no se reparten: lo que se grafica es
+  // ingresos − comisiones, y se llama «ganancia antes de gastos» (nunca «ganancia neta»).
+  const netName = filtersActive ? "ganancia antes de gastos" : "ganancia neta";
   const monthName = birthdays ? MONTH_NAMES[birthdays.month - 1] : null;
 
   return (
@@ -320,7 +323,7 @@ export function DashboardClient({
           <div className="grid gap-5 lg:grid-cols-3">
             <div className="lg:col-span-2">
               <Section
-                title={`${view === "net" ? "Ganancia neta" : "Ingresos"} por ${
+                title={`${view === "net" ? `${netName[0]!.toUpperCase()}${netName.slice(1)}` : "Ingresos"} por ${
                   data?.series.granularity === "month" ? "mes" : data?.series.granularity === "week" ? "semana" : "día"
                 }`}
                 hint={
@@ -337,7 +340,7 @@ export function DashboardClient({
                     {(
                       [
                         ["revenue", "Ver ingresos"],
-                        ["net", "Ver ganancia neta"],
+                        ["net", `Ver ${netName}`],
                       ] as const
                     ).map(([key, label]) => (
                       <button
@@ -368,7 +371,7 @@ export function DashboardClient({
                           ? "Por semana (inicio)"
                           : "Por día"
                     }
-                    unit={view === "net" ? "ganancia neta" : "ingresos"}
+                    unit={view === "net" ? netName : "ingresos"}
                     format={(v) => money(v, currency)}
                     points={data.series.points.map((p) => ({
                       bucket: p.bucket,

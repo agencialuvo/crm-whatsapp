@@ -35,7 +35,7 @@ export function SaleDetailDialog({
     ...(sale.staffId === null
       ? []
       : ([["Comisión del profesional", money(sale.staffCommissionCents, currency)]] as [string, React.ReactNode][])),
-    ["Ganancia neta", <strong key="n">{money(sale.businessNetCents, currency)}</strong>],
+    ["Ganancia antes de gastos", <strong key="n">{money(sale.businessNetCents, currency)}</strong>],
   ];
 
   return (

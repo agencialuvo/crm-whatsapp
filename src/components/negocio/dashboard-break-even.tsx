@@ -117,7 +117,7 @@ export function BreakEvenCard({
                   strong
                   label={`Punto de equilibrio de ${monthLabel(d.month)}`}
                   value={money(d.monthlyBreakEvenCents, currency)}
-                  hint={`gastos fijos ${money(d.fixedExpensesMonthCents, currency)} ÷ margen de contribución ${Math.round(d.contributionMargin * 100)} %`}
+                  hint={`gastos fijos del mes completo ${money(d.fixedExpensesMonthCents, currency)} ÷ margen de contribución ${Math.round(d.contributionMargin * 100)} %`}
                 />
                 <Stat
                   label="Meta diaria mínima"
@@ -149,6 +149,12 @@ export function BreakEvenCard({
             </p>
           )}
 
+          {d.state === "ok" && !d.coversWholeMonth && (
+            <p className="text-xs text-text-3">
+              Usa los gastos fijos de todo {monthLabel(d.month)}, también los fechados después del rango elegido: por eso puede diferir
+              de «Gastos operativos», que solo suma las fechas del rango.
+            </p>
+          )}
           {d.usingPreviousMonthFixedExpenses && (
             <p className="text-xs text-text-3">Calculado con gastos fijos del mes pasado: aún no cargas los de este mes.</p>
           )}

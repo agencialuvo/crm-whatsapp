@@ -157,6 +157,13 @@ describe("punto de equilibrio", () => {
     }
   });
 
+  it("avisa si el rango no abarca el mes entero (los gastos fijos son del mes completo)", () => {
+    expect(computeBreakEven({ ...base, from: "2026-11-01", to: "2026-11-30" }).coversWholeMonth).toBe(true);
+    expect(computeBreakEven({ ...base, from: "2026-10-20", to: "2026-11-30" }).coversWholeMonth).toBe(true);
+    expect(computeBreakEven({ ...base, from: "2026-11-01", to: "2026-11-22", today: "2026-11-22" }).coversWholeMonth).toBe(false);
+    expect(computeBreakEven({ ...base, from: "2026-11-02", to: "2026-11-30" }).coversWholeMonth).toBe(false);
+  });
+
   it("el mes que cuenta es el del último día del rango", () => {
     const d = computeBreakEven({ ...base, from: "2026-10-20", to: "2026-11-05", today: "2026-11-05" });
     expect(d.month).toBe("2026-11");

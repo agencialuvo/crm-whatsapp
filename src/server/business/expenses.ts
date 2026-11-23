@@ -151,7 +151,7 @@ function kindTotal(rows: { isFixed: boolean; count: number; totalCents: number }
 
 /**
  * Los gastos de un periodo y el comparativo contra lo que entró:
- * ganancia neta real = ingresos − comisiones − gastos. Los ingresos y las
+ * ganancia neta = ingresos − comisiones − gastos. Los ingresos y las
  * comisiones salen del MISMO reporte de Caja (sin filas), así los números de las
  * dos pantallas siempre coinciden. Los filtros (`kind`) acotan
  * la tabla; el resumen es siempre el de todo el periodo.

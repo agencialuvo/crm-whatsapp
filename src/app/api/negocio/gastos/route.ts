@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * Módulo SALON — egresos y gastos operativos. Solo dueño/administrador (es dinero).
  * Con `?from=AAAA-MM-DD&to=AAAA-MM-DD` (días del negocio, inclusivos; sin ellos,
  * los últimos 30) responde los gastos del periodo y el comparativo: ingresos,
- * comisiones, gastos y ganancia neta real. `?kind=fixed|variable` acota la tabla.
+ * comisiones, gastos y ganancia neta. `?kind=fixed|variable` acota la tabla.
  */
 export const GET = withAuth(async (session, req: Request) => {
   const denied = salonGate(session, "manager");
