@@ -281,7 +281,7 @@ export function AppNav({
           {/* Contraído: solo el isotipo, centrado */}
           {c && (
             <span className="hidden lg:flex">
-              <BrandTile branding={branding} className="h-[26px] w-[26px] rounded-[8px] text-[13px]" />
+              <BrandTile branding={branding} className="h-[30px] w-[30px] rounded-[9px] text-[15px]" />
             </span>
           )}
           {onToggleCollapsed && (
