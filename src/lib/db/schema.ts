@@ -3190,7 +3190,14 @@ export const creditTopup = pgTable(
     amountCents: integer("amount_cents").notNull(),
     currency: text("currency").notNull(),
     status: text("status", { enum: ["pending", "paid", "failed", "abandoned", "refunded"] }).notNull().default("pending"),
+    /** Id del pago en la pasarela (nombre heredado del Paso 2). Con Culqi: el id de la orden pagada. */
     mpPaymentId: text("mp_payment_id"),
+    /** Pasarela con la que se cobra ('culqi'). */
+    gateway: text("gateway"),
+    /** Id de la orden en la pasarela: la compra se reconoce por él y por su `order_number` (= id de la compra). */
+    gatewayOrderId: text("gateway_order_id"),
+    /** Id del cargo, necesario para reembolsar. Se aprende al confirmar el pago. */
+    gatewayChargeId: text("gateway_charge_id"),
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     failureReason: text("failure_reason"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -3200,6 +3207,8 @@ export const creditTopup = pgTable(
   (t) => [
     index("credit_topup_org_created_idx").on(t.organizationId, t.createdAt),
     uniqueIndex("credit_topup_mp_payment_uq").on(t.mpPaymentId).where(sql`${t.mpPaymentId} is not null`),
+    uniqueIndex("credit_topup_gateway_order_uq").on(t.gatewayOrderId).where(sql`${t.gatewayOrderId} is not null`),
+    index("credit_topup_gateway_charge_idx").on(t.gatewayChargeId),
     check("credit_topup_units_pos", sql`${t.units} > 0`),
   ]
 );

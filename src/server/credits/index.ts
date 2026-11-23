@@ -23,7 +23,7 @@ export { recordUsage, usageSummary, type UsageInput, type UsageResult, type Usag
 export { claimAlert, checkCredit, getAlertState, getCreditBalance, getPeriodSpend, type AlertState, type CreditBalance, type PeriodSpend } from "./queries";
 export { priceFor, clearRateCache } from "./pricing";
 export { createPack, getPack, listPacks, updatePack, type PackActor, type PackInput, type PackResult, type PackRow } from "./packs";
-export { createTopupIntent, ensureDefaultRates, getRate, getTopup, setRate, TOPUP_TTL_MS, type RateRow, type TopupRow } from "./catalog";
+export { closePendingTopup, createTopupIntent, ensureDefaultRates, getRate, getTopup, noteTopupIssue, setRate, setTopupGateway, TOPUP_TTL_MS, type RateRow, type TopupRow } from "./catalog";
 export { reconcileCredits, type Drift, type ReconcileResult } from "./reconcile";
 export {
   calibrationReport,

@@ -1,5 +1,6 @@
 import { reconcileBilling } from "@/server/billing/reconcile";
 import { closeCancelledPeriods, expireTrials } from "@/server/saas/subscription";
+import { reconcilePendingTopups } from "@/server/billing/credit-topup";
 import { reconcileIfDue, syncAllQuotas } from "@/server/saas/credits-sync";
 
 /**
@@ -42,6 +43,9 @@ export async function tickSubscriptions(now = new Date()): Promise<number> {
     if (cuotas > 0) console.log(`[monedas] ${cuotas} cuota(s) de periodo al día`);
     // Y una vez al día, la conciliación del saldo contra el libro (nunca lanza).
     await reconcileIfDue(now);
+    // Y las recargas con Culqi que quedaron abiertas (un aviso perdido): se asientan contra Culqi. Nunca lanza.
+    const recargas = await reconcilePendingTopups(now);
+    if (recargas > 0) console.log(`[monedas] ${recargas} recarga(s) asentada(s) por el barrido`);
     return total;
   } catch (err) {
     console.error("[saas] el vencimiento de pruebas falló:", err instanceof Error ? err.message : err);

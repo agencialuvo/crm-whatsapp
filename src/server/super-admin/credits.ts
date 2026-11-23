@@ -13,6 +13,7 @@ import {
   type CalibrationReport,
   type OrgCreditDetail,
 } from "@/server/credits";
+import { refundPurchase } from "@/server/billing/credit-topup";
 import { lastReconcile, runReconcile, type ReconcileState } from "@/server/saas/credits-sync";
 
 /**
@@ -130,4 +131,13 @@ export async function packUpdate(actor: Actor, id: string, input: PackUpdateInpu
 /** Concilia ahora, a pedido del operador. `null` con las monedas apagadas. */
 export async function reconcileNow(repair: boolean): Promise<ReconcileState | null> {
   return runReconcile({ repair });
+}
+
+/** Reembolsa una recarga (primero en Culqi, luego se descuentan las monedas). Idempotente. */
+export async function topupRefund(
+  actorUserId: string,
+  topupId: string,
+  reason?: string
+): Promise<{ ok: true; duplicate: boolean } | { ok: false; status: 404 | 409 | 422 | 429 | 502 | 503; code: string; message: string }> {
+  return refundPurchase({ topupId, actorUserId, reason });
 }

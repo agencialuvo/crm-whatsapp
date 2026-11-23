@@ -101,6 +101,36 @@ export async function createTopupIntent(input: {
   return { status: "created", topup: topup! };
 }
 
+/** Anota en la compra con qué orden y cargo de la pasarela se cobra. Solo completa datos; nunca toca el estado ni el saldo. */
+export async function setTopupGateway(organizationId: string, topupId: string, gw: { gateway: string; orderId?: string; chargeId?: string }): Promise<void> {
+  if (!creditsEnabled()) return;
+  await getDb()
+    .update(schema.creditTopup)
+    .set({ gateway: gw.gateway, ...(gw.orderId ? { gatewayOrderId: gw.orderId } : {}), ...(gw.chargeId ? { gatewayChargeId: gw.chargeId } : {}) })
+    .where(scoped(schema.creditTopup.organizationId, organizationId, eq(schema.creditTopup.id, topupId)));
+}
+
+/**
+ * Cierra una compra que SIGUE pendiente (falló el cobro, venció la orden…) con su motivo. Una compra ya pagada o
+ * reembolsada no se toca jamás: solo `pending` cambia aquí.
+ */
+export async function closePendingTopup(organizationId: string, topupId: string, status: "failed" | "abandoned", reason: string): Promise<void> {
+  if (!creditsEnabled()) return;
+  await getDb()
+    .update(schema.creditTopup)
+    .set({ status, failureReason: reason.slice(0, 200) })
+    .where(scoped(schema.creditTopup.organizationId, organizationId, and(eq(schema.creditTopup.id, topupId), eq(schema.creditTopup.status, "pending"))));
+}
+
+/** Deja un aviso en una compra pendiente (p. ej. un pago que no coincide) sin cerrarla. */
+export async function noteTopupIssue(organizationId: string, topupId: string, reason: string): Promise<void> {
+  if (!creditsEnabled()) return;
+  await getDb()
+    .update(schema.creditTopup)
+    .set({ failureReason: reason.slice(0, 200) })
+    .where(scoped(schema.creditTopup.organizationId, organizationId, and(eq(schema.creditTopup.id, topupId), eq(schema.creditTopup.status, "pending"))));
+}
+
 /** Una compra de ESTA organización. Solo lectura. */
 export async function getTopup(organizationId: string, topupId: string): Promise<TopupRow | null> {
   const [row] = await getDb()

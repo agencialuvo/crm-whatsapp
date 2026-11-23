@@ -97,6 +97,7 @@ describe("las monedas se conectan al flujo SOLO por los puntos acordados (Paso 3
     "server/notifications/credit-alerts.ts", // los avisos de saldo (campanita y correo)
     "server/super-admin/credits.ts", // lo que ve y hace el Super Admin (reporte, ajuste manual, corte)
     "server/saas/credits-summary.ts", // lo que ve el cliente (saldo, consumo, costos) — solo lectura
+    "server/billing/credit-topup.ts", // la compra de recargas con Culqi: abona y reembolsa por la puerta
   ];
 
   it("nadie fuera de server/credits/ y de los puntos de conexión importa la puerta", () => {

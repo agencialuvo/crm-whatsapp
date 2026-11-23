@@ -81,6 +81,12 @@ export const envSchema = z.object({
   MP_ACCESS_TOKEN: z.string().optional(),
   MP_WEBHOOK_SECRET: z.string().optional(),
   MP_API_BASE: z.string().optional(),
+  // Monedas 5.4 — recargas con Culqi. Se leen en src/lib/culqi/config.ts. Apagado por defecto (CULQI=on para encender).
+  CULQI: z.string().optional(),
+  CULQI_SECRET_KEY: z.string().optional(),
+  CULQI_PUBLIC_KEY: z.string().optional(),
+  CULQI_WEBHOOK_SECRET: z.string().optional(),
+  CULQI_API_BASE: z.string().optional(),
   PAYMENT_GRACE_DAYS: z.string().optional(),
   // 048: almacenamiento de Medios en Cloudflare R2 (conector opcional, apagado por defecto: sin el, el disco local).
   // Se leen SOLO en src/server/storage/config.ts; aqui se declaran para que `pnpm doctor` las vea.

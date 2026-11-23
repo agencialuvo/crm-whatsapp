@@ -631,6 +631,13 @@
       "when": 1795446477900,
       "tag": "0089_monedas_base",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1795455099729,
+      "tag": "0090_monedas_culqi",
+      "breakpoints": true
     }
   ]
 }
