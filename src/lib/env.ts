@@ -87,6 +87,8 @@ export const envSchema = z.object({
   CULQI_PUBLIC_KEY: z.string().optional(),
   CULQI_WEBHOOK_SECRET: z.string().optional(),
   CULQI_API_BASE: z.string().optional(),
+  // Se lee al CONSTRUIR (next.config.ts): con "on" la política de seguridad deja cargar el checkout de Culqi.
+  NEXT_PUBLIC_CULQI: z.string().optional(),
   PAYMENT_GRACE_DAYS: z.string().optional(),
   // 048: almacenamiento de Medios en Cloudflare R2 (conector opcional, apagado por defecto: sin el, el disco local).
   // Se leen SOLO en src/server/storage/config.ts; aqui se declaran para que `pnpm doctor` las vea.

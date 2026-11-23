@@ -1,7 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { CreditsCard } from "@/components/credits/credits-card";
+import { CreditsTopup } from "@/components/credits/credits-topup";
 import { canConfigure } from "@/lib/auth/roles";
 import { getSessionOrNull } from "@/lib/auth/session";
+import { culqiEnabled } from "@/lib/culqi/config";
 import { creditSummary, creditsEnabled } from "@/server/saas/credits-summary";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +22,8 @@ export default async function MonedasPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <CreditsCard summary={summary} />
+      {/* Comprar recargas: solo el dueño; con `CULQI` apagada la pantalla lo dice y no deja comprar. */}
+      <CreditsTopup canBuy={session.role === "owner"} gatewayReady={culqiEnabled()} />
     </div>
   );
 }

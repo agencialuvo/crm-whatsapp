@@ -56,6 +56,11 @@ const RECAPTCHA = !!process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY?.trim();
 // Cloudflare R2: los adjuntos y Medios se sirven y se suben directo desde/hacia el bucket (URLs firmadas de
 // <cuenta>.r2.cloudflarestorage.com). Sin esto el navegador bloquea la subida (connect-src) y las imágenes/videos (img-src/media-src).
 // Las cabeceras se fijan al construir y R2_ENDPOINT no llega al build, por eso va el comodín del dominio de R2.
+// Culqi (recargas de monedas): el checkout es un script + un iframe de Culqi. Solo se abre la política con
+// `NEXT_PUBLIC_CULQI=on` al construir (apagado por defecto), igual que reCAPTCHA.
+const CULQI_CSP = process.env.NEXT_PUBLIC_CULQI === "on";
+const CULQI_ORIGENES = "https://js.culqi.com https://checkout.culqi.com https://*.culqi.com";
+
 const R2_ORIGENES = " https://*.r2.cloudflarestorage.com";
 
 const SECURITY_HEADERS = [
@@ -77,14 +82,16 @@ const SECURITY_HEADERS = [
     value: [
       "default-src 'self'",
       // React Refresh (solo en desarrollo) evalúa código; en producción no.
-      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}${RECAPTCHA ? " https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/" : ""}`,
+      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}${RECAPTCHA ? " https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/" : ""}${CULQI_CSP ? ` ${CULQI_ORIGENES}` : ""}`,
       "style-src 'self' 'unsafe-inline'",
       `img-src 'self' data: blob:${R2_ORIGENES}`,
 `media-src 'self' blob:${R2_ORIGENES}`,
       "font-src 'self' data:",
-      `connect-src 'self'${R2_ORIGENES}${RECAPTCHA ? " https://www.google.com/recaptcha/" : ""}`,
-      // reCAPTCHA (solo con claves): el desafío vive en un iframe de Google.
-      ...(RECAPTCHA ? ["frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/"] : []),
+      `connect-src 'self'${R2_ORIGENES}${RECAPTCHA ? " https://www.google.com/recaptcha/" : ""}${CULQI_CSP ? ` ${CULQI_ORIGENES}` : ""}`,
+      // reCAPTCHA y Culqi (solo con su variable): los desafíos y el checkout viven en un iframe de terceros.
+      ...(RECAPTCHA || CULQI_CSP
+        ? [`frame-src${RECAPTCHA ? " https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/" : ""}${CULQI_CSP ? ` ${CULQI_ORIGENES}` : ""}`]
+        : []),
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
