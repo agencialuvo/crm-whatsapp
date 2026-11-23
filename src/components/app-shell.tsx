@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import type { Branding } from "@/lib/branding";
 import type { MenuConfig } from "@/lib/menu-config";
 import { AppNav } from "@/components/app-nav";
 import { BrandLogo } from "@/components/brand-mark";
+
+const NAV_COLLAPSED_KEY = "nav:collapsed";
 
 /**
  * Cascarón de la app en dos modos:
@@ -58,6 +60,42 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
+  // Riel de iconos en escritorio. Se lee tras montar (no en el render) para no desfasar la hidratación.
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(NAV_COLLAPSED_KEY) === "1") setCollapsed(true);
+    } catch {
+      /* sin almacenamiento: arranca expandido */
+    }
+  }, []);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(NAV_COLLAPSED_KEY, next ? "1" : "0");
+      } catch {
+        /* no persiste, pero funciona */
+      }
+      return next;
+    });
+  }, []);
+
+  // Ctrl/Cmd + B (solo escritorio; no mientras se escribe).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "b") return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (!window.matchMedia("(min-width: 1024px)").matches) return;
+      e.preventDefault();
+      toggleCollapsed();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleCollapsed]);
 
   // Navegar = cerrar el cajón. Sin esto, tocar "Pipeline" deja el velo encima
   // de la pantalla recién cargada.
@@ -96,6 +134,8 @@ export function AppShell({
         menuConfig={menuConfig}
         open={navOpen}
         onClose={() => setNavOpen(false)}
+        collapsed={collapsed}
+        onToggleCollapsed={toggleCollapsed}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">

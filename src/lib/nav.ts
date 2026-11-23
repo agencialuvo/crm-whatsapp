@@ -103,12 +103,12 @@ function navItem(key: NavItemKey): NavItem {
   };
 }
 
-/** El título de cada bloque (los que no tienen, son una entrada suelta). */
+/** El título de cada bloque. */
 export const NAV_GROUP_TITLES: Record<NavGroupKey, string | undefined> = {
   trabajo: "Trabajo",
   gestion: "Gestión y equipo",
   agente: "Agente",
-  resultados: undefined,
+  resultados: "Métricas",
   sistema: SYSTEM_TITLE,
 };
 
@@ -192,7 +192,7 @@ export function appNavGroups({
   agente.push(navItem("agente"), navItem("laboratorio"));
   groups.push({ key: "agente", title: NAV_GROUP_TITLES.agente, items: agente });
   // 019 — Se mide al final: primero se atiende y se organiza.
-  groups.push({ key: "resultados", items: [navItem("resultados")] });
+  groups.push({ key: "resultados", title: NAV_GROUP_TITLES.resultados, items: [navItem("resultados")] });
   return markLocked([...groups, { key: "sistema", title: SYSTEM_TITLE, items: sistema, bottom: true }], activeModules);
 }
 
