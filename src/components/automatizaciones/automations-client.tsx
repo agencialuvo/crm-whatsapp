@@ -2,27 +2,27 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Plus, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronRight, Plus, Search, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SearchInput } from "@/components/ui/search-input";
 import { Switch } from "@/components/ui/switch";
 import { useDataTable } from "@/components/ui/use-data-table";
-import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
 import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog } from "@/components/negocio/modal";
-import { activationBlock, triggerLabel, type FlowListItem, type StageOption, type TagOption } from "@/lib/automation-dto";
+import { NEW_FLOW_NAME, NEW_FLOW_TRIGGER, activationBlock, flowMatchesQuery, triggerLabel, type FlowDto, type FlowListItem } from "@/lib/automation-dto";
 
 /** Lista vacía estable mientras los flujos cargan. */
 const NONE: never[] = [];
 
 /**
  * Automatizaciones — los flujos del negocio: cuáles hay, cuándo se activan, cuántos pasos tienen y si están
- * encendidos. Desde aquí se crea uno nuevo (y se pasa a su detalle para armarlo) y se enciende o apaga
- * sin abrirlo.
+ * encendidos. Desde aquí se crea uno nuevo (directo en el lienzo, sin ventana previa), se busca por nombre o
+ * disparador y se enciende o apaga sin abrirlo.
  *
  * Encender exige al menos un paso: el interruptor lo avisa antes de pedirlo, y si el servidor lo rechazara
  * igual, su mensaje se muestra tal cual.
@@ -30,29 +30,22 @@ const NONE: never[] = [];
 export function AutomationsClient() {
   const router = useRouter();
   const [flows, setFlows] = useState<FlowListItem[] | null>(null);
-  const [stages, setStages] = useState<StageOption[]>([]);
-  const [tags, setTags] = useState<TagOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState("");
   const [toggling, setToggling] = useState<string | null>(null);
   const [removing, setRemoving] = useState<FlowListItem | null>(null);
-  const table = useDataTable(flows ?? NONE, { view: "automatizaciones" });
+  // Buscador: filtra por nombre, disparador y su resumen; al escribir, la tabla vuelve a la página 1 (`resetKey`).
+  const visible = useMemo(() => (flows ?? NONE).filter((f) => flowMatchesQuery(f, query)), [flows, query]);
+  const table = useDataTable(visible, { view: "automatizaciones", resetKey: query.trim() });
   const monitor = useAutomationStats(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [list, st, tg] = await Promise.all([
-        apiFetch<{ flows: FlowListItem[] }>("/api/automations"),
-        // Las etapas solo sirven para el formulario: si fallan, la lista se muestra igual.
-        apiFetch<{ stages: StageOption[] }>("/api/pipeline/stages").catch(() => ({ stages: [] as StageOption[] })),
-        // Las etiquetas solo sirven para el disparador «Etiqueta asignada».
-        apiFetch<{ tags: TagOption[] }>("/api/tags").catch(() => ({ tags: [] as TagOption[] })),
-      ]);
+      const list = await apiFetch<{ flows: FlowListItem[] }>("/api/automations");
       setFlows(list.flows);
-      setStages(st.stages);
-      setTags(tg.tags);
     } catch (err) {
       setLoadError(describeError(err));
     }
@@ -87,10 +80,26 @@ export function AutomationsClient() {
     setFlows((prev) => prev?.filter((f) => f.id !== flow.id) ?? prev);
   }
 
+  // Crea el flujo ya en el lienzo (apagado, vacío, disparador manual) y entra: el nombre y el disparador se ajustan allí.
+  async function createInCanvas() {
+    setActionError(null);
+    setCreating(true);
+    try {
+      const { flow } = await apiFetch<{ flow: FlowDto }>("/api/automations", {
+        method: "POST",
+        json: { name: NEW_FLOW_NAME, triggerType: NEW_FLOW_TRIGGER, editorMode: "canvas" },
+      });
+      router.push(`/automatizaciones/${flow.id}`);
+    } catch (err) {
+      setActionError(describeError(err));
+      setCreating(false);
+    }
+  }
+
   const newButton = (
-    <Button onClick={() => setCreating(true)}>
+    <Button onClick={() => void createInCanvas()} disabled={creating}>
       <Plus className="h-4 w-4" aria-hidden />
-      Crear nuevo flujo
+      {creating ? "Creando…" : "Crear nuevo flujo"}
     </Button>
   );
 
@@ -157,6 +166,28 @@ export function AutomationsClient() {
         </div>
       ) : (
         <>
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder="Buscar por nombre o disparador…"
+            ariaLabel="Buscar automatizaciones"
+            className="mb-3"
+          />
+          {visible.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border-strong bg-card py-8" data-testid="flows-no-results">
+              <EmptyState
+                icon={Search}
+                title="Sin resultados"
+                description={`Ningún flujo coincide con «${query.trim()}».`}
+                action={
+                  <Button variant="outline" onClick={() => setQuery("")}>
+                    Limpiar búsqueda
+                  </Button>
+                }
+              />
+            </div>
+          ) : (
+          <>
           <DataTableToolbar {...table.pagination} noun={{ one: "flujo", other: "flujos" }} />
           <div className="relative overflow-x-auto rounded-lg border border-border-strong bg-card shadow-sm">
             <table className="w-full min-w-[640px] text-sm">
@@ -251,6 +282,8 @@ export function AutomationsClient() {
             noun={{ one: "flujo", other: "flujos" }}
             label="Paginación de las automatizaciones"
           />
+          </>
+          )}
         </>
       )}
 
@@ -266,17 +299,6 @@ export function AutomationsClient() {
           confirmLabel="Eliminar"
           onClose={() => setRemoving(null)}
           onConfirm={() => removeFlow(removing)}
-        />
-      )}
-
-      {creating && (
-        <FlowDialog
-          flow={null}
-          stages={stages}
-          tags={tags}
-          onClose={() => setCreating(false)}
-          // Recién creado está vacío: se va a su detalle para agregarle pasos.
-          onSaved={(flow) => router.push(`/automatizaciones/${flow.id}`)}
         />
       )}
     </div>

@@ -17,6 +17,7 @@ import {
 } from "@/lib/automation-schemas";
 import type { PickerNode } from "@/lib/ad-picker";
 import { CODE_JS_MAX_PER_FLOW, adScopeOf, parseAdReferralConfig } from "@/lib/automation";
+import { autoLayout } from "@/lib/automation-graph";
 import { codeJsEnabled } from "@/server/automation/flag";
 import { describeAdTrigger } from "@/lib/automation-dto";
 import { resolveOption } from "@/server/automation/ad-options";
@@ -310,6 +311,8 @@ export async function createFlow(organizationId: string, input: FlowCreateInput)
       triggerConfig,
       // Nace apagado: sin pasos no hay nada que ejecutar. Encenderlo exige al menos uno (`updateFlow`).
       active: false,
+      // En el lienzo desde el inicio: sin pasos (no hay entrada) y con el disparador en su sitio de siempre.
+      ...(input.editorMode === "canvas" ? { editorMode: "canvas" as const, entryStepId: null, viewport: { trigger: autoLayout([], [], null).trigger } } : {}),
     })
     .returning();
   return withSummary(organizationId, serializeFlow(row!));
@@ -329,9 +332,9 @@ export async function getFlow(organizationId: string, id: string) {
 export async function updateFlow(organizationId: string, id: string, patch: FlowPatchInput) {
   const flow = await loadFlow(organizationId, id);
   // `updated_at` es la revisión de la DEFINICIÓN del flujo (el control optimista del lienzo la compara): encender o
-  // apagar no la edita y no debe dejar «vieja» una copia abierta del lienzo.
-  const set: Partial<typeof schema.automationFlow.$inferInsert> =
-    patch.name !== undefined || patch.triggerConfig !== undefined ? { updatedAt: new Date() } : {};
+  // apagar no la edita y no debe dejar «vieja» una copia abierta del lienzo. Renombrar tampoco: el nombre no es parte
+  // del grafo, y renombrar desde el lienzo no debe provocar un 409 al guardar el grafo.
+  const set: Partial<typeof schema.automationFlow.$inferInsert> = patch.triggerConfig !== undefined ? { updatedAt: new Date() } : {};
 
   if (patch.name !== undefined) set.name = patch.name;
   if (patch.triggerConfig !== undefined) {

@@ -18,6 +18,7 @@ import { TONE_STYLES } from "./node-icons";
 import { VoceroEdge } from "./vocero-edge";
 import { InspectorPanel } from "./inspector/inspector-panel";
 import { NodePalette } from "./node-palette";
+import { FlowNameEditor } from "./flow-name-editor";
 import { ActionNode } from "./nodes/action-node";
 import { ConditionNode } from "./nodes/condition-node";
 import { SwitchNode } from "./nodes/switch-node";
@@ -57,6 +58,8 @@ export type FlowCanvasProps = {
   onBack: () => void;
   onHistory: () => void;
   onEditFlow: () => void;
+  /** Renombra el flujo desde la cabecera (PATCH); lanza si el servidor lo rechaza. */
+  onRenameFlow: (name: string) => Promise<void>;
   /** Solo en flujos con disparador Manual: abre «Ejecutar para un contacto». */
   onRunManual?: () => void;
   onDeleteFlow: () => void;
@@ -89,7 +92,7 @@ export function FlowCanvas(props: FlowCanvasProps) {
   );
 }
 
-function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onRunManual, onDeleteFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
+function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onRenameFlow, onRunManual, onDeleteFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
   const g = useFlowGraph(flowId);
   const { screenToFlowPosition, getViewport, setCenter } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
@@ -249,9 +252,7 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
                 <Button variant="ghost" size="sm" onClick={onBack} aria-label="Volver a Automatizaciones" title="Volver a Automatizaciones">
                   <ArrowLeft className="h-4 w-4" aria-hidden />
                 </Button>
-                <h3 className="max-w-[220px] truncate text-sm font-bold tracking-tight" title={flowName}>
-                  {flowName}
-                </h3>
+                <FlowNameEditor name={flowName} onRename={onRenameFlow} />
                 {g.dirty ? <Badge variant="warning">Cambios sin guardar</Badge> : <Badge variant="secondary">Todo guardado</Badge>}
                 <button
                   type="button"

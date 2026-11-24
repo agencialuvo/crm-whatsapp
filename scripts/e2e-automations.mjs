@@ -133,6 +133,25 @@ async function main() {
   const bare = (await A("/api/automations", { method: "POST", body: { name: `Lead ${RUN}`, triggerType: "lead_created" } })).json?.flow;
   ok("sin ajustes, triggerConfig queda en null", bare && bare.triggerConfig === null);
 
+  // `tag_added` es un disparador válido desde el Paso 2 (sin ajustes = cualquier etiqueta).
+  const tagFlow = (await A("/api/automations", { method: "POST", body: { name: `Etiqueta ${RUN}`, triggerType: "tag_added" } })).json?.flow;
+  ok("tag_added se puede crear (cualquier etiqueta)", tagFlow?.triggerType === "tag_added" && tagFlow?.triggerConfig === null && tagFlow?.active === false);
+
+  // Crear directo en el lienzo: apagado, vacío, en modo canvas; el nombre se cambia sin romper el guardado del grafo.
+  const direct = await A("/api/automations", { method: "POST", body: { name: "Nuevo flujo", triggerType: "manual", editorMode: "canvas" } });
+  ok("crear en el lienzo → 201", direct.status === 201, `status=${direct.status}`);
+  const dflow = direct.json?.flow;
+  ok("nace en modo canvas, apagado, manual y con ese nombre", dflow?.editorMode === "canvas" && dflow?.active === false && dflow?.triggerType === "manual" && dflow?.name === "Nuevo flujo");
+  const g0 = (await A(`/api/automations/${dflow.id}/graph`)).json;
+  ok("su lienzo está vacío y con el disparador colocado", g0?.editorMode === "canvas" && g0?.nodes?.length === 0 && g0?.entryStepId === null && !!g0?.viewport?.trigger);
+  const renamed = await A(`/api/automations/${dflow.id}`, { method: "PATCH", body: { name: "Bienvenida" } });
+  ok("renombrar → 200", renamed.status === 200 && renamed.json?.flow?.name === "Bienvenida");
+  const saveAfterRename = await A(`/api/automations/${dflow.id}/graph`, {
+    method: "PUT",
+    body: { nodes: [{ id: "trigger", type: "trigger", position: g0.viewport.trigger, config: { triggerType: "manual", triggerConfig: null } }], edges: [], viewport: null, expectedUpdatedAt: g0.updatedAt },
+  });
+  ok("guardar el grafo tras renombrar NO da 409 (la revisión no cambió)", saveAfterRename.status !== 409, `status=${saveAfterRename.status} ${JSON.stringify(saveAfterRename.json)}`);
+
   const list = await A("/api/automations");
   const row = list.json?.flows?.find((f) => f.id === flow.id);
   ok("el listado trae los campos principales", list.status === 200 && row && ["id", "name", "triggerType", "active", "createdAt"].every((k) => k in row));
@@ -149,8 +168,8 @@ async function main() {
   await bad("sin nombre", "/api/automations", { method: "POST", body: { triggerType: "manual" } });
   await bad("nombre en blanco", "/api/automations", { method: "POST", body: { name: "   ", triggerType: "manual" } });
   const bookingRes = await bad("booking_reminder aún no tiene disparador", "/api/automations", { method: "POST", body: { name: "x", triggerType: "booking_reminder" } });
-  ok("…y el mensaje lo explica", /aún no tienen disparador/.test(bookingRes.json?.error?.message ?? ""));
-  await bad("tag_added aún no tiene disparador", "/api/automations", { method: "POST", body: { name: "x", triggerType: "tag_added" } });
+  ok("…y el mensaje lo explica", /aún no tiene/.test(bookingRes.json?.error?.message ?? ""));
+  await bad("editorMode solo admite «canvas»", "/api/automations", { method: "POST", body: { name: "x", triggerType: "manual", editorMode: "simple" } });
   await bad("un disparador inventado", "/api/automations", { method: "POST", body: { name: "x", triggerType: "inventado" } });
   await bad("`active` al crear (nace apagado)", "/api/automations", { method: "POST", body: { name: "x", triggerType: "manual", active: true } });
   await bad("una clave desconocida (organizationId)", "/api/automations", { method: "POST", body: { name: "x", triggerType: "manual", organizationId: "org_otra" } });

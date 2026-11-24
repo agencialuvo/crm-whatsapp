@@ -7,6 +7,7 @@ import {
   type WaitLateAction,
 } from "@/lib/automation";
 import { FLOW_TRIGGER_TYPES, type FlowTriggerType } from "@/lib/automation-schemas";
+import { matchesQuery } from "@/lib/search";
 import { nodeTitle, pathLabel, type PickerNode } from "@/lib/ad-picker";
 import { adScopeOf, parseAdReferralConfig, type AdReferralConfig } from "@/lib/automation";
 
@@ -99,6 +100,21 @@ export const TRIGGER_HINTS: Record<(typeof CREATABLE_TRIGGERS)[number], string> 
 };
 
 export const triggerLabel = (type: string): string => TRIGGER_LABELS[type] ?? type;
+
+/** Nombre con que nace un flujo creado directo en el lienzo, y el disparador con que arranca (apagado, sin pasos). */
+export const NEW_FLOW_NAME = "Nuevo flujo";
+export const NEW_FLOW_TRIGGER = "manual";
+
+/** Buscador de la lista: por nombre, por el nombre legible del disparador y por su resumen. Sin mayúsculas ni acentos. */
+export function flowMatchesQuery(flow: Pick<FlowListItem, "name" | "triggerType" | "triggerSummary">, query: string): boolean {
+  return matchesQuery(query, { text: [flow.name, triggerLabel(flow.triggerType), flow.triggerSummary] });
+}
+
+/** El nombre que se enviaría al renombrar: recortado; `null` si queda vacío o pasa de 120 (el servidor lo rechazaría). */
+export function cleanFlowName(raw: string): string | null {
+  const name = raw.trim();
+  return name.length >= 1 && name.length <= 120 ? name : null;
+}
 
 export const hourLabel = (hour: number): string => `${String(hour).padStart(2, "0")}:00`;
 

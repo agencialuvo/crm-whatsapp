@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CREATABLE_TRIGGERS,
+  NEW_FLOW_NAME,
+  NEW_FLOW_TRIGGER,
   STEP_GAP,
   activationBlock,
+  cleanFlowName,
   clip,
   describeDelay,
   describeStep,
   describeTrigger,
+  flowMatchesQuery,
   hourLabel,
   nextPositionY,
   reorderPositions,
@@ -177,5 +181,47 @@ describe("encender", () => {
     expect(activationBlock(1, false)).toBeNull();
     expect(activationBlock(0, true)).toBeNull();
     expect(activationBlock(3, true)).toBeNull();
+  });
+});
+
+describe("buscador de la lista de flujos", () => {
+  const flows = [
+    { name: "Saludo de cumpleaños", triggerType: "birthday", triggerSummary: null },
+    { name: "Bienvenida", triggerType: "lead_created", triggerSummary: null },
+    { name: "Campaña verano", triggerType: "ad_referral", triggerSummary: "Anuncio «Promo Playa» · Campaña Verano" },
+  ];
+  const find = (q: string) => flows.filter((f) => flowMatchesQuery(f, q)).map((f) => f.name);
+
+  it("sin texto (o solo espacios) deja pasar todo", () => {
+    expect(find("")).toHaveLength(3);
+    expect(find("   ")).toHaveLength(3);
+  });
+  it("busca por nombre, sin mayúsculas ni acentos", () => {
+    expect(find("CUMPLEANOS")).toEqual(["Saludo de cumpleaños"]);
+    expect(find("  bienvenida ")).toEqual(["Bienvenida"]);
+  });
+  it("busca por el nombre legible del disparador, no por su valor interno", () => {
+    expect(find(triggerLabel("lead_created"))).toContain("Bienvenida");
+    expect(find("lead_created")).toEqual([]);
+  });
+  it("busca en el resumen del disparador de anuncio", () => {
+    expect(find("promo playa")).toEqual(["Campaña verano"]);
+  });
+  it("sin coincidencias devuelve una lista vacía", () => {
+    expect(find("zzz")).toEqual([]);
+  });
+});
+
+describe("crear directo en el lienzo y renombrar", () => {
+  it("el flujo nuevo arranca como «Nuevo flujo» con el disparador manual (el único que no se activa solo)", () => {
+    expect(NEW_FLOW_NAME).toBe("Nuevo flujo");
+    expect(NEW_FLOW_TRIGGER).toBe("manual");
+    expect((CREATABLE_TRIGGERS as readonly string[]).includes(NEW_FLOW_TRIGGER)).toBe(true);
+  });
+  it("el nombre se recorta y se rechaza vacío o de más de 120", () => {
+    expect(cleanFlowName("  Bienvenida  ")).toBe("Bienvenida");
+    expect(cleanFlowName("   ")).toBeNull();
+    expect(cleanFlowName("x".repeat(120))).toHaveLength(120);
+    expect(cleanFlowName("x".repeat(121))).toBeNull();
   });
 });

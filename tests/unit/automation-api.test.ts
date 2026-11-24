@@ -43,6 +43,19 @@ describe("flowCreateSchema", () => {
   });
 });
 
+describe("flowCreateSchema — crear directo en el lienzo", () => {
+  it("acepta `editorMode: canvas` (opcional) y nada más que ese valor", () => {
+    expect(flowCreateSchema.parse({ name: "Nuevo flujo", triggerType: "manual", editorMode: "canvas" }).editorMode).toBe("canvas");
+    expect(flowCreateSchema.parse({ name: "F", triggerType: "manual" }).editorMode).toBeUndefined();
+    expect(flowCreateSchema.safeParse({ name: "F", triggerType: "manual", editorMode: "simple" }).success).toBe(false);
+    expect(flowCreateSchema.safeParse({ name: "F", triggerType: "manual", editorMode: "otro" }).success).toBe(false);
+  });
+  it("sigue exigiendo `triggerType` y rechazando `active`, también con `editorMode`", () => {
+    expect(flowCreateSchema.safeParse({ name: "F", editorMode: "canvas" }).success).toBe(false);
+    expect(flowCreateSchema.safeParse({ name: "F", triggerType: "manual", editorMode: "canvas", active: true }).success).toBe(false);
+  });
+});
+
 describe("flowPatchSchema", () => {
   it("acepta nombre, ajustes y active, y exige al menos uno", () => {
     expect(flowPatchSchema.safeParse({ name: "Nuevo" }).success).toBe(true);

@@ -180,6 +180,20 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
     }
   }
 
+  /**
+   * Renombra desde la cabecera del lienzo. El servidor no toca la revisión de la definición al renombrar, así que el
+   * lienzo (aunque tenga cambios sin guardar) sigue pudiendo guardar el grafo sin un 409.
+   */
+  async function renameFlow(name: string) {
+    if (!flow) return;
+    try {
+      const { flow: saved } = await apiFetch<{ flow: FlowDto }>(`/api/automations/${flow.id}`, { method: "PATCH", json: { name } });
+      setFlow((prev) => (prev ? { ...prev, name: saved.name } : saved));
+    } catch (err) {
+      throw new Error(describeError(err));
+    }
+  }
+
   const upsertStep = useCallback((saved: StepDto) => {
     setSteps((prev) => (prev.some((s) => s.id === saved.id) ? prev.map((s) => (s.id === saved.id ? saved : s)) : [...prev, saved]));
   }, []);
@@ -408,6 +422,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
             onBack={() => router.push("/automatizaciones")}
             onHistory={() => setTab("historial")}
             onEditFlow={() => setEditingFlow(true)}
+            onRenameFlow={renameFlow}
             onRunManual={flow.triggerType === "manual" ? () => setManualRun(true) : undefined}
             onDeleteFlow={() => setRemoveFlow(true)}
             onToggleActive={(v) => void toggleActive(v)}

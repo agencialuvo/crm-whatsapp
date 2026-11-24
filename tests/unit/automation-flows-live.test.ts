@@ -95,6 +95,27 @@ describe.skipIf(!live)("flujos y pasos contra Postgres", () => {
     expect(g.triggerConfig).toBeNull();
   });
 
+  it("crear directo en el lienzo: modo canvas, apagado, vacío; renombrar no cambia la revisión del grafo", async () => {
+    const f = await newFlow(orgA, "manual", { editorMode: "canvas" });
+    expect(f).toMatchObject({ active: false, triggerType: "manual", editorMode: "canvas" });
+    const [row] = await db.select().from(schema.automationFlow).where(eq(schema.automationFlow.id, f.id));
+    expect(row!.entryStepId).toBeNull();
+    expect(row!.viewport).toMatchObject({ trigger: { x: expect.any(Number), y: expect.any(Number) } });
+    // Sin `editorMode`, el flujo sigue naciendo en la lista.
+    expect((await newFlow(orgA, "manual")).editorMode).toBe("simple");
+
+    const before = row!.updatedAt.getTime();
+    await new Promise((r) => setTimeout(r, 5));
+    const renamed = await svc.updateFlow(orgA, f.id, { name: "Bienvenida" });
+    expect(renamed.name).toBe("Bienvenida");
+    const [after] = await db.select().from(schema.automationFlow).where(eq(schema.automationFlow.id, f.id));
+    expect(after!.updatedAt.getTime()).toBe(before);
+    // Cambiar los ajustes del disparador SÍ es una edición de la definición.
+    await svc.updateFlow(orgA, f.id, { triggerConfig: null });
+    const [edited] = await db.select().from(schema.automationFlow).where(eq(schema.automationFlow.id, f.id));
+    expect(edited!.updatedAt.getTime()).toBeGreaterThan(before);
+  });
+
   it("valida los ajustes contra el tipo y contra las etapas de la organización", async () => {
     expect(await code(svc.createFlow(orgA, { name: "x", triggerType: "birthday", triggerConfig: { hour: 30 } }))).toBe("422:invalid_trigger_config");
     expect(await code(svc.createFlow(orgA, { name: "x", triggerType: "manual", triggerConfig: { toStageId: stageA } }))).toBe("422:invalid_trigger_config");

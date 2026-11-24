@@ -120,6 +120,8 @@ export const flowCreateSchema = z
       }),
     }),
     triggerConfig: z.record(z.unknown()).nullish(),
+    // Opcional: `canvas` crea el flujo ya en el Modo Visual (vacío, para armarlo en el lienzo). Sin él nace en lista.
+    editorMode: z.literal("canvas").optional(),
   })
   // Sin `active`: un flujo nace apagado (sin pasos no hay nada que ejecutar) y se enciende con PATCH
   // cuando ya tiene pasos. `strict` hace que mandar `active` aquí sea un 422 y no algo ignorado.

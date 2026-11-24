@@ -322,11 +322,19 @@ describe.skipIf(!live)("lienzo contra Postgres", () => {
       }
     });
 
-    it("un cambio por otra vía (renombrar el flujo) también hace «vieja» la copia del lienzo", async () => {
+    it("renombrar el flujo NO hace «vieja» la copia del lienzo (el nombre no es parte del grafo)", async () => {
       const flowId = await mkFlow();
       const base = await canvas.saveGraph(org, flowId, payload([trg()], []));
-      await new Promise((r) => setTimeout(r, 5)); // que `updatedAt` cambie de milisegundo
+      await new Promise((r) => setTimeout(r, 5)); // que `updatedAt` cambiaría de milisegundo si renombrar lo tocara
       await flows.updateFlow(org, flowId, { name: `Renombrado ${uid}` });
+      await expect(canvas.saveGraph(org, flowId, payload([trg()], [], { expectedUpdatedAt: base.updatedAt }))).resolves.toBeTruthy();
+    });
+
+    it("un cambio por otra vía en la definición (los ajustes del disparador) sí hace «vieja» la copia del lienzo", async () => {
+      const flowId = await mkFlow();
+      const base = await canvas.saveGraph(org, flowId, payload([trg()], []));
+      await new Promise((r) => setTimeout(r, 5));
+      await flows.updateFlow(org, flowId, { triggerConfig: null });
       await expect(canvas.saveGraph(org, flowId, payload([trg()], [], { expectedUpdatedAt: base.updatedAt }))).rejects.toMatchObject({ code: "stale_graph" });
     });
   });
