@@ -20,7 +20,7 @@ export type VoceroEdgeData = { label?: string };
  * Son botones reales (teclado y lector de pantalla), y la Supr sigue funcionando.
  */
 export function VoceroEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, selected, data }: EdgeProps) {
-  const { deleteEdge, insertStepOnEdge, triggerType, disabled } = useCanvasEdgeActions();
+  const { deleteEdge, insertStepOnEdge, triggerType, disabled, codeJsEnabled } = useCanvasEdgeActions();
   const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState(false);
   const leave = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,14 +95,15 @@ export function VoceroEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosit
                 className="max-h-56 w-52 overflow-y-auto rounded-lg border border-border-strong bg-popover p-1 shadow-pop"
               >
                 {INSERTABLE.map((item) => {
-                  const blocked = !!item.needsBooking && !isBooking;
+                  const noCode = item.stepType === "code_js" && !codeJsEnabled;
+                  const blocked = (!!item.needsBooking && !isBooking) || noCode;
                   const Icon = ICONS[item.icon];
                   return (
                     <li key={item.id}>
                       <button
                         type="button"
                         disabled={blocked}
-                        title={blocked ? "Solo en flujos de cita" : item.hint}
+                        title={noCode ? "No está activado en esta instancia" : blocked ? "Solo en flujos de cita" : item.hint}
                         onClick={() => {
                           insertStepOnEdge(id, item.stepType!);
                           setMenu(false);

@@ -105,7 +105,8 @@ const nextConfig: NextConfig = {
   // symlinks que requieren permisos elevados, así que ahí se omite.
   output: process.platform === "win32" ? undefined : "standalone",
   // El paquete `postgres` usa APIs de Node que no deben empaquetarse en el bundle.
-  serverExternalPackages: ["postgres"],
+  // `quickjs-emscripten` (el sandbox del bloque de código) carga su `.wasm` desde disco: tampoco se empaqueta.
+  serverExternalPackages: ["postgres", "quickjs-emscripten", "quickjs-emscripten-core", "@jitl/quickjs-wasmfile-release-sync", "@jitl/quickjs-ffi-types"],
   // Se congelan al construir: lo que queda aquí va dentro del binario y no
   // cambia en tiempo de ejecución. El commit solo se congela si `SOURCE_COMMIT`
   // llega AL BUILD (build arg `SOURCE_COMMIT`; con docker compose,

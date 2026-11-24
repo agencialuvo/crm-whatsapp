@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   CONDITION_MAX_STAMPS,
   addTagConfigSchema,
+  codeJsConfigSchema,
   conditionConfigSchema,
   daysOffsetSchema,
   delayConfigSchema,
@@ -9,6 +10,8 @@ import {
   sendMediaConfigSchema,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
+  setVarConfigSchema,
+  switchConfigSchema,
   waitReplyConfigSchema,
   waitUntilConfigSchema,
 } from "@/lib/automation";
@@ -45,6 +48,10 @@ export const STEP_TYPES = [
   "remove_tag",
   "set_stage",
   "condition",
+  // Paso 3: variables entre nodos, enrutamiento multi-rama (solo lienzo) y código aislado (tras una bandera de plataforma).
+  "set_var",
+  "switch",
+  "code_js",
 ] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
@@ -144,6 +151,9 @@ export const stepCreateSchema = z
       z.object({ stepType: z.literal("remove_tag"), config: removeTagConfigSchema }),
       z.object({ stepType: z.literal("set_stage"), config: setStageConfigSchema }),
       z.object({ stepType: z.literal("condition"), config: conditionConfigSchema }),
+      z.object({ stepType: z.literal("set_var"), config: setVarConfigSchema }),
+      z.object({ stepType: z.literal("switch"), config: switchConfigSchema }),
+      z.object({ stepType: z.literal("code_js"), config: codeJsConfigSchema }),
     ],
     {
       errorMap: (issue, ctx) =>
@@ -181,6 +191,9 @@ const STEP_CONFIG_SCHEMAS = {
   remove_tag: removeTagConfigSchema,
   set_stage: setStageConfigSchema,
   condition: conditionConfigSchema,
+  set_var: setVarConfigSchema,
+  switch: switchConfigSchema,
+  code_js: codeJsConfigSchema,
 } as const satisfies Record<StepType, z.ZodTypeAny>;
 
 /** Valida `config` de un paso contra su tipo. */

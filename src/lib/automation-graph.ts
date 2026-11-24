@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EDGE_HANDLES, compileLinearEdges, type EdgeHandle } from "@/lib/automation";
+import { CODE_JS_MAX_PER_FLOW, caseHandle, compileLinearEdges, isEdgeHandle, switchCaseIds, type EdgeHandle } from "@/lib/automation";
 import { STEP_GAP } from "@/lib/automation-dto";
 import {
   FLOW_TRIGGER_TYPES,
@@ -47,7 +47,12 @@ export const graphEdgeSchema = z.object({
   id: z.string().max(64).optional(),
   source: nodeId,
   target: nodeId,
-  sourceHandle: z.enum(EDGE_HANDLES).default("default"),
+  // Las asas estáticas o `case_<id>` (switch). Que el asa exista en SU nodo lo comprueba `validateGraph` (`invalid_handle`).
+  sourceHandle: z
+    .string()
+    .refine(isEdgeHandle, "Asa de salida no válida")
+    .transform((h) => h as EdgeHandle)
+    .default("default"),
 });
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
 
@@ -71,9 +76,14 @@ export type GraphPayload = z.infer<typeof graphPayloadSchema>;
 
 const REPLY_HANDLES: EdgeHandle[] = ["confirmed", "declined", "reschedule", "other", "timeout"];
 
-/** Las asas de salida que tiene cada tipo de nodo. */
-export function handlesOf(type: string): EdgeHandle[] {
+/**
+ * Las asas de salida que tiene cada tipo de nodo. El `switch` las lleva en su configuración (un asa por caso, más
+ * `default` = «Otro»), así que para él hace falta `config`.
+ */
+export function handlesOf(type: string, config?: unknown): EdgeHandle[] {
   switch (type) {
+    case "switch":
+      return [...switchCaseIds(config).map(caseHandle), "default"];
     case "condition":
       return ["true", "false"];
     case "wait_reply":
@@ -95,6 +105,10 @@ const BRANCH_OUTPUTS: Record<string, EdgeHandle[]> = {
   wait_until: ["late"],
 };
 
+function branchOutputsOf(type: string, config?: unknown): EdgeHandle[] | undefined {
+  return type === "switch" ? handlesOf(type, config) : BRANCH_OUTPUTS[type];
+}
+
 /* ─── Validación de topología ─── */
 
 export type GraphIssue = { code: string; message: string; nodeIds?: string[] };
@@ -114,7 +128,8 @@ const HANDLE_LABEL: Record<string, string> = {
   other: "Otra cosa",
   timeout: "Sin respuesta",
 };
-export const handleLabel = (h: string): string => HANDLE_LABEL[h] ?? h;
+/** El rótulo de un asa. Las de un `switch` (`case_<id>`) son genéricas aquí: el nombre del caso vive en la configuración. */
+export const handleLabel = (h: string): string => HANDLE_LABEL[h] ?? (h.startsWith("case_") ? "Caso" : h);
 
 /** ¿Hay un ciclo en el subgrafo de estos nodos? Devuelve los ids de uno, o `null`. Iterativo (sin recursión profunda). */
 function findCycle(ids: string[], edges: VEdge[]): string[] | null {
@@ -208,7 +223,16 @@ export function validateGraph(input: { nodes: VNode[]; edges: VEdge[] }): GraphV
       if (n.type === "condition" && rule?.type === "booking_confirmed") {
         err("requires_booking", "«La cita está confirmada» solo sirve en flujos que empiezan con una cita.", [n.id]);
       }
+      const cases = n.type === "switch" && Array.isArray(n.config?.cases) ? (n.config!.cases as { rule?: { type?: string } }[]) : [];
+      if (cases.some((k) => k?.rule?.type === "booking_confirmed")) {
+        err("requires_booking", "«La cita está confirmada» solo sirve en flujos que empiezan con una cita.", [n.id]);
+      }
     }
+  }
+  // Cada nodo de código gasta CPU del servidor compartido: tope por flujo.
+  const codeNodes = steps.filter((n) => n.type === "code_js");
+  if (codeNodes.length > CODE_JS_MAX_PER_FLOW) {
+    err("too_many_code_nodes", `Un flujo admite hasta ${CODE_JS_MAX_PER_FLOW} bloques de código.`, codeNodes.map((n) => n.id));
   }
 
   // Aristas.
@@ -226,7 +250,7 @@ export function validateGraph(input: { nodes: VNode[]; edges: VEdge[] }): GraphV
       err("edge_to_trigger", "Nada puede llevar de vuelta al disparador.", [to.id]);
       continue;
     }
-    if (!handlesOf(from.type).includes(e.sourceHandle as EdgeHandle)) {
+    if (!handlesOf(from.type, from.config).includes(e.sourceHandle as EdgeHandle)) {
       err("invalid_handle", `«${handleLabel(e.sourceHandle)}» no es una salida de este bloque.`, [from.id]);
       continue;
     }
@@ -265,7 +289,7 @@ export function validateGraph(input: { nodes: VNode[]; edges: VEdge[] }): GraphV
 
   // Salidas de nodos que ramifican sin conectar: el flujo termina ahí (aviso, no error).
   for (const n of steps) {
-    const wanted = BRANCH_OUTPUTS[n.type];
+    const wanted = branchOutputsOf(n.type, n.config);
     if (!wanted) continue;
     const open = wanted.filter((h) => !used.has(`${n.id}:${h}`));
     if (open.length > 0) {
@@ -337,6 +361,14 @@ export function toLinear(input: LinearInput): LinearResult {
   }
 
   if (input.nodes.length === 0) return { ok: true, order: [], configs: {} };
+  // Un Switch (N salidas) no cabe en una lista: el flujo se edita solo en el Modo Visual.
+  const switches = input.nodes.filter((n) => n.type === "switch");
+  if (switches.length > 0) {
+    return {
+      ok: false,
+      reasons: [`${switches.length === 1 ? "Hay un bloque Switch" : `Hay ${switches.length} bloques Switch`}: tienen varias salidas y la lista no las puede mostrar.`],
+    };
+  }
   if (!input.entryStepId || !byId.has(input.entryStepId)) {
     return { ok: false, reasons: ["El disparador no está conectado a ningún bloque."] };
   }

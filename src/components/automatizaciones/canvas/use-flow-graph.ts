@@ -59,8 +59,17 @@ export type SaveResult =
 /** Un nodo del servidor/DTO como nodo de React Flow. */
 const toRf = (n: CanvasNodeLite): FlowNode => ({ id: n.id, type: n.type, position: n.position, data: n.data });
 
-const rfEdge = (e: { id: string; source: string; target: string; sourceHandle?: string | null }): FlowEdge => {
-  const label = edgeLabelOf(e.sourceHandle);
+/** El rótulo de una arista: las de un switch llevan el nombre de su caso (sale de la configuración del nodo de origen). */
+const labelFor = (ns: readonly { id: string; data: CanvasNodeData }[], e: { source: string; sourceHandle?: string | null }): string | undefined => {
+  const from = ns.find((n) => n.id === e.source);
+  return from && from.data.kind === "step" ? edgeLabelOf(e.sourceHandle, from.data.stepType, from.data.config) : edgeLabelOf(e.sourceHandle);
+};
+
+const rfEdge = (
+  e: { id: string; source: string; target: string; sourceHandle?: string | null },
+  ns: readonly { id: string; data: CanvasNodeData }[] = []
+): FlowEdge => {
+  const label = labelFor(ns, e);
   return {
     id: e.id,
     source: e.source,
@@ -84,7 +93,7 @@ const asLite = (n: FlowNode): CanvasNodeLite => ({ id: n.id, type: n.type ?? "",
 export function useFlowGraph(flowId: string) {
   const [nodes, setNodes] = useState<FlowNode[]>([]);
   const [edges, setEdges] = useState<FlowEdge[]>([]);
-  const [meta, setMeta] = useState<{ updatedAt: number | null; viewport: ServerGraph["viewport"] }>({ updatedAt: null, viewport: null });
+  const [meta, setMeta] = useState<{ updatedAt: number | null; viewport: ServerGraph["viewport"]; codeJs: boolean }>({ updatedAt: null, viewport: null, codeJs: false });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -93,8 +102,8 @@ export function useFlowGraph(flowId: string) {
   const apply = useCallback((g: ServerGraph) => {
     const rf = fromServerGraph(g);
     setNodes(rf.nodes.map(toRf));
-    setEdges(rf.edges.map(rfEdge));
-    setMeta({ updatedAt: g.updatedAt, viewport: g.viewport });
+    setEdges(rf.edges.map((e) => rfEdge(e, rf.nodes)));
+    setMeta({ updatedAt: g.updatedAt, viewport: g.viewport, codeJs: !!g.capabilities?.codeJs });
     setDirty(false);
   }, []);
 
@@ -172,7 +181,7 @@ export function useFlowGraph(flowId: string) {
       const to = nodes.find((n) => n.id === target);
       if (!from || !to) return false;
       const fromType = from.data.kind === "trigger" ? TRIGGER_NODE_TYPE : from.data.stepType;
-      if (!(handlesOf(fromType) as string[]).includes(handle)) return false;
+      if (!(handlesOf(fromType, from.data.kind === "step" ? from.data.config : undefined) as string[]).includes(handle)) return false;
       // Reemplaza la conexión que ya salía de esa asa; no debe crear un ciclo sin espera.
       const next = [...edges.filter((e) => !(e.source === source && (e.sourceHandle ?? "default") === handle)), { source, target, sourceHandle: handle }];
       const before = validation.errors.some((e) => e.code === "cycle_without_wait");
@@ -185,16 +194,19 @@ export function useFlowGraph(flowId: string) {
     [nodes, edges, validation]
   );
 
-  const onConnect = useCallback((c: Connection) => {
-    if (!c.source || !c.target) return;
-    const handle = c.sourceHandle ?? "default";
-    setEdges((es) => [
-      // Una salida lleva a un solo destino: trazar otra conexión desde la misma asa reemplaza la anterior.
-      ...es.filter((e) => !(e.source === c.source && (e.sourceHandle ?? "default") === handle)),
-      rfEdge({ id: edgeId(c.source!, handle), source: c.source!, target: c.target!, sourceHandle: handle }),
-    ]);
-    setDirty(true);
-  }, []);
+  const onConnect = useCallback(
+    (c: Connection) => {
+      if (!c.source || !c.target) return;
+      const handle = c.sourceHandle ?? "default";
+      setEdges((es) => [
+        // Una salida lleva a un solo destino: trazar otra conexión desde la misma asa reemplaza la anterior.
+        ...es.filter((e) => !(e.source === c.source && (e.sourceHandle ?? "default") === handle)),
+        rfEdge({ id: edgeId(c.source!, handle), source: c.source!, target: c.target!, sourceHandle: handle }, nodes),
+      ]);
+      setDirty(true);
+    },
+    [nodes]
+  );
 
   /** Elimina una conexión (el botón de la línea; la Supr hace lo mismo por `onEdgesChange`). */
   const deleteEdge = useCallback((id: string) => {
@@ -214,7 +226,7 @@ export function useFlowGraph(flowId: string) {
       if (!old || !from || !to) return null;
       const result = insertStepOnEdgeRefs(edges, id, stepType, newNodeId());
       if (!result) return null;
-      setEdges(result.edges.map(rfEdge));
+      setEdges(result.edges.map((e) => rfEdge(e, nodes)));
       setNodes((ns) => [
         ...ns.map((n) => (n.selected ? { ...n, selected: false } : n)),
         {
@@ -264,7 +276,18 @@ export function useFlowGraph(flowId: string) {
       const cur = ns.find((n) => n.id === id);
       if (!cur || cur.data.kind !== "step" || sameStepConfig(cur.data.stepType, cur.data.config, config)) return ns;
       setDirty(true);
-      return ns.map((n) => (n.id === id && n.data.kind === "step" ? { ...n, data: { ...n.data, config } } : n));
+      const next = ns.map((n) => (n.id === id && n.data.kind === "step" ? { ...n, data: { ...n.data, config } } : n));
+      // Un switch cambia sus salidas con sus casos: se quitan las conexiones de un caso borrado (no quedan huérfanas) y se
+      // renombran los rótulos de las que siguen.
+      if (cur.data.stepType === "switch") {
+        const live = handlesOf("switch", config) as string[];
+        setEdges((es) =>
+          es
+            .filter((e) => e.source !== id || live.includes(e.sourceHandle ?? "default"))
+            .map((e) => (e.source === id ? { ...e, data: { ...e.data, label: labelFor(next, e) } } : e))
+        );
+      }
+      return next;
     });
   }, []);
 
@@ -343,6 +366,7 @@ export function useFlowGraph(flowId: string) {
     triggerType,
     validation,
     viewport: meta.viewport,
+    codeJsEnabled: meta.codeJs,
     // estado
     loading,
     loadError,

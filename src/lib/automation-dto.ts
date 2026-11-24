@@ -197,6 +197,9 @@ export const STEP_LABELS: Record<string, string> = {
   set_stage: "Mover de etapa",
   wait_until: "Esperar hasta la cita",
   wait_reply: "Esperar respuesta",
+  set_var: "Establecer variable",
+  switch: "Switch (varias salidas)",
+  code_js: "Código JavaScript",
 };
 
 export const stepLabel = (type: string): string => STEP_LABELS[type] ?? type;
@@ -279,6 +282,7 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   visited_within_days: "Vino a una cita en los últimos días",
   stamps_gte: "Su tarjeta de fidelidad tiene al menos X sellos",
   birthday_today: "Hoy es su cumpleaños",
+  var_equals: "Una variable del flujo vale…",
 };
 
 /** Las ramas de «Esperar respuesta» en el orden del formulario: campo de la configuración → etiqueta. */
@@ -337,6 +341,10 @@ export function describeRule(rule: ConditionRule | Record<string, unknown> | nul
       return typeof r.stamps === "number" ? `Su tarjeta tiene al menos ${r.stamps} ${r.stamps === 1 ? "sello" : "sellos"}` : "Sellos de la tarjeta (sin configurar)";
     case "birthday_today":
       return "Hoy es su cumpleaños";
+    case "var_equals": {
+      const v = r as { key?: string; value?: string };
+      return v.key ? `La variable «${v.key}» vale «${v.value ?? ""}»` : "Variable del flujo (sin configurar)";
+    }
     default:
       return "Condición sin configurar";
   }
@@ -372,6 +380,23 @@ export function describeStep(
         `Sin respuesta → ${action("onTimeout", "stop")}`,
       ].join(" · "),
     };
+  }
+  if (step.stepType === "set_var") {
+    const key = typeof c.key === "string" && c.key ? c.key : "(sin nombre)";
+    const value = typeof c.value === "string" && c.value ? `«${clip(c.value, 100)}»` : "vacío";
+    return { title: `Guardar «${key}» = ${value}`, detail: "Los siguientes pasos la leen con {{vars." + (typeof c.key === "string" && c.key ? c.key : "nombre") + "}}." };
+  }
+  if (step.stepType === "switch") {
+    const cases = Array.isArray(c.cases) ? (c.cases as { label?: string; rule?: Record<string, unknown> }[]) : [];
+    return {
+      title: `Switch: ${cases.length} ${cases.length === 1 ? "caso" : "casos"} + «Otro»`,
+      detail: cases.map((k) => `${k.label ?? "Caso"}: ${describeRule(k.rule, refs)}`).join(" · ") || "Sin casos configurados.",
+    };
+  }
+  if (step.stepType === "code_js") {
+    const name = typeof c.name === "string" && c.name.trim() ? c.name.trim() : null;
+    const lines = typeof c.code === "string" && c.code.trim() ? c.code.trim().split(/\r?\n/).length : 0;
+    return { title: name ?? "Código JavaScript", detail: lines ? `${lines} ${lines === 1 ? "línea" : "líneas"} · aislado, sin red ni acceso a datos` : "Sin código." };
   }
   if (step.stepType === "condition") {
     const t = (c.ifTrue as BranchAction) ?? "continue";

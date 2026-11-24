@@ -3,6 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { compileLinearEdges, type CompiledEdge, type EdgeHandle } from "@/lib/automation";
+import { codeJsEnabled } from "@/server/automation/flag";
 
 /**
  * Automatizaciones — el grafo de un flujo: las aristas (`automation_edge`) y cómo se mantienen.
@@ -112,7 +113,8 @@ export async function ensureEdges(organizationId: string, flowId: string): Promi
   return inserted.length;
 }
 
-export type GraphEdgeDto = { id: string; source: string; target: string; sourceHandle: EdgeHandle };
+/** El asa es texto: las estáticas (`default`, `true`…) o `case_<id>` de un switch (ver `isEdgeHandle`). */
+export type GraphEdgeDto = { id: string; source: string; target: string; sourceHandle: string };
 
 /**
  * El destino de un paso por un asa. Lee las aristas guardadas; si el flujo no tiene ninguna (anterior a las
@@ -208,5 +210,7 @@ export async function getGraph(organizationId: string, flowId: string) {
     editorMode: (flow?.mode ?? "simple") as "simple" | "canvas",
     viewport: (flow?.viewport ?? null) as Record<string, unknown> | null,
     updatedAt: flow?.updatedAt.getTime() ?? Date.now(),
+    // Lo que esta instancia permite: el lienzo no ofrece el bloque de código si la bandera está apagada.
+    capabilities: { codeJs: codeJsEnabled() },
   };
 }

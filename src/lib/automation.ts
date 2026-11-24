@@ -237,8 +237,97 @@ export const CONDITION_RULE_TYPES = [
   "visited_within_days",
   "stamps_gte",
   "birthday_today",
+  "var_equals",
 ] as const;
 export type ConditionRuleType = (typeof CONDITION_RULE_TYPES)[number];
+
+/* ─── Memoria entre nodos (Paso 3): `automation_run.context.vars` ─── */
+
+/**
+ * Las variables de una ejecución viven en `context.vars`, APARTE de las claves del disparo (`bookingId`, `source`,
+ * `loyalty`…): un nodo nunca puede pisar lo que otras partes leen por nombre. Solo escalares, con topes: el contexto es
+ * un `jsonb` que se relee en cada paso y se escribe bajo el candado de la fila del `run`.
+ */
+export const VAR_KEY_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+export const VARS_MAX_KEYS = 20;
+export const VAR_VALUE_MAX_CHARS = 500;
+/** Tope del JSON de todas las variables de una ejecución. */
+export const VARS_MAX_BYTES = 4096;
+
+export type VarValue = string | number | boolean;
+export type RunVars = Record<string, VarValue>;
+
+function varKeySchema() {
+  return z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(VAR_KEY_PATTERN, "Usa minúsculas, números y _ (empieza con una letra, hasta 32)");
+}
+
+/** Normaliza un valor a escalar seguro: sin saltos ni caracteres de control, con tope. `undefined` = no válido. */
+export function sanitizeVarValue(raw: unknown): VarValue | undefined {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : undefined;
+  if (typeof raw === "string") {
+    return raw.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, VAR_VALUE_MAX_CHARS);
+  }
+  return undefined;
+}
+
+/** Las variables guardadas en un contexto (descarta lo que no sea un escalar válido: un contexto corrupto no rompe nada). */
+export function readVars(context: unknown): RunVars {
+  const raw = (context as { vars?: unknown } | null | undefined)?.vars;
+  const out: RunVars = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const value = sanitizeVarValue(v);
+    if (VAR_KEY_PATTERN.test(k) && value !== undefined) out[k] = value;
+  }
+  return out;
+}
+
+export type MergeVarsResult =
+  | { ok: true; vars: RunVars }
+  | { ok: false; code: "vars_invalid" | "vars_limit"; message: string };
+
+/**
+ * Aplica `updates` sobre las variables actuales. `null` borra la clave. Falla (sin cambiar nada) con una clave o valor
+ * no válido o si se pasan los topes (claves y bytes). Pura y determinista: es la MISMA función en el motor (para fallar a
+ * la vista antes de avanzar) y en la transacción que persiste.
+ */
+export function mergeVars(current: RunVars, updates: Record<string, unknown>): MergeVarsResult {
+  const next: RunVars = { ...current };
+  for (const [key, raw] of Object.entries(updates)) {
+    if (!VAR_KEY_PATTERN.test(key)) return { ok: false, code: "vars_invalid", message: `Nombre de variable no válido: «${key.slice(0, 40)}»` };
+    if (raw === null) {
+      delete next[key];
+      continue;
+    }
+    const value = sanitizeVarValue(raw);
+    if (value === undefined) return { ok: false, code: "vars_invalid", message: `El valor de «${key}» debe ser texto, número o sí/no` };
+    next[key] = value;
+  }
+  if (Object.keys(next).length > VARS_MAX_KEYS) {
+    return { ok: false, code: "vars_limit", message: `Una ejecución admite hasta ${VARS_MAX_KEYS} variables` };
+  }
+  if (JSON.stringify(next).length > VARS_MAX_BYTES) {
+    return { ok: false, code: "vars_limit", message: `Las variables superan ${VARS_MAX_BYTES} caracteres en total` };
+  }
+  return { ok: true, vars: next };
+}
+
+/**
+ * `set_var`: fija o actualiza UNA variable. `value` admite `{{name}}`, `{{fecha}}`… y `{{vars.otra}}`; se renderiza al
+ * ejecutar. Una variable sin definir se lee como vacío, nunca falla.
+ */
+export const setVarConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  key: varKeySchema(),
+  value: z.string().trim().max(VAR_VALUE_MAX_CHARS),
+});
+export type SetVarConfig = z.infer<typeof setVarConfigSchema>;
+
 
 /** Topes de las reglas con número: 10 años de historia; 1000 sellos (más de lo que cualquier tarjeta pide). */
 export const CONDITION_MAX_DAYS = 3650;
@@ -257,8 +346,70 @@ export const conditionRuleSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stamps_gte"), stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS) }),
   /** Hoy es su cumpleaños (en la zona horaria del negocio). */
   z.object({ type: z.literal("birthday_today") }),
+  /** Paso 3: una variable de la ejecución (`context.vars`, escrita por «Establecer variable» o «Código JS») vale `value`. */
+  z.object({ type: z.literal("var_equals"), key: varKeySchema(), value: z.string().trim().max(500) }),
 ]);
 export type ConditionRule = z.infer<typeof conditionRuleSchema>;
+
+/* ─── Switch (Paso 3): varias salidas, un solo camino ─── */
+
+export const SWITCH_MAX_CASES = 8;
+export const CASE_ID_PATTERN = /^[a-z0-9]{1,16}$/;
+/** El asa de salida de un caso: `case_<id>`. Las asas estáticas (`default`…) no cambian. */
+export const CASE_HANDLE_PREFIX = "case_";
+export const caseHandle = (id: string): `case_${string}` => `${CASE_HANDLE_PREFIX}${id}`;
+export const isCaseHandle = (h: string): h is `case_${string}` =>
+  h.startsWith(CASE_HANDLE_PREFIX) && CASE_ID_PATTERN.test(h.slice(CASE_HANDLE_PREFIX.length));
+
+export const switchCaseSchema = z.object({
+  id: z.string().regex(CASE_ID_PATTERN, "Id de caso no válido"),
+  label: z.string().trim().min(1, "Ponle nombre al caso").max(40),
+  rule: conditionRuleSchema,
+});
+export type SwitchCase = z.infer<typeof switchCaseSchema>;
+
+/**
+ * `switch`: evalúa los casos EN ORDEN y sigue por el primero que se cumpla; si ninguno, por la salida `default` («Otro»).
+ * Solo en el Modo Visual: una lista no puede mostrar N ramas.
+ */
+export const switchConfigSchema = z
+  .object({
+    name: z.string().trim().max(120).optional(),
+    cases: z.array(switchCaseSchema).min(1, "Agrega al menos un caso").max(SWITCH_MAX_CASES),
+  })
+  .superRefine((c, ctx) => {
+    const seen = new Set<string>();
+    c.cases.forEach((k, i) => {
+      if (seen.has(k.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cases", i, "id"], message: "Dos casos tienen el mismo id" });
+      seen.add(k.id);
+    });
+  });
+export type SwitchConfig = z.infer<typeof switchConfigSchema>;
+
+/** Los ids de caso de una configuración, leídos con tolerancia (una configuración a medias no rompe el lienzo). */
+export function switchCaseIds(config: unknown): string[] {
+  const cases = (config as { cases?: unknown } | null | undefined)?.cases;
+  if (!Array.isArray(cases)) return [];
+  const out: string[] = [];
+  for (const k of cases) {
+    const id = (k as { id?: unknown } | null)?.id;
+    if (typeof id === "string" && CASE_ID_PATTERN.test(id) && !out.includes(id)) out.push(id);
+  }
+  return out.slice(0, SWITCH_MAX_CASES);
+}
+
+/* ─── Código JS (Paso 3) ─── */
+
+export const CODE_JS_MAX_CHARS = 4000;
+/** Tope de nodos de código por flujo: cada uno gasta CPU del servidor compartido. */
+export const CODE_JS_MAX_PER_FLOW = 3;
+
+/** `code_js`: el cuerpo de una función que recibe `input` y devuelve `{ vars: { clave: valor } }`. */
+export const codeJsConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  code: z.string().max(CODE_JS_MAX_CHARS).refine((c) => c.trim().length > 0, "Escribe el código"),
+});
+export type CodeJsConfig = z.infer<typeof codeJsConfigSchema>;
 
 /**
  * Qué hace el Modo Simple según la rama: `continue` sigue con el paso siguiente, `skip_next` lo omite y
@@ -292,6 +443,8 @@ export type ConditionFacts = {
   daysSinceLastVisit?: number | null;
   stamps?: number;
   birthdayToday?: boolean;
+  /** Paso 3: las variables de la ejecución (`context.vars`). */
+  vars?: RunVars;
 };
 
 /** El resultado de evaluar una regla: verdadero o falso. */
@@ -315,7 +468,11 @@ export const EDGE_HANDLES = [
   "reschedule",
   "other",
 ] as const;
-export type EdgeHandle = (typeof EDGE_HANDLES)[number];
+export type StaticEdgeHandle = (typeof EDGE_HANDLES)[number];
+/** Las asas estáticas más las de los casos de un `switch` (`case_<id>`, ver `caseHandle`). */
+export type EdgeHandle = StaticEdgeHandle | `case_${string}`;
+/** ¿Es un asa que el sistema reconoce (estática o de caso)? */
+export const isEdgeHandle = (h: string): h is EdgeHandle => (EDGE_HANDLES as readonly string[]).includes(h) || isCaseHandle(h);
 
 /**
  * Lo que devuelve un nodo al terminar: por qué asa sigue el flujo y, si el siguiente paso no debe correr ya,
@@ -395,7 +552,20 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): C
       return { result: (facts.stamps ?? 0) >= rule.stamps };
     case "birthday_today":
       return { result: !!facts.birthdayToday };
+    case "var_equals": {
+      // Texto contra texto: `5` y «5» son lo mismo para quien escribe la regla. Sin definir = vacío.
+      const have = facts.vars?.[rule.key];
+      return { result: (have === undefined ? "" : String(have)) === rule.value };
+    }
   }
+}
+
+/** Switch: el asa del primer caso que se cumple, o `default` («Otro») si ninguno. Pura y determinista. */
+export function evaluateSwitch(cases: readonly SwitchCase[], facts: ConditionFacts): { handle: EdgeHandle; caseId: string | null } {
+  for (const k of cases) {
+    if (evaluateCondition(k.rule, facts).result) return { handle: caseHandle(k.id), caseId: k.id };
+  }
+  return { handle: "default", caseId: null };
 }
 
 /** Los días enteros entre una fecha pasada y ahora (nunca negativo): el «hace cuántos días» de `visited_within_days`. */
@@ -447,20 +617,32 @@ export function stepLabel(stepType: string, config: unknown): string {
 /* ─── Variables ─── */
 
 /**
- * Reemplaza `{{name}}` / `{{nombre}}` por el nombre del contacto y, en los flujos de cita, `{{fecha}}` y
- * `{{hora}}` por el día y la hora de la cita en la zona del negocio (o «» si la tarea no es de una cita).
+ * Reemplaza `{{name}}` / `{{nombre}}` por el nombre del contacto, `{{fecha}}` y `{{hora}}` por el día y la hora de la
+ * cita en la zona del negocio (o «» si la tarea no es de una cita), `{{servicio}}` y, desde el Paso 3,
+ * `{{vars.clave}}` por una variable de la ejecución («» si no está definida: nunca falla).
+ *
+ * UNA sola pasada: un valor insertado (el nombre de un contacto, una variable) NO se vuelve a interpretar, así que un
+ * `{{...}}` dentro de un dato no se expande. Lo que no se reconoce se deja tal cual.
  */
 export function renderVars(
   text: string,
-  vars: { name: string | null; fecha?: string | null; hora?: string | null; servicio?: string | null }
+  vars: { name: string | null; fecha?: string | null; hora?: string | null; servicio?: string | null; vars?: RunVars | null }
 ): string {
-  const name = vars.name?.trim() || "";
   return text
-    .replace(/\{\{\s*(?:name|nombre)\s*\}\}/gi, name)
-    .replace(/\{\{\s*fecha\s*\}\}/gi, vars.fecha?.trim() || "")
-    .replace(/\{\{\s*hora\s*\}\}/gi, vars.hora?.trim() || "")
-    .replace(/\{\{\s*servicio\s*\}\}/gi, vars.servicio?.trim() || "")
-    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\{\{\s*([A-Za-z][A-Za-z0-9_.-]*)\s*\}\}/g, (match, raw: string) => {
+      const key = raw.toLowerCase();
+      if (key === "name" || key === "nombre") return vars.name?.trim() || "";
+      if (key === "fecha") return vars.fecha?.trim() || "";
+      if (key === "hora") return vars.hora?.trim() || "";
+      if (key === "servicio") return vars.servicio?.trim() || "";
+      if (key.startsWith("vars.")) {
+        const name = key.slice(5);
+        const v = VAR_KEY_PATTERN.test(name) ? vars.vars?.[name] : undefined;
+        return v === undefined ? "" : String(v);
+      }
+      return match;
+    })
+    .replace(/[ 	]{2,}/g, " ")
     .trim();
 }
 

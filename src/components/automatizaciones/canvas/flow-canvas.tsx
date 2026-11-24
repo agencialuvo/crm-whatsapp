@@ -20,6 +20,7 @@ import { InspectorPanel } from "./inspector/inspector-panel";
 import { NodePalette } from "./node-palette";
 import { ActionNode } from "./nodes/action-node";
 import { ConditionNode } from "./nodes/condition-node";
+import { SwitchNode } from "./nodes/switch-node";
 import { MediaNode } from "./nodes/media-node";
 import { MessageNode } from "./nodes/message-node";
 import { TriggerNode } from "./nodes/trigger-node";
@@ -34,6 +35,7 @@ const NODE_TYPES = {
   media: MediaNode,
   wait: WaitNode,
   condition: ConditionNode,
+  switch: SwitchNode,
   waitReply: WaitReplyNode,
   action: ActionNode,
 } as const;
@@ -116,7 +118,7 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
   /** Coloca un bloque de la paleta: un disparador reemplaza el actual; un paso entra en `position`. */
   const place = useCallback(
     (item: PaletteItem, position: { x: number; y: number }) => {
-      if (item.soon) return;
+      if (item.soon || (item.stepType === "code_js" && !g.codeJsEnabled)) return;
       if (item.kind === "trigger" && item.triggerType) g.setTriggerType(item.triggerType);
       else if (item.stepType) g.addStep(item.stepType, { x: Math.round(position.x), y: Math.round(position.y) });
     },
@@ -206,10 +208,10 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
 
   return (
     <CanvasRefsContext.Provider value={{ templates, tags, stages, media }}>
-      <CanvasEdgeActionsContext.Provider value={{ deleteEdge: g.deleteEdge, insertStepOnEdge: (id, type) => void g.insertStepOnEdge(id, type), triggerType: g.triggerType }}>
+      <CanvasEdgeActionsContext.Provider value={{ deleteEdge: g.deleteEdge, insertStepOnEdge: (id, type) => void g.insertStepOnEdge(id, type), triggerType: g.triggerType, codeJsEnabled: g.codeJsEnabled }}>
       {/* Pantalla completa: la paleta, el lienzo y el panel comparten la altura del área; nada desplaza la página. */}
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background lg:flex-row">
-        <NodePalette triggerType={g.triggerType} onAdd={addAtCenter} />
+        <NodePalette triggerType={g.triggerType} onAdd={addAtCenter} codeJsEnabled={g.codeJsEnabled} />
 
         <div ref={wrapper} className="vocero-flow relative min-h-0 min-w-0 flex-1" onDrop={onDrop} onDragOver={(e) => (e.preventDefault(), (e.dataTransfer.dropEffect = "move"))}>
           {/* El lienzo ocupa todo el recuadro; el paneo y el zoom son solo de React Flow (la rueda no mueve la página). */}

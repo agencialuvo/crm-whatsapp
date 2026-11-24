@@ -16,7 +16,8 @@ import {
   type StepType,
 } from "@/lib/automation-schemas";
 import type { PickerNode } from "@/lib/ad-picker";
-import { adScopeOf, parseAdReferralConfig } from "@/lib/automation";
+import { CODE_JS_MAX_PER_FLOW, adScopeOf, parseAdReferralConfig } from "@/lib/automation";
+import { codeJsEnabled } from "@/server/automation/flag";
 import { describeAdTrigger } from "@/lib/automation-dto";
 import { resolveOption } from "@/server/automation/ad-options";
 import { AutomationError } from "@/server/automation/http";
@@ -94,6 +95,15 @@ const stepOrder = () => [
   asc(schema.automationStep.id),
 ];
 
+async function countStepsOfType(organizationId: string, flowId: string, stepType: string): Promise<number> {
+  const s = schema.automationStep;
+  const [row] = await getDb()
+    .select({ n: sql<number>`count(*)::int` })
+    .from(s)
+    .where(scoped(s.organizationId, organizationId, eq(s.flowId, flowId), eq(s.stepType, stepType as StepType)));
+  return row?.n ?? 0;
+}
+
 async function countSteps(organizationId: string, flowId: string): Promise<number> {
   const s = schema.automationStep;
   const [row] = await getDb()
@@ -118,13 +128,23 @@ export async function assertStageOwned(organizationId: string, config: Record<st
 
 /** Las etiquetas y etapas que referencia un paso deben ser de esta organización (nunca una referencia ajena). */
 export async function assertRefsOwned(organizationId: string, config: Record<string, unknown>) {
-  const rule = (config.rule ?? null) as { type?: string; tagId?: string; stageId?: string } | null;
-  const tagId = typeof config.tagId === "string" ? config.tagId : typeof rule?.tagId === "string" ? rule.tagId : null;
-  const stageId = typeof config.stageId === "string" ? config.stageId : typeof rule?.stageId === "string" ? rule.stageId : null;
-  if (tagId && !(await existingTagIds(organizationId, [tagId])).has(tagId)) {
-    throw new AutomationError("tag_not_found", 422, "La etiqueta elegida no existe");
+  type Rule = { type?: string; tagId?: string; stageId?: string } | null;
+  const rule = (config.rule ?? null) as Rule;
+  // Un switch lleva una regla por caso: todas se comprueban (nunca se guarda una etiqueta o etapa ajena).
+  const caseRules = Array.isArray(config.cases) ? (config.cases as { rule?: Rule }[]).map((k) => k?.rule ?? null) : [];
+  const tagIds = new Set<string>();
+  const stageIds = new Set<string>();
+  if (typeof config.tagId === "string") tagIds.add(config.tagId);
+  if (typeof config.stageId === "string") stageIds.add(config.stageId);
+  for (const r of [rule, ...caseRules]) {
+    if (typeof r?.tagId === "string") tagIds.add(r.tagId);
+    if (typeof r?.stageId === "string") stageIds.add(r.stageId);
   }
-  if (stageId) await assertStageOwned(organizationId, { toStageId: stageId });
+  if (tagIds.size > 0) {
+    const owned = await existingTagIds(organizationId, [...tagIds]);
+    if ([...tagIds].some((id) => !owned.has(id))) throw new AutomationError("tag_not_found", 422, "La etiqueta elegida no existe");
+  }
+  for (const stageId of stageIds) await assertStageOwned(organizationId, { toStageId: stageId });
   // `send_media`: el archivo elegido debe ser de la biblioteca de ESTA organización.
   if (typeof config.mediaId === "string") {
     const m = schema.mediaLibraryItem;
@@ -347,9 +367,26 @@ export async function deleteFlow(organizationId: string, id: string): Promise<vo
 
 /* ─── Pasos ─── */
 
+/**
+ * Reglas de plataforma de los pasos del Paso 3. El `switch` no cabe en una lista (varias salidas): solo en el lienzo. El
+ * bloque de código exige la bandera de plataforma (apagada por defecto) y tiene tope por flujo.
+ */
+export function assertStepAllowed(stepType: string, opts: { canvas: boolean }) {
+  if (stepType === "switch" && !opts.canvas) {
+    throw new AutomationError("switch_requires_canvas", 422, "El Switch tiene varias salidas: solo se puede usar en el Modo Visual.");
+  }
+  if (stepType === "code_js" && !codeJsEnabled()) {
+    throw new AutomationError("code_js_disabled", 422, "El bloque de código no está activado en esta instancia.");
+  }
+}
+
 export async function createStep(organizationId: string, flowId: string, input: StepCreateInput) {
   const flow = await loadFlow(organizationId, flowId);
   assertSimpleMode(flow);
+  assertStepAllowed(input.stepType, { canvas: false });
+  if (input.stepType === "code_js" && (await countStepsOfType(organizationId, flowId, "code_js")) >= CODE_JS_MAX_PER_FLOW) {
+    throw new AutomationError("too_many_code_nodes", 409, `Un flujo admite hasta ${CODE_JS_MAX_PER_FLOW} bloques de código`);
+  }
   if ((await countSteps(organizationId, flowId)) >= MAX_STEPS_PER_FLOW) {
     throw new AutomationError("too_many_steps", 409, `Un flujo admite hasta ${MAX_STEPS_PER_FLOW} pasos`);
   }

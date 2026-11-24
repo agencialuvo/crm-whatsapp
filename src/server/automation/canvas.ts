@@ -14,6 +14,7 @@ import {
 import { MAX_STEPS_PER_FLOW, type FlowTriggerType } from "@/lib/automation-schemas";
 import {
   assertRefsOwned,
+  assertStepAllowed,
   assertTemplateOwned,
   loadFlow,
   resolveTriggerConfig,
@@ -96,6 +97,9 @@ export async function saveGraph(organizationId: string, flowId: string, payload:
       if (known && known.stepType !== n.type) {
         throw new AutomationError("step_type_changed", 422, "El tipo de un bloque no cambia: elimínalo y crea otro.");
       }
+      // Un bloque NUEVO de código o de switch pasa las reglas de plataforma. Uno que ya estaba guardado no se vuelve a exigir:
+      // guardar el lienzo de un flujo con código tras apagar la bandera no debe fallar (el motor lo detiene a la vista).
+      if (!known) assertStepAllowed(n.type, { canvas: true });
       idMap.set(n.id, known ? n.id : newId("automationStep"));
     }
 

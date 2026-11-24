@@ -2,7 +2,7 @@ import { and, asc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import { replyTimeoutKey, type EdgeHandle } from "@/lib/automation";
+import { mergeVars, readVars, replyTimeoutKey, type EdgeHandle } from "@/lib/automation";
 import { resolveNextStep } from "@/server/automation/graph";
 
 /**
@@ -239,7 +239,7 @@ export async function writeLog(entry: LogEntry): Promise<void> {
 export async function completeAndAdvance(
   row: QueueRow,
   nextAt: Date,
-  opts: { handle?: EdgeHandle } = {}
+  opts: { handle?: EdgeHandle; vars?: Record<string, unknown> } = {}
 ): Promise<string | null> {
   const handle = opts.handle ?? "default";
   return getDb().transaction(async (tx) => {
@@ -247,13 +247,15 @@ export async function completeAndAdvance(
     const r = schema.automationRun;
 
     let alive = true;
+    let context: Record<string, unknown> = {};
     if (row.runId) {
       const [run] = await tx
-        .select({ status: r.status })
+        .select({ status: r.status, context: r.context })
         .from(r)
         .where(scoped(r.organizationId, row.organizationId, eq(r.id, row.runId)))
         .for("update");
       alive = !!run && (run.status === "running" || run.status === "waiting");
+      context = (run?.context as Record<string, unknown> | null) ?? {};
     }
 
     // Solo una tarea viva se completa: si otro avance (o una cancelación) ya la cerró, este no encola nada.
@@ -266,6 +268,18 @@ export async function completeAndAdvance(
 
     // Un run cancelado o terminado a la vez: no se sigue.
     if (!alive) return null;
+
+    // Paso 3 — Memoria entre nodos: las variables que dejó el paso se escriben AQUÍ, bajo el candado del `run` y junto con
+    // el avance (o quedan ambos o ninguno). Se funden con las actuales leídas bajo el mismo candado: nadie las pisa. Pasarse
+    // de los topes es un fallo definitivo (`StepError`): revierte la transacción y la tarea falla a la vista.
+    if (row.runId && opts.vars && Object.keys(opts.vars).length > 0) {
+      const merged = mergeVars(readVars(context), opts.vars);
+      if (!merged.ok) throw Object.assign(new Error(merged.message), { name: "StepError", code: merged.code });
+      await tx
+        .update(r)
+        .set({ context: { ...context, vars: merged.vars } })
+        .where(scoped(r.organizationId, row.organizationId, eq(r.id, row.runId)));
+    }
 
     const nextStepId = await resolveNextStep(tx, row.organizationId, row.flowId, row.stepId, handle);
     if (!nextStepId) {

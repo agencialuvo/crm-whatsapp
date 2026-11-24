@@ -22,6 +22,8 @@ export type CanvasEdgeActions = {
   /** El disparador del lienzo: decide qué pasos tienen sentido (los de cita solo en flujos de cita). */
   triggerType: string;
   disabled?: boolean;
+  /** El bloque de código solo se ofrece si la instancia lo enciende (bandera de plataforma). */
+  codeJsEnabled?: boolean;
 };
 
 export const CanvasEdgeActionsContext = createContext<CanvasEdgeActions>({

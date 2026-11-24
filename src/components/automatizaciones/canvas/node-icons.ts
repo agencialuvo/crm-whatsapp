@@ -12,6 +12,9 @@ import {
   Flag,
   GitBranch,
   Image as ImageIcon,
+  Braces,
+  Split,
+  Variable,
   Megaphone,
   MessageCircle,
   MessageSquareReply,
@@ -43,6 +46,9 @@ export const ICONS: Record<IconName, LucideIcon> = {
   Tag,
   Eraser,
   Flag,
+  Variable,
+  Braces,
+  Split,
 };
 
 /**

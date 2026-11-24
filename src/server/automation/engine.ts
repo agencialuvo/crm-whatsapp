@@ -5,6 +5,7 @@ import {
   applySendWindow,
   backoffMs,
   bookingGuard,
+  codeJsConfigSchema,
   conditionConfigSchema,
   conditionHandle,
   decideSend,
@@ -12,13 +13,18 @@ import {
   delayConfigSchema,
   delayToMs,
   evaluateCondition,
+  evaluateSwitch,
   isReplyTimeoutKey,
+  mergeVars,
+  readVars,
   removeTagConfigSchema,
   renderVars,
   sendMediaConfigSchema,
   sendWhatsappConfigSchema,
   setStageConfigSchema,
+  setVarConfigSchema,
   stepLabel,
+  switchConfigSchema,
   waitReplyConfigSchema,
   waitUntilConfigSchema,
   type ConditionFacts,
@@ -28,6 +34,7 @@ import {
 } from "@/lib/automation";
 import { AUTOMATION_RATE_LIMIT, decideRateLimit, rateLimitHoldExpired } from "@/lib/automation-compliance";
 import { dayLabelInTz, timeInTz } from "@/lib/time/slots";
+import type { CodeRunResult } from "@/server/automation/sandbox";
 import { isWindowOpen } from "@/server/inbox/window";
 
 /**
@@ -71,8 +78,12 @@ export type StageActionResult =
   | { status: "moved" | "unchanged"; toStageId: string; fromStageId: string | null }
   | { status: "stage_not_found" | "contact_has_no_lead" };
 
-/** Cómo avanza el flujo al terminar una tarea: por qué asa sale (`default` si no se dice). Sin arista, el flujo termina. */
-export type AdvanceOptions = { handle?: EdgeHandle };
+/**
+ * Cómo avanza el flujo al terminar una tarea: por qué asa sale (`default` si no se dice; sin arista, el flujo termina) y,
+ * opcionalmente, las variables que el paso deja en `context.vars` (`null` borra una). Se persisten en la MISMA transacción
+ * que el avance: o quedan el dato y el avance, o ninguno de los dos.
+ */
+export type AdvanceOptions = { handle?: EdgeHandle; vars?: Record<string, unknown> };
 
 export type Step = { id: string; flowId: string; stepType: string; config: unknown };
 
@@ -151,6 +162,8 @@ export type Deps = {
   resolveReplyWait?(row: Row, handle: EdgeHandle): Promise<boolean>;
   /** El contexto de la ejecución (anuncio, servicio…): de ahí sale `{{servicio}}`. */
   runContext?(organizationId: string, runId: string): Promise<Record<string, unknown>>;
+  /** Paso 3: ejecuta el código de un bloque `code_js` en el sandbox (sin definir, o con la bandera apagada: falla a la vista). */
+  runCode?(input: { code: string; input: unknown }): Promise<CodeRunResult>;
   /**
    * Etiquetas y etapa de hoy del contacto: lo que lee una condición. Los datos de cita, visita, sellos y cumpleaños
    * son opcionales (quien no los trae, los da por «no»).
@@ -184,7 +197,8 @@ export type Classified = { recoverable: boolean; code: string; message: string }
 export function classifyError(err: unknown): Classified {
   const e = err as { name?: unknown; code?: unknown; message?: unknown } | null;
   const message = typeof e?.message === "string" ? e.message : String(err);
-  const typed = e?.name === "SendError" || e?.name === "TemplateError";
+  // `StepError`: un paso que falla por algo que no cambia solo (p. ej. se pasó el tope de variables).
+  const typed = e?.name === "SendError" || e?.name === "TemplateError" || e?.name === "StepError";
   if (typed && typeof e?.code === "string") {
     return { recoverable: e.code === "meta_unavailable", code: e.code, message };
   }
@@ -262,7 +276,15 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
     // la tarea, no se vuelve a enviar: solo se cierra y se avanza.
     // Los nodos que ramifican (condición, espera con «tarde») no se cortocircuitan: el asa por la que salieron no
     // se guardó como dato, y repetir su evaluación es inocuo (el historial ya tiene su éxito).
-    const branching = step.stepType === "condition" || step.stepType === "wait_until" || step.stepType === "wait_reply";
+    // Tampoco los que dejan datos en `context.vars` (set_var, code_js): el dato se escribe junto con el avance, así que si el
+    // avance no ocurrió el dato tampoco, y repetir el paso (puro y determinista) lo deja igual. Un `switch` ramifica.
+    const branching =
+      step.stepType === "condition" ||
+      step.stepType === "wait_until" ||
+      step.stepType === "wait_reply" ||
+      step.stepType === "switch" ||
+      step.stepType === "set_var" ||
+      step.stepType === "code_js";
     if (!branching && (await deps.hasSuccessLog(row.organizationId, row.id))) {
       await deps.completeAndAdvance(row, now);
       return "completed";
@@ -432,7 +454,10 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
       // Datos de ahora, no de cuando se disparó el flujo: la confirmación o una etiqueta pudo llegar mientras esperaba.
       const facts = await deps.contactFacts(row.organizationId, row.contactId);
-      const outcome = evaluateCondition(cfg.data.rule, { ...facts, booking });
+      // Las variables solo se leen si la regla las usa (una consulta menos en el caso común).
+      const vars =
+        cfg.data.rule.type === "var_equals" && row.runId && deps.runContext ? readVars(await deps.runContext(row.organizationId, row.runId)) : {};
+      const outcome = evaluateCondition(cfg.data.rule, { ...facts, booking, vars });
       const result: NodeResult = { handle: conditionHandle(outcome) };
       await deps.writeLog({
         organizationId: row.organizationId,
@@ -444,6 +469,100 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         metadata: { ...snapshot, rule: cfg.data.rule, result: outcome.result, branch: result.handle, handle: result.handle },
       });
       await deps.completeAndAdvance(row, result.nextAt ?? now, { handle: result.handle });
+      return "completed";
+    }
+
+    // Paso 3 — Switch: evalúa los casos EN ORDEN y sale por el del primero que se cumple (o por «Otro» = `default`).
+    if (step.stepType === "switch") {
+      const cfg = switchConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      const facts = await deps.contactFacts(row.organizationId, row.contactId);
+      const usesVars = cfg.data.cases.some((k) => k.rule.type === "var_equals");
+      const vars = usesVars && row.runId && deps.runContext ? readVars(await deps.runContext(row.organizationId, row.runId)) : {};
+      const picked = evaluateSwitch(cfg.data.cases, { ...facts, booking, vars });
+      const label = cfg.data.cases.find((k) => k.id === picked.caseId)?.label ?? null;
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: { ...snapshot, caseId: picked.caseId, caseLabel: label, branch: label ?? "default", handle: picked.handle },
+      });
+      await deps.completeAndAdvance(row, now, { handle: picked.handle });
+      return "completed";
+    }
+
+    // Paso 3 — Establecer variable: `context.vars[key] = value` (con `{{…}}` ya resuelto), junto con el avance.
+    if (step.stepType === "set_var") {
+      const cfg = setVarConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      if (!row.runId || !deps.runContext) return await fail("set_var_requires_run");
+      const ctx = await deps.runContext(row.organizationId, row.runId);
+      const current = readVars(ctx);
+      const target = await deps.loadTarget(row.organizationId, row.contactId);
+      const tz = booking ? await deps.timezone(row.organizationId) : null;
+      const bookingAt = booking?.scheduledAt.toISOString();
+      const value = renderVars(cfg.data.value, {
+        name: target?.contactName ?? null,
+        servicio: typeof ctx.serviceName === "string" ? ctx.serviceName : typeof ctx.comboName === "string" ? ctx.comboName : null,
+        fecha: bookingAt && tz ? dayLabelInTz(bookingAt, tz, now) : null,
+        hora: bookingAt && tz ? timeInTz(bookingAt, tz) : null,
+        vars: current,
+      });
+      const merged = mergeVars(current, { [cfg.data.key]: value });
+      if (!merged.ok) return await fail(merged.code, { detail: merged.message, key: cfg.data.key });
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        // Solo la clave y el largo: el valor puede traer datos del contacto y el historial no los necesita.
+        metadata: { ...snapshot, key: cfg.data.key, valueChars: String(merged.vars[cfg.data.key] ?? "").length },
+      });
+      await deps.completeAndAdvance(row, now, { vars: { [cfg.data.key]: value } });
+      return "completed";
+    }
+
+    // Paso 3 — Código JS: corre en el sandbox (sin red, sin datos, sin secretos) y deja `{ vars }`. Cualquier fallo del
+    // código es DEFINITIVO (no se reintenta): el código y sus entradas no cambian solos.
+    if (step.stepType === "code_js") {
+      const cfg = codeJsConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      if (!deps.runCode) return await fail("code_js_disabled");
+      if (!row.runId || !deps.runContext) return await fail("code_js_requires_run");
+      const ctx = await deps.runContext(row.organizationId, row.runId);
+      const current = readVars(ctx);
+      const facts = await deps.contactFacts(row.organizationId, row.contactId);
+      const target = await deps.loadTarget(row.organizationId, row.contactId);
+      // Solo lo necesario y acotado: nada de teléfono, correo ni identificadores internos. El contexto sin `vars` (que va aparte).
+      const trigger = Object.fromEntries(Object.entries(ctx).filter(([k]) => k !== "vars" && k !== "bookingId"));
+      const res = await deps.runCode({
+        code: cfg.data.code,
+        input: {
+          now: (row.createdAt ?? now).toISOString(),
+          contact: { name: target?.contactName ?? null, tagIds: [...facts.tagIds].slice(0, 50), stageId: facts.stageId },
+          context: trigger,
+          vars: current,
+        },
+      });
+      if (!res.ok) return await fail(res.code, { detail: res.message });
+      const merged = mergeVars(current, res.vars);
+      if (!merged.ok) return await fail(merged.code, { detail: merged.message });
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        // Trazabilidad sin volcar datos: las claves que escribió, cuánto tardó y cuánto devolvió (nunca los valores).
+        metadata: { ...snapshot, keys: Object.keys(res.vars), durationMs: res.durationMs, outputChars: res.outputChars },
+      });
+      await deps.completeAndAdvance(row, now, { vars: res.vars });
       return "completed";
     }
 
@@ -555,6 +674,8 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       typeof ctx.serviceName === "string" ? ctx.serviceName : typeof ctx.comboName === "string" ? ctx.comboName : null;
     const vars = {
       servicio,
+      // Paso 3: `{{vars.clave}}`, lo que dejaron `set_var` y `code_js` antes de este paso.
+      vars: readVars(ctx),
       name: target.contactName,
       fecha: bookingIso && tz ? dayLabelInTz(bookingIso, tz, now) : null,
       hora: bookingIso && tz ? timeInTz(bookingIso, tz) : null,

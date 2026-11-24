@@ -28,11 +28,14 @@ export function NodePalette({
   triggerType,
   onAdd,
   disabled,
+  codeJsEnabled = false,
 }: {
   /** El disparador actual del lienzo: decide qué bloques de cita tienen sentido. */
   triggerType: string;
   onAdd: (item: PaletteItem) => void;
   disabled?: boolean;
+  /** El bloque de código solo se puede usar si la instancia lo enciende. */
+  codeJsEnabled?: boolean;
 }) {
   const isBooking = triggerType.startsWith("booking_");
   const [query, setQuery] = useState("");
@@ -77,9 +80,10 @@ export function NodePalette({
                   <ul className="flex flex-wrap gap-1.5 lg:flex-col lg:flex-nowrap">
                     {groupItems.map((item) => {
                       const bookingBlocked = !!item.needsBooking && !isBooking;
-                      const off = disabled || !!item.soon || bookingBlocked;
+                      const noCode = item.stepType === "code_js" && !codeJsEnabled;
+                      const off = disabled || !!item.soon || bookingBlocked || noCode;
                       const current = item.kind === "trigger" && item.triggerType === triggerType;
-                      const note = item.soon ? "Próximamente" : bookingBlocked ? "Solo en flujos de cita" : current ? "Disparador actual" : item.hint;
+                      const note = item.soon ? "Próximamente" : noCode ? "No activado en esta instancia" : bookingBlocked ? "Solo en flujos de cita" : current ? "Disparador actual" : item.hint;
                       const Icon = ICONS[item.icon];
                       return (
                         <li key={item.id}>
@@ -106,7 +110,7 @@ export function NodePalette({
                             </span>
                             <span className="min-w-0 flex-1">
                               {item.label}
-                              {(item.soon || bookingBlocked || current) && <span className="block text-[10px] font-normal text-text-3">{note}</span>}
+                              {(item.soon || bookingBlocked || noCode || current) && <span className="block text-[10px] font-normal text-text-3">{note}</span>}
                             </span>
                           </button>
                         </li>

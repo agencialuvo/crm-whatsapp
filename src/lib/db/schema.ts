@@ -2360,7 +2360,21 @@ export const automationStep = pgTable(
       // `wait_until`: espera hasta una hora anclada a la cita (p. ej. «un día antes»).
       // `add_tag`/`remove_tag`/`set_stage`: acciones sobre el CRM; `condition`: decide si el flujo sigue.
       // `wait_reply`: pausa la ejecución hasta que el cliente responda (o venza el tiempo límite).
-      enum: ["delay", "send_whatsapp", "send_media", "condition", "add_tag", "remove_tag", "set_stage", "wait_until", "wait_reply"],
+      enum: [
+        "delay",
+        "send_whatsapp",
+        "send_media",
+        "condition",
+        "add_tag",
+        "remove_tag",
+        "set_stage",
+        "wait_until",
+        "wait_reply",
+        // Paso 3: memoria entre nodos, enrutamiento multi-rama (solo lienzo) y código aislado (tras una bandera de plataforma).
+        "set_var",
+        "switch",
+        "code_js",
+      ],
     }).notNull(),
     /** 
      * Configuración interna del nodo (JSON):
@@ -2395,11 +2409,9 @@ export const automationEdge = pgTable(
     targetStepId: text("target_step_id")
       .notNull()
       .references(() => automationStep.id, { onDelete: "cascade" }),
-    sourceHandle: text("source_handle", {
-      enum: ["default", "true", "false", "late", "timeout", "confirmed", "declined", "reschedule", "other"],
-    })
-      .notNull()
-      .default("default"),
+    // Texto libre en SQL (sin CHECK). Las asas estáticas (`default`, `true`, `false`, `late`, `timeout`, `confirmed`,
+    // `declined`, `reschedule`, `other`) y las de un `switch` (`case_<id>`) las valida `isEdgeHandle` en la capa de código.
+    sourceHandle: text("source_handle").notNull().default("default"),
   },
   (t) => [
     uniqueIndex("automation_edge_source_handle_uq").on(t.sourceStepId, t.sourceHandle),

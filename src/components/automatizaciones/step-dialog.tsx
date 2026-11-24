@@ -33,6 +33,8 @@ import {
   WAIT_LATE_ACTIONS,
 } from "@/lib/automation";
 import { Switch } from "@/components/ui/switch";
+import { CodeJsFields, SetVarFields, SwitchFields, VarEqualsFields, casesFromConfig, casesToConfig, caseErrors, type CaseForm } from "@/components/automatizaciones/step-extras";
+import { DEFAULT_CODE_JS } from "@/lib/automation-canvas";
 import { tagColorClass } from "@/lib/tags";
 import { countVariables } from "@/lib/templates";
 
@@ -151,6 +153,13 @@ export function StepDialog({
   // Reglas con número: «vino en los últimos N días» y «tiene al menos N sellos».
   const [ruleDays, setRuleDays] = useState(typeof rule?.days === "number" ? String(rule.days) : "30");
   const [ruleStamps, setRuleStamps] = useState(typeof rule?.stamps === "number" ? String(rule.stamps) : "5");
+  // Paso 3: variables, código y Switch.
+  const [ruleVarKey, setRuleVarKey] = useState(typeof rule?.key === "string" ? rule.key : "");
+  const [ruleVarValue, setRuleVarValue] = useState(typeof rule?.value === "string" ? rule.value : "");
+  const [varKey, setVarKey] = useState(typeof c.key === "string" ? c.key : "");
+  const [varValue, setVarValue] = useState(typeof c.value === "string" ? c.value : "");
+  const [code, setCode] = useState(typeof c.code === "string" ? c.code : DEFAULT_CODE_JS);
+  const [cases, setCases] = useState<CaseForm[]>(() => casesFromConfig(c.cases));
   const [ifTrue, setIfTrue] = useState<string>(typeof c.ifTrue === "string" ? c.ifTrue : "continue");
   const [ifFalse, setIfFalse] = useState<string>(typeof c.ifFalse === "string" ? c.ifFalse : "stop");
   // Esperar respuesta: tiempo límite (cantidad + unidad), qué hacer en cada caso y si confirma la cita.
@@ -213,8 +222,9 @@ export function StepDialog({
   }
 
   // Los pasos de cita (esperar hasta la cita) solo se ofrecen en flujos de cita; el que ya existe se conserva.
+  // El Switch (varias salidas) y el código viven en el Modo Visual: la lista no los ofrece al crear (uno que ya existe se conserva).
   const stepTypeOptions = useMemo<SearchSelectOption[]>(
-    () => STEP_TYPE_OPTIONS.filter((o) => isBookingFlow || o.value !== "wait_until"),
+    () => STEP_TYPE_OPTIONS.filter((o) => (isBookingFlow || o.value !== "wait_until") && o.value !== "switch" && o.value !== "code_js"),
     [isBookingFlow]
   );
   const mediaOptions = useMemo<SearchSelectOption[]>(
@@ -277,11 +287,22 @@ export function StepDialog({
     if (stepType === "send_media") {
       return { ...(name.trim() && { name: name.trim() }), mediaId, ...(caption.trim() && { caption: caption.trim() }) };
     }
+    if (stepType === "set_var") {
+      return { ...(name.trim() && { name: name.trim() }), key: varKey.trim(), value: varValue };
+    }
+    if (stepType === "code_js") {
+      return { ...(name.trim() && { name: name.trim() }), code };
+    }
+    if (stepType === "switch") {
+      return { ...(name.trim() && { name: name.trim() }), cases: casesToConfig(cases) };
+    }
     if (stepType === "condition") {
       return {
         ...(name.trim() && { name: name.trim() }),
         rule:
-          ruleType === "booking_confirmed" || ruleType === "has_upcoming_booking" || ruleType === "birthday_today"
+          ruleType === "var_equals"
+            ? { type: ruleType, key: ruleVarKey.trim(), value: ruleVarValue }
+            : ruleType === "booking_confirmed" || ruleType === "has_upcoming_booking" || ruleType === "birthday_today"
             ? { type: ruleType }
             : ruleType === "stage_is"
               ? { type: ruleType, stageId: ruleStageId }
@@ -326,6 +347,9 @@ export function StepDialog({
     if (stepType === "send_media" && !mediaId) found.mediaId = "Elige un archivo de la biblioteca";
     if (stepType === "condition" && (ruleType === "tag_has" || ruleType === "tag_missing") && !ruleTagId) found.tagId = "Elige una etiqueta";
     if (stepType === "condition" && ruleType === "stage_is" && !ruleStageId) found.stageId = "Elige una etapa";
+    if (stepType === "condition" && ruleType === "var_equals" && !ruleVarKey.trim()) found.varKey = "Escribe el nombre de la variable";
+    if (stepType === "set_var" && !varKey.trim()) found.key = "Escribe el nombre de la variable";
+    if (stepType === "switch") Object.assign(found, caseErrors(cases));
 
     const parsed = stepCreateSchema.safeParse({
       stepType,
@@ -338,7 +362,14 @@ export function StepDialog({
         // `config.amount` se pinta bajo «amount»; un error del conjunto («falta mensaje o plantilla»)
         // se pinta bajo el mensaje.
         const last = issue.path[issue.path.length - 1];
-        const key = issue.path.length <= 1 || last === "config" ? "content" : String(last);
+        // Un error de un caso del Switch se pinta bajo ese caso (`case.<n>[.campo]`); los del conjunto, bajo la lista.
+        const caseAt = issue.path[1] === "cases" && typeof issue.path[2] === "number" ? issue.path[2] : null;
+        const key =
+          caseAt !== null
+            ? `case.${caseAt}${typeof issue.path[3] === "string" && issue.path[3] !== "rule" ? `.${issue.path[3]}` : issue.path[4] ? `.${String(issue.path[4])}` : ""}`
+            : issue.path.length <= 1 || last === "config"
+              ? "content"
+              : String(last);
         if (!(key in found)) found[key] = issue.message;
       }
     }
@@ -577,6 +608,20 @@ export function StepDialog({
                 />
               </Field>
             )}
+            {ruleType === "var_equals" && (
+              <VarEqualsFields
+                idPrefix="step-rule-var"
+                varKey={ruleVarKey}
+                varValue={ruleVarValue}
+                onKey={(v) => {
+                  setRuleVarKey(v);
+                  clear("varKey");
+                }}
+                onValue={setRuleVarValue}
+                error={errors.varKey}
+                disabled={busy}
+              />
+            )}
             {ruleType === "booking_confirmed" && (
               <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
                 Se mira al llegar a este paso: si el cliente confirmó mientras el flujo esperaba, cuenta como confirmada.
@@ -669,6 +714,44 @@ export function StepDialog({
                 : "Hoy los pasos se ejecutan en fila: la condición decide si el flujo sigue, se salta el siguiente paso o termina. Más adelante cada resultado podrá llevar a un camino distinto."}
             </p>
           </>
+        ) : stepType === "set_var" ? (
+          <SetVarFields
+            varKey={varKey}
+            varValue={varValue}
+            onKey={(v) => {
+              setVarKey(v);
+              clear("key");
+            }}
+            onValue={(v) => {
+              setVarValue(v);
+              clear("value");
+            }}
+            errors={errors}
+            disabled={busy}
+          />
+        ) : stepType === "code_js" ? (
+          <CodeJsFields
+            code={code}
+            onCode={(v) => {
+              setCode(v);
+              clear("code");
+            }}
+            error={errors.code}
+            disabled={busy}
+          />
+        ) : stepType === "switch" ? (
+          <SwitchFields
+            cases={cases}
+            onChange={(next) => {
+              setCases(next);
+              setErrors((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith("case.") && k !== "cases")));
+            }}
+            tagOptions={tagOptions}
+            stageOptions={stageOptions}
+            isBookingFlow={isBookingFlow}
+            errors={errors}
+            disabled={busy}
+          />
         ) : stepType === "wait_until" ? (
           <>
             <div className="grid gap-4 sm:grid-cols-3">

@@ -7,6 +7,8 @@ import { applyTag, contactFacts, moveContactToStage } from "@/server/automation/
 import { runBirthdayTrigger } from "@/server/automation/triggers";
 import { loadMediaFile } from "@/server/automation/media";
 import { isOptedOut } from "@/server/automation/opt-out";
+import { codeJsEnabled } from "@/server/automation/flag";
+import { runSandboxedCode } from "@/server/automation/sandbox";
 
 /**
  * Automatizaciones — el worker: cada cierto tiempo toma las tareas vencidas de `automation_queue` y
@@ -31,6 +33,9 @@ export function defaultDeps(): Deps {
     flowTriggerType: queue.flowTriggerType,
     runStatus: queue.runStatus,
     runContext: queue.runContext,
+    // Paso 3: el código del cliente solo corre con la bandera de plataforma encendida, y siempre en el sandbox WASM.
+    runCode: async (input) =>
+      codeJsEnabled() ? runSandboxedCode(input) : { ok: false, code: "code_js_disabled", message: "El bloque de código no está activado en esta instancia" },
     enterReplyWait: (row, timeoutAt) => queue.enterReplyWait(row as queue.QueueRow, timeoutAt),
     resolveReplyWait: async (row, handle) =>
       (await queue.resolveReplyWait({ organizationId: row.organizationId, runId: row.runId!, handle })).resolved,

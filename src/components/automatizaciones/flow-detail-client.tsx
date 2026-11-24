@@ -9,6 +9,7 @@ import {
   ArrowUp,
   CalendarClock,
   Clock,
+  Braces,
   GitBranch,
   Flag,
   ImageIcon,
@@ -20,6 +21,7 @@ import {
   Tag,
   Trash2,
   Workflow,
+  Variable,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +63,9 @@ const STEP_ICON: Record<string, typeof Clock> = {
   remove_tag: Tag,
   set_stage: Flag,
   condition: GitBranch,
+  switch: GitBranch,
+  set_var: Variable,
+  code_js: Braces,
 };
 
 /**

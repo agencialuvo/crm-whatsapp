@@ -46,6 +46,10 @@ export const envSchema = z.object({
   // Automatizaciones: el worker que ejecuta los flujos de `automation_queue` (mensajes y esperas
   // programados). Apagado por defecto — sin él no arranca y la cola no se toca. Ej.: AUTOMATIONS=on
   AUTOMATIONS: z.string().optional(),
+  // Automatizaciones, Paso 3: el bloque «Código JavaScript» (código del cliente en un sandbox WASM, sin red ni acceso a
+  // datos). Bandera de plataforma APARTE y apagada por defecto. Se lee de process.env directo (server/automation/flag.ts).
+  // Ej.: AUTOMATION_CODE_JS=on
+  AUTOMATION_CODE_JS: z.string().optional(),
   // Correo saliente (opcional): solo para restablecer la contraseña con un
   // código. Apuntan al servidor SMTP del propio negocio; sin SMTP_HOST y
   // SMTP_FROM la función se apaga y lo demás funciona igual. Se leen de

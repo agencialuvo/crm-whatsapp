@@ -1,4 +1,4 @@
-import { EDGE_HANDLES, waitReplyConfigSchema, type EdgeHandle } from "@/lib/automation";
+import { CASE_HANDLE_PREFIX, EDGE_HANDLES, caseHandle, switchCaseIds, waitReplyConfigSchema, type EdgeHandle } from "@/lib/automation";
 import {
   TRIGGER_NODE_TYPE,
   handleLabel,
@@ -30,7 +30,7 @@ export type CanvasNodeLite = { id: string; type: string; position: Pos; data: Ca
 export type CanvasEdgeLite = { id: string; source: string; target: string; sourceHandle?: string | null };
 
 /** Cómo se dibuja cada tipo de paso: la clave de `nodeTypes` del lienzo. */
-export type NodeKind = "trigger" | "message" | "media" | "wait" | "condition" | "waitReply" | "action";
+export type NodeKind = "trigger" | "message" | "media" | "wait" | "condition" | "switch" | "waitReply" | "action";
 
 export function nodeKindOf(type: string): NodeKind {
   switch (type) {
@@ -45,10 +45,12 @@ export function nodeKindOf(type: string): NodeKind {
       return "wait";
     case "condition":
       return "condition";
+    case "switch":
+      return "switch";
     case "wait_reply":
       return "waitReply";
     default:
-      return "action"; // add_tag · remove_tag · set_stage
+      return "action"; // add_tag · remove_tag · set_stage · set_var · code_js
   }
 }
 
@@ -77,7 +79,10 @@ export type IconName =
   | "Image"
   | "Tag"
   | "Eraser"
-  | "Flag";
+  | "Flag"
+  | "Variable"
+  | "Braces"
+  | "Split";
 
 export type BlockMeta = { group: string; tone: NodeTone; icon: IconName };
 
@@ -106,6 +111,9 @@ export const STEP_META: Record<StepType, BlockMeta> = {
   add_tag: { group: "CRM", tone: "crm", icon: "Tag" },
   remove_tag: { group: "CRM", tone: "crm", icon: "Eraser" },
   set_stage: { group: "CRM", tone: "crm", icon: "Flag" },
+  switch: { group: "Decisiones", tone: "condition", icon: "Split" },
+  set_var: { group: "Datos", tone: "crm", icon: "Variable" },
+  code_js: { group: "Datos", tone: "crm", icon: "Braces" },
 };
 
 const FALLBACK_META: BlockMeta = { group: "Otros", tone: "crm", icon: "Zap" };
@@ -122,6 +130,7 @@ export function toneOfNodeKind(kind: string): NodeTone {
     case "trigger":
       return "trigger";
     case "condition":
+    case "switch":
       return "condition";
     case "wait":
     case "waitReply":
@@ -145,9 +154,14 @@ const SHORT_LABEL: Record<string, string> = {
 };
 
 /** Las asas de salida que se pintan en cada tipo de bloque, con su rótulo corto. */
-export function outputsOf(type: string): { id: EdgeHandle; label: string }[] {
+export function outputsOf(type: string, config?: unknown): { id: EdgeHandle; label: string }[] {
   const h = (id: EdgeHandle, label = SHORT_LABEL[id] ?? handleLabel(id)) => ({ id, label });
   switch (type) {
+    case "switch": {
+      // Una salida por caso (con su nombre) y «Otro» al final: lo mismo que `handlesOf("switch", config)`.
+      const labels = switchCaseLabels(config);
+      return [...switchCaseIds(config).map((id, i) => h(caseHandle(id), labels.get(id) ?? `Caso ${i + 1}`)), h("default", "Otro")];
+    }
     case "condition":
       return [h("true", "Sí"), h("false", "No")];
     case "wait_reply":
@@ -159,10 +173,38 @@ export function outputsOf(type: string): { id: EdgeHandle; label: string }[] {
   }
 }
 
-/** El texto de una arista: solo las que salen de un asa que ramifica llevan rótulo. */
-export function edgeLabelOf(handle: string | null | undefined): string | undefined {
-  if (!handle || handle === "default") return undefined;
+/** Los nombres de los casos de un switch, por id. */
+function switchCaseLabels(config: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const cases = (config as { cases?: unknown } | null | undefined)?.cases;
+  if (!Array.isArray(cases)) return out;
+  for (const k of cases) {
+    const c = k as { id?: unknown; label?: unknown } | null;
+    if (typeof c?.id === "string" && typeof c.label === "string" && c.label.trim()) out.set(c.id, c.label.trim());
+  }
+  return out;
+}
+
+/**
+ * El texto de una arista: solo las que salen de un asa que ramifica llevan rótulo. Las de un switch llevan el nombre
+ * de su caso (`sourceConfig` es la configuración del nodo de origen) y «Otro» la de `default`.
+ */
+export function edgeLabelOf(handle: string | null | undefined, sourceType?: string, sourceConfig?: unknown): string | undefined {
+  if (!handle) return undefined;
+  if (sourceType === "switch") {
+    if (handle === "default") return "Otro";
+    if (handle.startsWith(CASE_HANDLE_PREFIX)) return switchCaseLabels(sourceConfig).get(handle.slice(CASE_HANDLE_PREFIX.length)) ?? "Caso";
+  }
+  if (handle === "default") return undefined;
   return handleLabel(handle);
+}
+
+/** Un id corto para un caso nuevo de un switch, que no choca con los que ya hay. */
+export function newCaseId(existing: readonly string[]): string {
+  for (;;) {
+    const id = `c${Math.random().toString(36).slice(2, 8)}`;
+    if (!existing.includes(id)) return id;
+  }
 }
 
 /* ─── Configuración con la que nace cada bloque ─── */
@@ -180,10 +222,20 @@ export function defaultConfigFor(stepType: string): Record<string, unknown> {
       return { anchor: "booking.scheduledAt", offsetMinutes: -1440, lateAction: "skip_next" };
     case "wait_reply":
       return waitReplyConfigSchema.parse({});
+    case "switch":
+      return { cases: [] };
+    case "code_js":
+      return { code: DEFAULT_CODE_JS };
     default:
       return {};
   }
 }
+
+/** El ejemplo con el que nace un bloque de código: lee `input` y deja una variable para los pasos siguientes. */
+export const DEFAULT_CODE_JS = `// input: { now, contact: { name, tagIds, stageId }, context, vars }
+// Devuelve { vars: { clave: valor } }: los pasos siguientes la leen con {{vars.clave}}.
+const nombre = (input.contact.name || "").trim();
+return { vars: { iniciales: nombre.slice(0, 2).toUpperCase() } };`;
 
 /** Los ajustes iniciales de un disparador recién elegido (el de cumpleaños nace con su hora de siempre). */
 export function defaultTriggerConfig(triggerType: string): Record<string, unknown> | null {
@@ -263,9 +315,12 @@ export const PALETTE: PaletteItem[] = [
     ...TRIGGER_META[t],
   })),
   stepItem("condition", "logic", "Condición (Sí / No)", "Decide por qué camino sigue el flujo"),
+  stepItem("switch", "logic", "Switch (varias salidas)", "Elige entre varios caminos según el contacto o una variable"),
   stepItem("delay", "logic", "Esperar tiempo", "Una pausa de segundos a días, con hora de envío opcional"),
   stepItem("wait_until", "logic", "Esperar hasta la cita", "Antes o después de la hora de la cita", { needsBooking: true }),
   stepItem("wait_reply", "logic", "Esperar respuesta", "Pausa hasta que el cliente conteste"),
+  stepItem("set_var", "logic", "Establecer variable", "Guarda un dato para que lo lean los pasos siguientes"),
+  stepItem("code_js", "logic", "Código JavaScript", "Transforma datos con un script aislado (sin red ni acceso a datos)"),
   stepItem("send_whatsapp", "actions", "Enviar WhatsApp", "Texto libre o plantilla aprobada"),
   stepItem("send_media", "actions", "Enviar multimedia", "Imagen o video de tu biblioteca"),
   stepItem("add_tag", "actions", "Asignar etiqueta", "Marca al contacto"),
@@ -297,6 +352,8 @@ export type ServerGraph = {
   editorMode: "simple" | "canvas";
   viewport: (Partial<GraphViewport> & { trigger?: Pos }) | null;
   updatedAt: number;
+  /** Lo que esta instancia permite (hoy: el bloque de código, tras una bandera de plataforma). */
+  capabilities?: { codeJs: boolean };
 };
 
 export const edgeId = (source: string, handle: string | null | undefined) => `${source}:${handle ?? "default"}`;
@@ -383,8 +440,10 @@ export type EdgeRef = { id: string; source: string; target: string; sourceHandle
  * ¿Se puede insertar este tipo de paso en medio de una conexión? Solo los que tienen UNA salida normal («Siguiente»):
  * en uno que ramifica (condición, esperar respuesta, esperar hasta la cita) habría que decidir cuál rama continúa.
  */
-export function canInsertOnEdge(stepType: string): boolean {
-  const handles = handlesOf(stepType);
+export function canInsertOnEdge(stepType: string, config?: unknown): boolean {
+  // El switch tiene varias salidas por diseño: insertarlo en medio dejaría una sola conectada y sin casos.
+  if (stepType === "switch") return false;
+  const handles = handlesOf(stepType, config);
   return handles.length === 1 && handles[0] === "default";
 }
 

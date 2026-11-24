@@ -50,7 +50,15 @@ describe("la paleta", () => {
       "Premio de fidelidad",
       "Manual",
     ]);
-    expect(labels("logic")).toEqual(["Condición (Sí / No)", "Esperar tiempo", "Esperar hasta la cita", "Esperar respuesta"]);
+    expect(labels("logic")).toEqual([
+      "Condición (Sí / No)",
+      "Switch (varias salidas)",
+      "Esperar tiempo",
+      "Esperar hasta la cita",
+      "Esperar respuesta",
+      "Establecer variable",
+      "Código JavaScript",
+    ]);
     expect(labels("actions")).toEqual(["Enviar WhatsApp", "Enviar multimedia", "Asignar etiqueta", "Quitar etiqueta", "Cambiar etapa"]);
   });
 
