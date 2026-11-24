@@ -1,9 +1,9 @@
 "use client";
 
 import type { NodeProps } from "@xyflow/react";
-import { GitBranch } from "lucide-react";
 import { describeRule } from "@/lib/automation-dto";
-import type { CanvasNodeData } from "@/lib/automation-canvas";
+import { metaOfNode, type CanvasNodeData } from "@/lib/automation-canvas";
+import { ICONS } from "../node-icons";
 import { useCanvasRefs } from "../canvas-context";
 import { NodeShell } from "./node-shell";
 
@@ -14,8 +14,8 @@ export function ConditionNode({ data, selected }: NodeProps & { data: CanvasNode
   const rule = data.config.rule as Record<string, unknown> | undefined;
   return (
     <NodeShell
-      icon={GitBranch}
-      tone="logic"
+      icon={ICONS[metaOfNode(data).icon]}
+      tone={metaOfNode(data).tone}
       title="Condición"
       detail={describeRule(rule, refs)}
       selected={selected}

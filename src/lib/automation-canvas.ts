@@ -2,6 +2,7 @@ import { EDGE_HANDLES, waitReplyConfigSchema, type EdgeHandle } from "@/lib/auto
 import {
   TRIGGER_NODE_TYPE,
   handleLabel,
+  handlesOf,
   type GraphPayload,
   type GraphViewport,
   type Pos,
@@ -48,6 +49,83 @@ export function nodeKindOf(type: string): NodeKind {
       return "waitReply";
     default:
       return "action"; // add_tag · remove_tag · set_stage
+  }
+}
+
+/* ─── Metadatos de los bloques: UNA sola fuente (paleta, nodos y minimapa) ─── */
+
+/** El rol visual de un bloque: decide el color de su encabezado y de su borde izquierdo. */
+export type NodeTone = "trigger" | "condition" | "wait" | "message" | "crm";
+
+/** Nombres de icono (de `lucide-react`); la correspondencia con el componente vive en la capa de React. */
+export type IconName =
+  | "Zap"
+  | "UserPlus"
+  | "ArrowRightLeft"
+  | "Megaphone"
+  | "CalendarPlus"
+  | "CalendarCheck"
+  | "CalendarX"
+  | "Cake"
+  | "GitBranch"
+  | "Clock"
+  | "CalendarClock"
+  | "MessageSquareReply"
+  | "MessageCircle"
+  | "Image"
+  | "Tag"
+  | "Eraser"
+  | "Flag";
+
+export type BlockMeta = { group: string; tone: NodeTone; icon: IconName };
+
+/** Disparadores: subgrupo e icono (el tono siempre es `trigger`). */
+export const TRIGGER_META: Record<(typeof CREATABLE_TRIGGERS)[number], BlockMeta> = {
+  lead_created: { group: "Contactos y pipeline", tone: "trigger", icon: "UserPlus" },
+  stage_changed: { group: "Contactos y pipeline", tone: "trigger", icon: "ArrowRightLeft" },
+  ad_referral: { group: "Anuncios", tone: "trigger", icon: "Megaphone" },
+  booking_created: { group: "Citas", tone: "trigger", icon: "CalendarPlus" },
+  booking_confirmed: { group: "Citas", tone: "trigger", icon: "CalendarCheck" },
+  booking_no_show: { group: "Citas", tone: "trigger", icon: "CalendarX" },
+  birthday: { group: "Fechas", tone: "trigger", icon: "Cake" },
+};
+
+/** Pasos: subgrupo, rol visual e icono. */
+export const STEP_META: Record<StepType, BlockMeta> = {
+  condition: { group: "Decisiones", tone: "condition", icon: "GitBranch" },
+  delay: { group: "Esperas", tone: "wait", icon: "Clock" },
+  wait_until: { group: "Esperas", tone: "wait", icon: "CalendarClock" },
+  wait_reply: { group: "Esperas", tone: "wait", icon: "MessageSquareReply" },
+  send_whatsapp: { group: "Mensajes", tone: "message", icon: "MessageCircle" },
+  send_media: { group: "Mensajes", tone: "message", icon: "Image" },
+  add_tag: { group: "CRM", tone: "crm", icon: "Tag" },
+  remove_tag: { group: "CRM", tone: "crm", icon: "Eraser" },
+  set_stage: { group: "CRM", tone: "crm", icon: "Flag" },
+};
+
+const FALLBACK_META: BlockMeta = { group: "Otros", tone: "crm", icon: "Zap" };
+
+/** Los metadatos de un nodo del lienzo (disparador o paso). Un tipo desconocido cae a un aspecto neutro. */
+export function metaOfNode(data: CanvasNodeData): BlockMeta {
+  if (data.kind === "trigger") return (TRIGGER_META as Record<string, BlockMeta>)[data.triggerType] ?? { ...FALLBACK_META, tone: "trigger", icon: "Zap" };
+  return (STEP_META as Record<string, BlockMeta>)[data.stepType] ?? FALLBACK_META;
+}
+
+/** El tono de un tipo de nodo de React Flow (clave de `nodeTypes`), para el minimapa. */
+export function toneOfNodeKind(kind: string): NodeTone {
+  switch (kind) {
+    case "trigger":
+      return "trigger";
+    case "condition":
+      return "condition";
+    case "wait":
+    case "waitReply":
+      return "wait";
+    case "message":
+    case "media":
+      return "message";
+    default:
+      return "crm";
   }
 }
 
@@ -116,6 +194,10 @@ export type PaletteItem = {
   category: PaletteCategory;
   label: string;
   hint: string;
+  /** Subgrupo visual dentro de la categoría («Esperas», «Citas»…). Los de un mismo grupo van seguidos. */
+  group: string;
+  tone: NodeTone;
+  icon: IconName;
   kind: "trigger" | "step";
   triggerType?: FlowTriggerType;
   stepType?: StepType;
@@ -152,6 +234,14 @@ const TRIGGER_ORDER: (keyof typeof TRIGGER_ITEMS)[] = [
   "birthday",
 ];
 
+const stepItem = (
+  stepType: StepType,
+  category: PaletteCategory,
+  label: string,
+  hint: string,
+  extra: Partial<PaletteItem> = {}
+): PaletteItem => ({ id: `step:${stepType}`, category, kind: "step", stepType, label, hint, ...STEP_META[stepType], ...extra });
+
 export const PALETTE: PaletteItem[] = [
   ...TRIGGER_ORDER.map<PaletteItem>((t) => ({
     id: `trigger:${t}`,
@@ -159,17 +249,28 @@ export const PALETTE: PaletteItem[] = [
     kind: "trigger",
     triggerType: t,
     ...TRIGGER_ITEMS[t],
+    ...TRIGGER_META[t],
   })),
-  { id: "step:condition", category: "logic", kind: "step", stepType: "condition", label: "Condición (Sí / No)", hint: "Decide por qué camino sigue el flujo" },
-  { id: "step:delay", category: "logic", kind: "step", stepType: "delay", label: "Esperar tiempo", hint: "Una pausa, con hora de envío opcional" },
-  { id: "step:wait_until", category: "logic", kind: "step", stepType: "wait_until", label: "Esperar hasta la cita", hint: "Antes o después de la hora de la cita", needsBooking: true },
-  { id: "step:wait_reply", category: "logic", kind: "step", stepType: "wait_reply", label: "Esperar respuesta", hint: "Pausa hasta que el cliente conteste" },
-  { id: "step:send_whatsapp", category: "actions", kind: "step", stepType: "send_whatsapp", label: "Enviar WhatsApp", hint: "Texto libre o plantilla aprobada" },
-  { id: "step:send_media", category: "actions", kind: "step", stepType: "send_media", label: "Enviar multimedia", hint: "Imagen o video de tu biblioteca" },
-  { id: "step:add_tag", category: "actions", kind: "step", stepType: "add_tag", label: "Asignar etiqueta", hint: "Marca al contacto" },
-  { id: "step:remove_tag", category: "actions", kind: "step", stepType: "remove_tag", label: "Quitar etiqueta", hint: "Desmarca al contacto" },
-  { id: "step:set_stage", category: "actions", kind: "step", stepType: "set_stage", label: "Cambiar etapa", hint: "Mueve al lead en el pipeline" },
+  stepItem("condition", "logic", "Condición (Sí / No)", "Decide por qué camino sigue el flujo"),
+  stepItem("delay", "logic", "Esperar tiempo", "Una pausa de segundos a días, con hora de envío opcional"),
+  stepItem("wait_until", "logic", "Esperar hasta la cita", "Antes o después de la hora de la cita", { needsBooking: true }),
+  stepItem("wait_reply", "logic", "Esperar respuesta", "Pausa hasta que el cliente conteste"),
+  stepItem("send_whatsapp", "actions", "Enviar WhatsApp", "Texto libre o plantilla aprobada"),
+  stepItem("send_media", "actions", "Enviar multimedia", "Imagen o video de tu biblioteca"),
+  stepItem("add_tag", "actions", "Asignar etiqueta", "Marca al contacto"),
+  stepItem("remove_tag", "actions", "Quitar etiqueta", "Desmarca al contacto"),
+  stepItem("set_stage", "actions", "Cambiar etapa", "Mueve al lead en el pipeline"),
 ];
+
+/** ¿Un texto de búsqueda encaja con el bloque? Sin acentos ni mayúsculas, contra nombre, ayuda y subgrupo. */
+export function paletteMatches(item: Pick<PaletteItem, "label" | "hint" | "group">, query: string): boolean {
+  const norm = (t: string) => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const q = norm(query).trim();
+  if (!q) return true;
+  const hay = norm(`${item.label} ${item.hint} ${item.group}`);
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
 
 /** El tipo MIME propio con el que viaja un bloque al arrastrarlo de la paleta al lienzo. */
 export const PALETTE_DRAG_TYPE = "application/x-vocero-node";
@@ -260,4 +361,53 @@ function stableStringify(value: unknown): string {
 export function sameStepConfig(stepType: string, current: Record<string, unknown>, next: Record<string, unknown>): boolean {
   const normalized = parseStepConfig(stepType as StepType, current);
   return stableStringify(normalized.ok ? normalized.value : current) === stableStringify(next);
+}
+
+/* ─── Aristas: eliminar e insertar un paso en medio (lógica pura, la usa el lienzo) ─── */
+
+/** Lo mínimo de una arista del lienzo que estas funciones leen. */
+export type EdgeRef = { id: string; source: string; target: string; sourceHandle?: string | null };
+
+/**
+ * ¿Se puede insertar este tipo de paso en medio de una conexión? Solo los que tienen UNA salida normal («Siguiente»):
+ * en uno que ramifica (condición, esperar respuesta, esperar hasta la cita) habría que decidir cuál rama continúa.
+ */
+export function canInsertOnEdge(stepType: string): boolean {
+  const handles = handlesOf(stepType);
+  return handles.length === 1 && handles[0] === "default";
+}
+
+/** Quita una conexión. Devuelve las mismas aristas si el id no existe. */
+export function removeEdgeById<E extends EdgeRef>(edges: readonly E[], id: string): E[] {
+  return edges.filter((e) => e.id !== id);
+}
+
+/**
+ * Inserta un paso nuevo (`nodeId`) en medio de la conexión `id`: `origen —asa→ nuevo —default→ destino`. La del
+ * origen conserva su asa (`Sí`, `Confirma`…); ambas llevan el id que genera `edgeId`. Devuelve `null` si la conexión
+ * no existe o el tipo no se puede insertar. No toca el resto de las aristas.
+ */
+export function insertStepOnEdge(
+  edges: readonly EdgeRef[],
+  id: string,
+  stepType: string,
+  nodeId: string
+): { edges: EdgeRef[]; nodeId: string } | null {
+  const old = edges.find((e) => e.id === id);
+  if (!old || !canInsertOnEdge(stepType)) return null;
+  const handle = old.sourceHandle ?? "default";
+  const rest = edges.filter((e) => e.id !== id);
+  return {
+    nodeId,
+    edges: [
+      ...rest,
+      { id: edgeId(old.source, handle), source: old.source, target: nodeId, sourceHandle: handle },
+      { id: edgeId(nodeId, "default"), source: nodeId, target: old.target, sourceHandle: "default" },
+    ],
+  };
+}
+
+/** El punto medio entre dos posiciones (donde cae un paso insertado), redondeado a entero como el resto. */
+export function midpoint(a: Pos, b: Pos): Pos {
+  return { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) };
 }

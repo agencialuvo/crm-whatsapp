@@ -19,9 +19,12 @@ import {
   edgeId,
   edgeLabelOf,
   fromServerGraph,
+  insertStepOnEdge as insertStepOnEdgeRefs,
   isNewNodeId,
+  midpoint,
   newNodeId,
   nodeKindOf,
+  removeEdgeById,
   sameStepConfig,
   toPayload,
   type CanvasNodeData,
@@ -63,9 +66,10 @@ const rfEdge = (e: { id: string; source: string; target: string; sourceHandle?: 
     source: e.source,
     target: e.target,
     sourceHandle: e.sourceHandle ?? "default",
-    type: "smoothstep",
+    // La conexión propia del lienzo (rótulo de rama + botones al pasar/seleccionar): ver `vocero-edge.tsx`.
+    type: "vocero",
     markerEnd: { type: MarkerType.ArrowClosed },
-    ...(label ? { label, labelStyle: { fontSize: 11, fontWeight: 600 }, labelBgPadding: [6, 3] as [number, number], labelBgBorderRadius: 6 } : {}),
+    data: { label },
   };
 };
 
@@ -192,6 +196,41 @@ export function useFlowGraph(flowId: string) {
     setDirty(true);
   }, []);
 
+  /** Elimina una conexión (el botón de la línea; la Supr hace lo mismo por `onEdgesChange`). */
+  const deleteEdge = useCallback((id: string) => {
+    setEdges((es) => removeEdgeById(es, id));
+    setDirty(true);
+  }, []);
+
+  /**
+   * Inserta un paso nuevo en medio de una conexión: `origen —asa→ nuevo —Siguiente→ destino`. Solo tipos con una salida
+   * normal (`canInsertOnEdge`). El bloque cae entre los dos y queda seleccionado. Devuelve su id, o `null` si no se pudo.
+   */
+  const insertStepOnEdge = useCallback(
+    (id: string, stepType: string): string | null => {
+      const old = edges.find((e) => e.id === id);
+      const from = old && nodes.find((n) => n.id === old.source);
+      const to = old && nodes.find((n) => n.id === old.target);
+      if (!old || !from || !to) return null;
+      const result = insertStepOnEdgeRefs(edges, id, stepType, newNodeId());
+      if (!result) return null;
+      setEdges(result.edges.map(rfEdge));
+      setNodes((ns) => [
+        ...ns.map((n) => (n.selected ? { ...n, selected: false } : n)),
+        {
+          id: result.nodeId,
+          type: nodeKindOf(stepType),
+          position: midpoint(from.position, to.position),
+          selected: true,
+          data: { kind: "step", stepType, config: defaultConfigFor(stepType) },
+        },
+      ]);
+      setDirty(true);
+      return result.nodeId;
+    },
+    [nodes, edges]
+  );
+
   /* ─── Edición de bloques ─── */
 
   /** Suelta un bloque nuevo (de la paleta) y lo deja seleccionado. */
@@ -315,6 +354,8 @@ export function useFlowGraph(flowId: string) {
     onEdgesChange,
     onConnect,
     isValidConnection,
+    deleteEdge,
+    insertStepOnEdge,
     addStep,
     setTriggerType,
     updateStepConfig,

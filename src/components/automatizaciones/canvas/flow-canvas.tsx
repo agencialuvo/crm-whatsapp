@@ -11,9 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import type { MediaOption, StageOption, TagOption, TemplateOption } from "@/lib/automation-dto";
-import { PALETTE, PALETTE_DRAG_TYPE, nodeKindOf, type PaletteItem } from "@/lib/automation-canvas";
+import { PALETTE, PALETTE_DRAG_TYPE, toneOfNodeKind, type PaletteItem } from "@/lib/automation-canvas";
 import { cn } from "@/lib/utils";
-import { CanvasRefsContext } from "./canvas-context";
+import { CanvasEdgeActionsContext, CanvasRefsContext } from "./canvas-context";
+import { TONE_STYLES } from "./node-icons";
+import { VoceroEdge } from "./vocero-edge";
 import { InspectorPanel } from "./inspector/inspector-panel";
 import { NodePalette } from "./node-palette";
 import { ActionNode } from "./nodes/action-node";
@@ -35,6 +37,9 @@ const NODE_TYPES = {
   waitReply: WaitReplyNode,
   action: ActionNode,
 } as const;
+
+/** Estable por la misma razón que `NODE_TYPES`: un objeto nuevo en cada render remontaría todas las conexiones. */
+const EDGE_TYPES = { vocero: VoceroEdge } as const;
 
 /** El encuadre deja libre el espacio de la barra flotante (arriba) para que ningún bloque quede debajo. */
 const FIT_OPTIONS = { maxZoom: 1, padding: { top: "140px", right: "40px", bottom: "40px", left: "40px" } } as const;
@@ -199,6 +204,7 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
 
   return (
     <CanvasRefsContext.Provider value={{ templates, tags, stages, media }}>
+      <CanvasEdgeActionsContext.Provider value={{ deleteEdge: g.deleteEdge, insertStepOnEdge: (id, type) => void g.insertStepOnEdge(id, type), triggerType: g.triggerType }}>
       {/* Pantalla completa: la paleta, el lienzo y el panel comparten la altura del área; nada desplaza la página. */}
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background lg:flex-row">
         <NodePalette triggerType={g.triggerType} onAdd={addAtCenter} />
@@ -210,6 +216,7 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
             nodes={g.nodes}
             edges={g.edges}
             nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
             onNodesChange={g.onNodesChange}
             onEdgesChange={g.onEdgesChange}
             onConnect={g.onConnect}
@@ -228,7 +235,7 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
             <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} />
             {/* Zoom y «ver todo» abajo a la izquierda del lienzo; el mapa abajo a la derecha: fuera del flujo del DOM. */}
             <Controls showInteractive={false} position="bottom-left" />
-            <MiniMap pannable zoomable position="bottom-right" ariaLabel="Mapa del flujo" nodeColor={(n) => (nodeKindOf((n.type as string) ?? "") === "trigger" ? "var(--accent)" : "var(--text-4)")} />
+            <MiniMap pannable zoomable position="bottom-right" ariaLabel="Mapa del flujo" nodeColor={(n) => TONE_STYLES[toneOfNodeKind((n.type as string) ?? "")].mini} />
           </ReactFlow>
 
           {/* Barra flotante: no empuja nada, deja pasar el ratón al lienzo salvo sobre sus propios controles. */}
@@ -356,6 +363,7 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
           />
         )}
       </div>
+      </CanvasEdgeActionsContext.Provider>
     </CanvasRefsContext.Provider>
   );
 }

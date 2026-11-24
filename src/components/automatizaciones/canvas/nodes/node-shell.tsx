@@ -3,17 +3,11 @@
 import type { ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { AlertTriangle, type LucideIcon } from "lucide-react";
-import type { NodeIssues } from "@/lib/automation-canvas";
+import type { NodeIssues, NodeTone } from "@/lib/automation-canvas";
+import { TONE_STYLES } from "../node-icons";
 import { cn } from "@/lib/utils";
 import type { EdgeHandle } from "@/lib/automation";
 
-/** El color de la franja del encabezado por categoría: disparador, lógica/esperas o acción. */
-export type NodeTone = "trigger" | "logic" | "action";
-const TONE: Record<NodeTone, string> = {
-  trigger: "bg-brand-tint text-brand-text",
-  logic: "bg-warning-tint text-warning-text",
-  action: "bg-subtle text-text-2",
-};
 
 /**
  * La carcasa común de todos los bloques del lienzo: encabezado con icono y título, cuerpo con el resumen de lo
@@ -52,6 +46,9 @@ export function NodeShell({
       className={cn(
         "rounded-lg border bg-card text-left shadow-sm transition-shadow",
         width,
+        // Borde izquierdo grueso del color del rol: se reconoce el tipo de bloque de lejos.
+        "border-l-4",
+        TONE_STYLES[tone].bar,
         selected ? "border-brand ring-2 ring-brand" : "border-border-strong",
         errors > 0 && "border-danger-soft",
         // El asa de salida cuelga del borde inferior: sin rótulos, la carcasa termina en el cuerpo.
@@ -60,7 +57,7 @@ export function NodeShell({
     >
       {target && <Handle type="target" position={Position.Top} />}
 
-      <div className={cn("flex items-center gap-2 rounded-t-lg px-3 py-2", TONE[tone])}>
+      <div className={cn("flex items-center gap-2 rounded-t-md px-3 py-2", TONE_STYLES[tone].head)}>
         <Icon className="h-4 w-4 shrink-0" strokeWidth={1.8} aria-hidden />
         <p className="min-w-0 flex-1 truncate text-[13px] font-semibold">{title}</p>
         {(errors > 0 || warnings > 0) && (

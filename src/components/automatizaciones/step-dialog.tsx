@@ -41,7 +41,14 @@ const STEP_TYPE_OPTIONS: SearchSelectOption[] = STEP_TYPES.map((t) => ({ value: 
 
 const BRANCH_OPTIONS: SearchSelectOption[] = BRANCH_ACTIONS.map((a) => ({ value: a, label: BRANCH_ACTION_LABELS[a] }));
 
-const UNIT_OPTIONS: SearchSelectOption[] = (
+/** Unidades de las esperas ancladas (`wait_until`, tiempo límite de `wait_reply`): guardan MINUTOS, sin segundos. */
+const UNIT_OPTIONS: SearchSelectOption[] = (["minutes", "hours", "days"] as const).map((u) => ({
+  value: u,
+  label: DELAY_UNIT_LABELS[u].other,
+}));
+
+/** Unidades del paso «Esperar»: las mismas más los segundos. */
+const DELAY_UNIT_OPTIONS: SearchSelectOption[] = (
   Object.keys(DELAY_UNIT_LABELS) as (keyof typeof DELAY_UNIT_LABELS)[]
 ).map((u) => ({ value: u, label: DELAY_UNIT_LABELS[u].other }));
 
@@ -723,7 +730,7 @@ export function StepDialog({
                 id="step-amount"
                 inputMode="numeric"
                 value={amount}
-                maxLength={3}
+                maxLength={4}
                 aria-invalid={!!errors.amount}
                 disabled={busy}
                 // Solo dígitos: lo demás no se puede teclear ni pegar.
@@ -741,12 +748,16 @@ export function StepDialog({
                   setUnit(v);
                   clear("unit");
                 }}
-                options={UNIT_OPTIONS}
+                options={DELAY_UNIT_OPTIONS}
                 searchPlaceholder="Buscar unidad…"
                 ariaLabel="Unidad de tiempo"
                 disabled={busy}
               />
             </Field>
+            <p className="text-xs text-text-3 sm:col-span-2">
+              El motor revisa las esperas cada ~10 segundos: una espera en segundos puede tardar hasta ~10 s más. Máximo 3600
+              segundos; en minutos, horas y días, 366.
+            </p>
           </div>
         ) : (
           <>

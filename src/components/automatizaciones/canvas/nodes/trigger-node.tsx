@@ -1,13 +1,13 @@
 "use client";
 
 import type { NodeProps } from "@xyflow/react";
-import { Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PickerNode } from "@/lib/ad-picker";
 import { adScopeOf, parseAdReferralConfig } from "@/lib/automation";
 import { describeTrigger, triggerLabel } from "@/lib/automation-dto";
 import { fetchResolved } from "@/components/automatizaciones/ad-options-client";
-import type { CanvasNodeData } from "@/lib/automation-canvas";
+import { metaOfNode, type CanvasNodeData } from "@/lib/automation-canvas";
+import { ICONS } from "../node-icons";
 import { useCanvasRefs } from "../canvas-context";
 import { NodeShell } from "./node-shell";
 
@@ -36,8 +36,8 @@ export function TriggerNode({ data, selected }: NodeProps & { data: CanvasNodeDa
   if (data.kind !== "trigger") return null;
   return (
     <NodeShell
-      icon={Zap}
-      tone="trigger"
+      icon={ICONS[metaOfNode(data).icon]}
+      tone={metaOfNode(data).tone}
       title={triggerLabel(data.triggerType)}
       detail={describeTrigger(data.triggerType, data.triggerConfig, stages, adNode)}
       selected={selected}

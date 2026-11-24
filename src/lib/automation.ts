@@ -60,8 +60,11 @@ export type SendMediaConfig = z.infer<typeof sendMediaConfigSchema>;
 /** Con la ventana de 24 h cerrada un adjunto no puede salir: no hay plantilla de imagen o video. */
 export const OUT_OF_WINDOW_MEDIA_ERROR = "out_of_window_media_requires_open_window";
 
-export const DELAY_UNITS = ["minutes", "hours", "days"] as const;
-const UNIT_MS = { minutes: 60_000, hours: 3_600_000, days: 86_400_000 } as const;
+export const DELAY_UNITS = ["seconds", "minutes", "hours", "days"] as const;
+const UNIT_MS = { seconds: 1_000, minutes: 60_000, hours: 3_600_000, days: 86_400_000 } as const;
+
+/** Tope de la cantidad por unidad: hasta una hora en segundos; 366 en el resto (como siempre). */
+export const DELAY_MAX_BY_UNIT = { seconds: 3600, minutes: 366, hours: 366, days: 366 } as const;
 
 /* ─── Ventana horaria de envío ─── */
 
@@ -123,13 +126,20 @@ export function applySendWindow(at: Date, window: SendWindow, timezone: string):
   return zonedWallClockToUtc(tomorrow, hh(window.fromHour), timezone) ?? at;
 }
 
-export const delayConfigSchema = z.object({
-  name: z.string().trim().max(120).optional(),
-  amount: z.number().int().positive().max(366),
-  unit: z.enum(DELAY_UNITS),
-  /** Opcional: tras esperar, no salir de madrugada o forzar una hora fija. */
-  window: sendWindowSchema.optional(),
-});
+export const delayConfigSchema = z
+  .object({
+    name: z.string().trim().max(120).optional(),
+    amount: z.number().int().positive().max(DELAY_MAX_BY_UNIT.seconds),
+    unit: z.enum(DELAY_UNITS),
+    /** Opcional: tras esperar, no salir de madrugada o forzar una hora fija. */
+    window: sendWindowSchema.optional(),
+  })
+  .superRefine((c, ctx) => {
+    const max = DELAY_MAX_BY_UNIT[c.unit];
+    if (c.amount > max) {
+      ctx.addIssue({ code: z.ZodIssueCode.too_big, type: "number", maximum: max, inclusive: true, path: ["amount"], message: `Como máximo ${max}` });
+    }
+  });
 export type DelayConfig = z.infer<typeof delayConfigSchema>;
 
 export function delayToMs(cfg: Pick<DelayConfig, "amount" | "unit">): number {

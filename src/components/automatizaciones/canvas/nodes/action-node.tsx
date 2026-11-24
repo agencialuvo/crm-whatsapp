@@ -1,9 +1,9 @@
 "use client";
 
 import type { NodeProps } from "@xyflow/react";
-import { Flag, Tag } from "lucide-react";
 import { describeStep } from "@/lib/automation-dto";
-import type { CanvasNodeData } from "@/lib/automation-canvas";
+import { metaOfNode, type CanvasNodeData } from "@/lib/automation-canvas";
+import { ICONS } from "../node-icons";
 import { useCanvasRefs } from "../canvas-context";
 import { NodeShell } from "./node-shell";
 
@@ -14,8 +14,8 @@ export function ActionNode({ data, selected }: NodeProps & { data: CanvasNodeDat
   const { title, detail } = describeStep({ stepType: data.stepType, config: data.config }, refs.templates, refs);
   return (
     <NodeShell
-      icon={data.stepType === "set_stage" ? Flag : Tag}
-      tone="action"
+      icon={ICONS[metaOfNode(data).icon]}
+      tone={metaOfNode(data).tone}
       title={title}
       detail={detail}
       selected={selected}

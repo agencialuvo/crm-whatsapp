@@ -74,6 +74,8 @@ describe("pasos", () => {
     expect(describeDelay(2, "days")).toBe("Esperar 2 días");
     expect(describeDelay(1, "hours")).toBe("Esperar 1 hora");
     expect(describeDelay(30, "minutes")).toBe("Esperar 30 minutos");
+    expect(describeDelay(1, "seconds")).toBe("Esperar 1 segundo");
+    expect(describeDelay(45, "seconds")).toBe("Esperar 45 segundos");
   });
   it("un paso de espera", () => {
     expect(describeStep({ stepType: "delay", config: { amount: 2, unit: "hours" } })).toEqual({

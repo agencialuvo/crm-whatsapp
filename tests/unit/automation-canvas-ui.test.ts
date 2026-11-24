@@ -3,6 +3,15 @@ import { EDGE_HANDLES } from "@/lib/automation";
 import {
   KNOWN_STEP_TYPES,
   PALETTE,
+  STEP_META,
+  TRIGGER_META,
+  canInsertOnEdge,
+  insertStepOnEdge,
+  metaOfNode,
+  midpoint,
+  paletteMatches,
+  removeEdgeById,
+  toneOfNodeKind,
   TRIGGER_NODE_ID,
   defaultConfigFor,
   defaultTriggerConfig,
@@ -251,5 +260,127 @@ describe("sameStepConfig (abrir un bloque sin tocarlo no es un cambio)", () => {
   it("una configuración guardada inválida (aún sin configurar) se compara tal cual", () => {
     expect(sameStepConfig("add_tag", {}, {})).toBe(true);
     expect(sameStepConfig("add_tag", {}, { tagId: "t" })).toBe(false);
+  });
+});
+
+
+describe("metadatos de los bloques (una sola fuente)", () => {
+  it("cada item de la paleta trae subgrupo, tono e icono, y los de un grupo van seguidos", () => {
+    for (const i of PALETTE) {
+      expect(i.group, i.id).toBeTruthy();
+      expect(i.tone, i.id).toBeTruthy();
+      expect(i.icon, i.id).toBeTruthy();
+    }
+    for (const cat of ["triggers", "logic", "actions"]) {
+      const groups = PALETTE.filter((i) => i.category === cat).map((i) => i.group);
+      const seen = new Set<string>();
+      groups.forEach((g, k) => {
+        if (k > 0 && groups[k - 1] !== g) expect(seen.has(g), `${cat}: «${g}» partido en dos`).toBe(false);
+        seen.add(g);
+      });
+    }
+  });
+  it("hay metadatos para todos los pasos y todos los disparadores que se pueden crear", () => {
+    for (const t of STEP_TYPES) expect(STEP_META[t], t).toBeDefined();
+    for (const t of CREATABLE_TRIGGERS) expect(TRIGGER_META[t], t).toBeDefined();
+  });
+  it("el tono sigue el rol: disparadores, decisión, esperas, mensajes y CRM", () => {
+    expect(PALETTE.filter((i) => i.kind === "trigger").every((i) => i.tone === "trigger")).toBe(true);
+    expect(STEP_META.condition.tone).toBe("condition");
+    expect(["delay", "wait_until", "wait_reply"].every((t) => STEP_META[t as StepType].tone === "wait")).toBe(true);
+    expect(["send_whatsapp", "send_media"].every((t) => STEP_META[t as StepType].tone === "message")).toBe(true);
+    expect(["add_tag", "remove_tag", "set_stage"].every((t) => STEP_META[t as StepType].tone === "crm")).toBe(true);
+  });
+  it("metaOfNode y toneOfNodeKind coinciden con los metadatos; un tipo desconocido cae a un aspecto neutro", () => {
+    expect(metaOfNode({ kind: "step", stepType: "delay", config: {} }).tone).toBe("wait");
+    expect(metaOfNode({ kind: "trigger", triggerType: "birthday", triggerConfig: null }).icon).toBe("Cake");
+    expect(metaOfNode({ kind: "step", stepType: "inventado", config: {} }).tone).toBe("crm");
+    expect(toneOfNodeKind("waitReply")).toBe("wait");
+    expect(toneOfNodeKind("media")).toBe("message");
+    expect(toneOfNodeKind("action")).toBe("crm");
+  });
+  it("el buscador ignora acentos y mayúsculas y busca en nombre, ayuda y subgrupo", () => {
+    const find = (q: string) => PALETTE.filter((i) => paletteMatches(i, q)).map((i) => i.id);
+    expect(find("")).toHaveLength(PALETTE.length);
+    expect(find("ESPERAR")).toEqual(expect.arrayContaining(["step:delay", "step:wait_until", "step:wait_reply"]));
+    expect(find("no asistio")).toContain("trigger:booking_no_show");
+    expect(find("citas")).toEqual(["trigger:booking_created", "trigger:booking_confirmed", "trigger:booking_no_show"]);
+    expect(find("cita")).toEqual(expect.arrayContaining(["trigger:booking_created", "step:wait_until"]));
+    expect(find("etiqueta")).toEqual(["step:add_tag", "step:remove_tag"]);
+    expect(find("zzzz")).toEqual([]);
+  });
+});
+
+describe("conexiones: eliminar e insertar un paso en medio", () => {
+  const A = "stp_a";
+  const B = "stp_b";
+  const base = [
+    { id: edgeId(TRIGGER_NODE_ID, "default"), source: TRIGGER_NODE_ID, target: A, sourceHandle: "default" },
+    { id: edgeId(A, "true"), source: A, target: B, sourceHandle: "true" },
+    { id: edgeId(A, "false"), source: A, target: "stp_c", sourceHandle: "false" },
+  ];
+
+  it("solo se insertan tipos con una única salida «Siguiente»", () => {
+    for (const t of ["send_whatsapp", "send_media", "delay", "add_tag", "remove_tag", "set_stage"]) expect(canInsertOnEdge(t), t).toBe(true);
+    for (const t of ["condition", "wait_reply", "wait_until"]) expect(canInsertOnEdge(t), t).toBe(false);
+  });
+
+  it("eliminar quita solo esa conexión", () => {
+    const out = removeEdgeById(base, edgeId(A, "true"));
+    expect(out.map((e) => e.id)).toEqual([edgeId(TRIGGER_NODE_ID, "default"), edgeId(A, "false")]);
+    expect(removeEdgeById(base, "no_existe")).toHaveLength(base.length);
+  });
+
+  it("insertar conserva el asa del origen, encadena por «default» y regenera los ids", () => {
+    const r = insertStepOnEdge(base, edgeId(A, "true"), "delay", "new_x")!;
+    expect(r.nodeId).toBe("new_x");
+    expect(r.edges).toHaveLength(base.length + 1);
+    expect(r.edges.find((e) => e.id === edgeId(A, "true"))).toMatchObject({ source: A, target: "new_x", sourceHandle: "true" });
+    expect(r.edges.find((e) => e.id === edgeId("new_x", "default"))).toMatchObject({ source: "new_x", target: B, sourceHandle: "default" });
+    // Lo demás queda igual.
+    expect(r.edges.find((e) => e.id === edgeId(A, "false"))!.target).toBe("stp_c");
+    expect(r.edges.find((e) => e.source === TRIGGER_NODE_ID)!.target).toBe(A);
+  });
+
+  it("insertar en la conexión del disparador cambia la entrada del flujo", () => {
+    const r = insertStepOnEdge(base, edgeId(TRIGGER_NODE_ID, "default"), "send_whatsapp", "new_y")!;
+    expect(r.edges.find((e) => e.source === TRIGGER_NODE_ID)!.target).toBe("new_y");
+    expect(r.edges.find((e) => e.source === "new_y")!.target).toBe(A);
+  });
+
+  it("no inserta tipos que ramifican ni en una conexión que no existe", () => {
+    expect(insertStepOnEdge(base, edgeId(A, "true"), "condition", "new_z")).toBeNull();
+    expect(insertStepOnEdge(base, "no_existe", "delay", "new_z")).toBeNull();
+  });
+
+  it("el resultado sigue siendo un grafo válido y un payload que la ruta acepta", () => {
+    const nodes = [
+      { id: TRIGGER_NODE_ID, type: "trigger", config: { triggerType: "lead_created", triggerConfig: null } },
+      { id: A, type: "send_whatsapp", config: { content: "Hola" } },
+      { id: B, type: "send_whatsapp", config: { content: "Adiós" } },
+    ];
+    const edges = [
+      { id: edgeId(TRIGGER_NODE_ID, "default"), source: TRIGGER_NODE_ID, target: A, sourceHandle: "default" },
+      { id: edgeId(A, "default"), source: A, target: B, sourceHandle: "default" },
+    ];
+    const r = insertStepOnEdge(edges, edgeId(A, "default"), "delay", "new_d")!;
+    const next = [...nodes, { id: "new_d", type: "delay", config: { amount: 30, unit: "seconds" } }];
+    const check = validateGraph({ nodes: next, edges: r.edges.map((e) => ({ source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? "default" })) });
+    expect(check.errors).toEqual([]);
+    expect(check.warnings.filter((w) => w.code === "unreachable")).toEqual([]);
+    const payload = toPayload(
+      next.map((n) => ({
+        id: n.id,
+        type: n.type,
+        position: { x: 0, y: 0 },
+        data: n.type === "trigger" ? { kind: "trigger" as const, triggerType: "lead_created", triggerConfig: null } : { kind: "step" as const, stepType: n.type, config: n.config },
+      })),
+      r.edges
+    );
+    expect(graphPayloadSchema.safeParse(payload).success).toBe(true);
+  });
+
+  it("el punto medio cae entre los dos bloques, en enteros", () => {
+    expect(midpoint({ x: 0, y: 0 }, { x: 301, y: 161 })).toEqual({ x: 151, y: 81 });
   });
 });

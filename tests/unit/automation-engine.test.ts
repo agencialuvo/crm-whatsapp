@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  delayConfigSchema,
   BACKOFF_BASE_MS,
   BACKOFF_MAX_MS,
   OUT_OF_WINDOW_ERROR,
@@ -68,6 +69,7 @@ describe("configuración de pasos y variables", () => {
     expect(sendWhatsappConfigSchema.safeParse({ templateId: "tpl_1" }).success).toBe(true);
   });
   it("convierte esperas a milisegundos", () => {
+    expect(delayToMs({ amount: 45, unit: "seconds" })).toBe(45_000);
     expect(delayToMs({ amount: 30, unit: "minutes" })).toBe(1_800_000);
     expect(delayToMs({ amount: 2, unit: "hours" })).toBe(7_200_000);
     expect(delayToMs({ amount: 1, unit: "days" })).toBe(86_400_000);
@@ -346,6 +348,21 @@ describe("processRow — esperas", () => {
     expect(t.deps.sendText).not.toHaveBeenCalled();
     expect(t.logs[0]).toMatchObject({ status: "success" });
     expect(t.logs[0]!.metadata).toMatchObject({ nextAt: nextAt.toISOString(), step: { stepType: "delay" } });
+  });
+  it("delay en segundos encola el siguiente paso con precisión de segundos", async () => {
+    const t = setup({ step: { stepType: "delay", config: { amount: 45, unit: "seconds" } } });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, new Date(NOW.getTime() + 45_000));
+  });
+  it("delay valida el tope por unidad (3600 en segundos, 366 en el resto)", () => {
+    const ok = (amount: number, unit: string) => delayConfigSchema.safeParse({ amount, unit }).success;
+    expect(ok(3600, "seconds")).toBe(true);
+    expect(ok(3601, "seconds")).toBe(false);
+    expect(ok(366, "minutes")).toBe(true);
+    expect(ok(367, "minutes")).toBe(false);
+    expect(ok(367, "hours")).toBe(false);
+    expect(ok(367, "days")).toBe(false);
+    expect(ok(0, "seconds")).toBe(false);
   });
   it("una espera inválida falla a la vista", async () => {
     const t = setup({ step: { stepType: "delay", config: { amount: -1, unit: "hours" } } });

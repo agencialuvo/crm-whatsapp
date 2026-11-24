@@ -87,6 +87,9 @@ describe("stepCreateSchema", () => {
   });
   it("delay valida cantidad y unidad", () => {
     expect(stepCreateSchema.safeParse({ stepType: "delay", config: { amount: 2, unit: "hours" } }).success).toBe(true);
+    expect(stepCreateSchema.safeParse({ stepType: "delay", config: { amount: 30, unit: "seconds" } }).success).toBe(true);
+    expect(stepCreateSchema.safeParse({ stepType: "delay", config: { amount: 3601, unit: "seconds" } }).success).toBe(false);
+    expect(stepCreateSchema.safeParse({ stepType: "delay", config: { amount: 367, unit: "minutes" } }).success).toBe(false);
     for (const config of [{ amount: 0, unit: "hours" }, { amount: 1, unit: "weeks" }, { amount: 1.5, unit: "days" }, {}]) {
       expect(stepCreateSchema.safeParse({ stepType: "delay", config }).success).toBe(false);
     }

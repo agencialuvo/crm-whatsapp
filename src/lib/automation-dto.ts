@@ -184,6 +184,7 @@ export const STEP_LABELS: Record<string, string> = {
 export const stepLabel = (type: string): string => STEP_LABELS[type] ?? type;
 
 export const DELAY_UNIT_LABELS = {
+  seconds: { one: "segundo", other: "segundos" },
   minutes: { one: "minuto", other: "minutos" },
   hours: { one: "hora", other: "horas" },
   days: { one: "día", other: "días" },
