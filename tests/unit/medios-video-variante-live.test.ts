@@ -414,14 +414,15 @@ describe.skipIf(!live)("video optimizado para WhatsApp (Paso 1) contra Postgres"
   });
 
   describe("el envío por WhatsApp sigue exigiendo ≤ 16 MB", () => {
-    it("un video original de más de 16 MB da `too_large`; un MOV, `unsupported`; un MP4 de 5 MB con archivo, ok", async () => {
+    it("un video original de más de 16 MB da `too_large`; un MOV, `unsupported`; un MP4 de 5 MB con archivo, ok; con variante lista sin su archivo, `file_missing`", async () => {
       const grande = await insertar({ sizeBytes: 20 * MB });
       expect(await automationMedia.loadMediaFile(org, grande)).toEqual({ ok: false, reason: "too_large" });
 
       const mov = await insertar({ mimeType: "video/quicktime", sizeBytes: 2 * MB });
       expect(await automationMedia.loadMediaFile(org, mov)).toEqual({ ok: false, reason: "unsupported" });
 
-      // Aunque una variante esté lista, en el Paso 1 el envío todavía NO la usa: un original grande sigue sin enviarse.
+      // Desde el Paso 3a, con la variante lista el envío la USA (su peso y MIME); si falta su archivo en `medios-wa`, no se
+      // manda el original grande ni se sube a ciegas: `file_missing`. El caso feliz está en `medios-envio-live.test.ts`.
       const conVariante = await insertar({
         sizeBytes: 20 * MB,
         variantStatus: "ready",
@@ -429,7 +430,7 @@ describe.skipIf(!live)("video optimizado para WhatsApp (Paso 1) contra Postgres"
         variantSizeBytes: 9 * MB,
         variantMimeType: "video/mp4",
       });
-      expect(await automationMedia.loadMediaFile(org, conVariante)).toEqual({ ok: false, reason: "too_large" });
+      expect(await automationMedia.loadMediaFile(org, conVariante)).toEqual({ ok: false, reason: "file_missing" });
     });
   });
 });

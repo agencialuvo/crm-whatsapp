@@ -9,6 +9,7 @@ import { apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog } from "@/components/negocio/modal";
 import { absoluteMediaUrl, copyText } from "@/components/medios/copy-url";
 import { MedioDialog } from "@/components/medios/medio-dialog";
+import { fusionarVariantes, hayOptimizando, insigniaDeEnvio, origenDeVista } from "@/lib/medios-estado";
 import { subirArchivo } from "@/components/medios/upload";
 import {
   acceptMedios,
@@ -69,6 +70,31 @@ export function MediosClient({ optimizarVideo = false }: { /** La bandera `MEDIA
       if (copiadoTimer.current) clearTimeout(copiadoTimer.current);
     };
   }, [cargar]);
+
+  // Mientras algún video se optimiza, se vuelve a preguntar cada ~5 s (solo con la pestaña visible) y se mezclan SOLO los
+  // campos de la variante por id: así las miniaturas (y su URL firmada) no parpadean. Se detiene al terminar o desmontar.
+  const optimizando = hayOptimizando(medios);
+  useEffect(() => {
+    if (!optimizando) return;
+    let vivo = true;
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const r = await apiFetch<{ medios: MedioDto[] }>("/api/medios");
+        if (vivo) setMedios((prev) => (prev ? fusionarVariantes(prev, r.medios) : prev));
+      } catch {
+        /* un fallo de red puntual no cambia nada: se reintenta en el próximo ciclo */
+      }
+    };
+    const timer = setInterval(() => void tick(), 5000);
+    const alVolver = () => void tick();
+    document.addEventListener("visibilitychange", alVolver);
+    return () => {
+      vivo = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", alVolver);
+    };
+  }, [optimizando]);
 
   async function copiar(m: MedioDto) {
     const ok = await copyText(absoluteMediaUrl(m.ruta));
@@ -415,7 +441,7 @@ export function MediosClient({ optimizarVideo = false }: { /** La bandera `MEDIA
                     <>
                       {/* #t=0.1: pinta un fotograma como miniatura sin reproducir. */}
                       <video
-                        src={`${m.urlFirmada ?? m.ruta}#t=0.1`}
+                        src={`${origenDeVista(m)}#t=0.1`}
                         preload="metadata"
                         muted
                         playsInline
@@ -436,11 +462,22 @@ export function MediosClient({ optimizarVideo = false }: { /** La bandera `MEDIA
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={m.urlFirmada ?? m.ruta} alt="" loading="lazy" className="h-full w-full object-cover" />
                   )}
-                  {m.noEnviable && (
-                    <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white">
-                      No se envía por WhatsApp
-                    </span>
-                  )}
+                  {(() => {
+                    const ins = insigniaDeEnvio(m);
+                    if (!ins) return null;
+                    return (
+                      <span
+                        className={cn(
+                          "absolute bottom-1.5 left-1.5 flex max-w-[calc(100%-12px)] items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold text-white",
+                          ins.tono === "error" ? "bg-danger" : ins.tono === "ok" ? "bg-emerald-700/90" : "bg-black/70"
+                        )}
+                      >
+                        {ins.tono === "info" && <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />}
+                        {ins.tono === "error" && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
+                        <span className="truncate">{ins.texto}</span>
+                      </span>
+                    );
+                  })()}
                 </span>
                 <span className="block px-2.5 py-2">
                   <span className="block truncate text-[13px] font-semibold">{m.nombre}</span>
@@ -524,6 +561,7 @@ export function MediosClient({ optimizarVideo = false }: { /** La bandera `MEDIA
           onRenamed={(nuevo) =>
             setMedios((prev) => (prev ?? []).map((x) => (x.id === nuevo.id ? nuevo : x)))
           }
+          onActualizado={(nuevo) => setMedios((prev) => (prev ?? []).map((x) => (x.id === nuevo.id ? nuevo : x)))}
           onDelete={() => setBorrando([medioViendo])}
         />
       )}

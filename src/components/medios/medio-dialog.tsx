@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Copy, Download, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Copy, Download, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Modal } from "@/components/negocio/modal";
 import { formatBytes, type MedioDto } from "@/lib/medios";
+import { origenDeVista } from "@/lib/medios-estado";
 
 /**
  * Módulo Medios — vista de un archivo en una ventana compacta y centrada: la
@@ -25,6 +26,7 @@ export function MedioDialog({
   copiado,
   onCopy,
   onRenamed,
+  onActualizado,
   onDelete,
 }: {
   medio: MedioDto;
@@ -37,6 +39,8 @@ export function MedioDialog({
   copiado: boolean;
   onCopy: () => void;
   onRenamed: (medio: MedioDto) => void;
+  /** El medio cambió por otra acción (p. ej. se reencoló la optimización): el padre reemplaza la tarjeta. */
+  onActualizado: (medio: MedioDto) => void;
   onDelete: () => void;
 }) {
   // El borrador se reinicia al pasar a otro archivo (el padre lo remonta con `key`).
@@ -44,6 +48,21 @@ export function MedioDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guardado, setGuardado] = useState(false);
+  const [reintentando, setReintentando] = useState(false);
+  const [errorReintento, setErrorReintento] = useState<string | null>(null);
+
+  async function reintentar() {
+    setReintentando(true);
+    setErrorReintento(null);
+    try {
+      const r = await apiFetch<{ medio: MedioDto }>(`/api/medios/${medio.id}/optimizar`, { method: "POST" });
+      onActualizado(r.medio);
+    } catch (err) {
+      setErrorReintento(describeError(err));
+    } finally {
+      setReintentando(false);
+    }
+  }
 
   const limpio = nombre.replace(/\s+/g, " ").trim();
   const cambio = limpio !== medio.nombre;
@@ -101,7 +120,7 @@ export function MedioDialog({
           {medio.tipo === "video" ? (
             <video
               key={medio.id}
-              src={medio.urlFirmada ?? medio.ruta}
+              src={origenDeVista(medio)}
               controls
               playsInline
               className="max-h-[45vh] max-w-full rounded bg-black"
@@ -172,6 +191,8 @@ export function MedioDialog({
           )}
         </form>
 
+        {medio.tipo === "video" && <SeccionWhatsapp medio={medio} reintentando={reintentando} error={errorReintento} onReintentar={() => void reintentar()} />}
+
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" onClick={onCopy} disabled={busy}>
@@ -199,5 +220,60 @@ export function MedioDialog({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** El estado del video para WhatsApp: qué se envía, su peso, el error legible si falló y el botón de reintento. */
+function SeccionWhatsapp({
+  medio,
+  reintentando,
+  error,
+  onReintentar,
+}: {
+  medio: MedioDto;
+  reintentando: boolean;
+  error: string | null;
+  onReintentar: () => void;
+}) {
+  const texto =
+    medio.envio === "listo"
+      ? `Listo para WhatsApp${medio.varianteBytes ? ` · ${formatBytes(medio.varianteBytes)}` : ""}. Se envía una versión ligera; el original no se toca.`
+      : medio.envio === "optimizando"
+        ? "Optimizando para WhatsApp… puede tardar unos minutos. Esta ventana se actualiza sola."
+        : medio.envio === "fallo"
+          ? `No se pudo optimizar el video${medio.varianteError ? `: ${medio.varianteError}` : "."}${medio.noEnviable ? "" : " Se enviará el original, que ya cabe en WhatsApp."}`
+          : medio.envio === "no_enviable"
+            ? "Este video no se puede enviar por WhatsApp tal cual (pesa más de 16 MB o es MOV) y no tiene versión optimizada."
+            : "Se envía tal cual: ya cabe en WhatsApp.";
+  const mal = medio.envio === "fallo" || medio.envio === "no_enviable";
+  return (
+    <section aria-label="WhatsApp" className="space-y-2 rounded-md border bg-subtle px-3 py-2.5">
+      <p className="flex items-start gap-2 text-xs font-semibold text-text-2">
+        {medio.envio === "optimizando" ? (
+          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+        ) : mal ? (
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger-text" aria-hidden />
+        ) : (
+          <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+        )}
+        <span>
+          WhatsApp
+          <span role="status" className={`block font-normal ${mal ? "text-danger-text" : "text-text-2"}`}>
+            {texto}
+          </span>
+        </span>
+      </p>
+      {medio.puedeReintentar && (
+        <Button type="button" variant="outline" onClick={onReintentar} disabled={reintentando}>
+          {reintentando ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
+          {reintentando ? "Reintentando…" : "Reintentar optimización"}
+        </Button>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-danger-text">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }

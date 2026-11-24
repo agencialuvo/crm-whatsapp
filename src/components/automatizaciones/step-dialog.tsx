@@ -36,6 +36,7 @@ import { Switch } from "@/components/ui/switch";
 import { CodeJsFields, SetVarFields, SwitchFields, VarEqualsFields, casesFromConfig, casesToConfig, caseErrors, type CaseForm } from "@/components/automatizaciones/step-extras";
 import { DEFAULT_CODE_JS } from "@/lib/automation-canvas";
 import { tagColorClass } from "@/lib/tags";
+import { avisoDeMedioEnPaso, etiquetaDeOpcion, seOfreceEnPaso } from "@/lib/medios-estado";
 import { countVariables } from "@/lib/templates";
 
 const NO_MEDIA: MediaOption[] = [];
@@ -231,11 +232,12 @@ export function StepDialog({
     // 048: lo que WhatsApp no manda (AVIF, un video antiguo de más de 16 MB) no se ofrece: fallaría al enviarse.
     () =>
       media
-        .filter((m) => !m.noEnviable || m.id === mediaId)
-        .map((m) => ({ value: m.id, label: `${m.nombre} · ${m.tipo === "video" ? "Video" : m.tipo === "document" ? "PDF" : "Imagen"}` })),
+        .filter((m) => seOfreceEnPaso(m, mediaId))
+        .map((m) => ({ value: m.id, label: etiquetaDeOpcion(m) })),
     [media, mediaId]
   );
   const chosenMedia = media.find((m) => m.id === mediaId);
+  const avisoMedio = avisoDeMedioEnPaso(chosenMedia);
   const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
   const stageOptions = useMemo<SearchSelectOption[]>(() => stages.map((s) => ({ value: s.id, label: s.name })), [stages]);
   const ruleOptions = useMemo<SearchSelectOption[]>(
@@ -839,6 +841,18 @@ export function StepDialog({
               )}
               {mediaId && !chosenMedia && <p className="text-xs text-danger-text">Ese archivo ya no está en la biblioteca: elige otro.</p>}
             </Field>
+            {avisoMedio && (
+              <p
+                role={avisoMedio.tono === "error" ? "alert" : "status"}
+                className={
+                  avisoMedio.tono === "error"
+                    ? "rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-xs text-danger-text"
+                    : "rounded-md border bg-subtle px-3 py-2 text-xs text-text-2"
+                }
+              >
+                {avisoMedio.texto}
+              </p>
+            )}
             {chosenMedia && (
               <div className="overflow-hidden rounded-md border bg-subtle">
                 {chosenMedia.tipo === "document" ? (
@@ -846,7 +860,7 @@ export function StepDialog({
                     PDF · {chosenMedia.nombre}
                   </a>
                 ) : chosenMedia.tipo === "video" ? (
-                  <video src={chosenMedia.ruta} controls preload="metadata" className="max-h-56 w-full bg-black" aria-label={`Vista previa de ${chosenMedia.nombre}`} />
+                  <video src={chosenMedia.urlVariante ?? chosenMedia.ruta} controls preload="metadata" className="max-h-56 w-full bg-black" aria-label={`Vista previa de ${chosenMedia.nombre}`} />
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={chosenMedia.ruta} alt={`Vista previa de ${chosenMedia.nombre}`} className="max-h-56 w-full object-contain" />

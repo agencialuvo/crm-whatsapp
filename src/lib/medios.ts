@@ -185,6 +185,12 @@ export function nombreLegible(crudo: string): string {
 
 export type EstadoVariante = "none" | "processing" | "ready" | "failed";
 
+/**
+ * Cómo está un medio para WhatsApp: `listo` (variante optimizada lista), `optimizando`, `fallo` (la optimización falló),
+ * `original` (se envía tal cual: imagen, PDF o video ya ligero) o `no_enviable` (no hay forma de enviarlo todavía).
+ */
+export type EstadoEnvio = "listo" | "optimizando" | "fallo" | "original" | "no_enviable";
+
 /** Cómo viaja un medio por la API. */
 export type MedioDto = {
   id: string;
@@ -204,6 +210,12 @@ export type MedioDto = {
   varianteBytes: number | null;
   /** Por qué falló la variante (null si no falló). */
   varianteError: string | null;
+  /** Cómo está para WhatsApp, derivado en el servidor (la insignia de la galería y los avisos del paso lo usan tal cual). */
+  envio: EstadoEnvio;
+  /** ¿Se puede pedir «Reintentar optimización»? (fallida, o sin variante y con un original que no se puede enviar; y la cola activa). */
+  puedeReintentar: boolean;
+  /** La versión para WhatsApp lista, para ver y para la miniatura (R2: URL firmada; disco: `?version=whatsapp`). null sin variante lista. */
+  urlVariante: string | null;
   /** La URL de origen, cuando se trajo de un enlace. */
   urlOrigen: string | null;
   /** Ruta (relativa al origen) del archivo servido: `/api/medios/<id>/archivo`. */

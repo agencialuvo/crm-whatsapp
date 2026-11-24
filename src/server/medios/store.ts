@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
@@ -6,7 +6,6 @@ import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { getEnv } from "@/lib/env";
 import {
-  esEnviablePorWhatsapp,
   formatBytes,
   formatoDe,
   limiteDe,
@@ -18,6 +17,8 @@ import {
 } from "@/lib/medios";
 import { BYTES_PARA_RECONOCER, detectarFormato, revisarCodecsMp4, revisarSvg } from "@/server/medios/sniff";
 import { colaDeOptimizacionActiva, videoOptimizeEnabled } from "@/server/medios/flag";
+import { estadoDeEnvio } from "@/server/medios/envio";
+import { olvidarMediaIds } from "@/server/medios/optimizar/cola";
 import { despertarOptimizador } from "@/server/medios/optimizar/despertar";
 import { claveDeMedio, claveDeVariante, clavePendiente, objectStore, StorageError } from "@/server/storage";
 
@@ -31,7 +32,7 @@ import { claveDeMedio, claveDeVariante, clavePendiente, objectStore, StorageErro
 
 export class MedioError extends Error {
   constructor(
-    readonly code: "empty" | "unsupported_type" | "too_large" | "not_found" | "forbidden" | "in_use" | "unavailable",
+    readonly code: "empty" | "unsupported_type" | "too_large" | "not_found" | "forbidden" | "in_use" | "unavailable" | "conflict" | "gone",
     message: string,
     /** Solo en `in_use`: dónde se usa el medio, para que la UI y la API lo muestren con detalle. */
     readonly usos?: UsoDeMedio[]
@@ -110,7 +111,8 @@ function encolado(kind: string) {
     : {};
 }
 
-export function medioToDto(f: Fila, urlFirmada: string | null = null): MedioDto {
+export function medioToDto(f: Fila, urlFirmada: string | null = null, urlVarianteFirmada: string | null = null): MedioDto {
+  const e = estadoDeEnvio(f);
   return {
     id: f.id,
     nombre: f.name,
@@ -121,7 +123,11 @@ export function medioToDto(f: Fila, urlFirmada: string | null = null): MedioDto 
     urlOrigen: f.sourceUrl,
     ruta: `/api/medios/${f.id}/archivo`,
     urlFirmada,
-    noEnviable: !esEnviablePorWhatsapp(f.mimeType, f.sizeBytes),
+    // Qué se manda de verdad (variante u original), no solo el original: un video en `processing` NO es «no enviable».
+    noEnviable: e.noEnviable,
+    envio: e.envio,
+    puedeReintentar: e.puedeReintentar && colaDeOptimizacionActiva(),
+    urlVariante: f.variantStatus === "ready" ? (urlVarianteFirmada ?? `/api/medios/${f.id}/archivo?version=whatsapp`) : null,
     varianteEstado: f.variantStatus,
     varianteBytes: f.variantStatus === "ready" ? f.variantSizeBytes : null,
     varianteError: f.variantStatus === "failed" ? f.variantError : null,
@@ -400,7 +406,11 @@ export async function listarMedios(
         r2 && f.storage === "r2" && f.storageKey
           ? await r2.signRead(f.storageKey, { contentType: f.mimeType }).catch(() => null)
           : null;
-      return medioToDto(f, firmada);
+      const variante =
+        r2 && f.storage === "r2" && f.variantStatus === "ready" && f.variantStorageKey
+          ? await r2.signRead(f.variantStorageKey, { contentType: f.variantMimeType ?? "video/mp4" }).catch(() => null)
+          : null;
+      return medioToDto(f, firmada, variante);
     })
   );
 }
@@ -449,6 +459,28 @@ export async function leerBytesDeMedio(f: Fila, max: number): Promise<Buffer | n
   } catch (err) {
     if (err instanceof StorageError && err.code === "not_found") return null;
     throw err;
+  }
+}
+
+/**
+ * Lee la VARIANTE optimizada de un video entera a memoria (≤ `max`; nunca pesa más de 15 MiB) para subirla a Meta. Va por el
+ * almacenamiento del original: disco → `medios-wa/<id>`; R2 → `variant_storage_key`. `null` si el archivo no está.
+ */
+export async function leerBytesDeVariante(f: Fila, max: number): Promise<Buffer | null> {
+  if (f.storage === "r2") {
+    const r2 = objectStore();
+    if (!r2 || !f.variantStorageKey) return null;
+    try {
+      return await r2.readAll(f.variantStorageKey, max);
+    } catch (err) {
+      if (err instanceof StorageError && err.code === "not_found") return null;
+      throw err;
+    }
+  }
+  try {
+    return await readFile(rutaDeVariante(f.organizationId, f.id));
+  } catch {
+    return null;
   }
 }
 
@@ -811,6 +843,82 @@ export async function renombrarMedio(input: {
     )
     .returning();
   return medioToDto(nuevo!);
+}
+
+/**
+ * «Reintentar optimización»: vuelve a encolar un video cuya variante falló, o que nunca la tuvo y su original no se puede
+ * enviar (más de 16 MiB o MOV: p. ej. se subió con la cola inactiva). Mismo permiso que renombrar y borrar. Idempotente:
+ * si ya está en `processing` devuelve el estado actual sin tocar nada (un doble clic no reinicia el trabajo).
+ *
+ * Un solo `UPDATE` con el estado esperado en el `WHERE` hace la transición atómica: solo parte de estados donde no hay
+ * trabajo en curso (`failed`/`none`), así que no choca con un arrendamiento ni con la ficha del trabajador. En la misma
+ * transacción se olvidan los `media_id` de WhatsApp del medio; después se despierta al trabajador.
+ */
+export async function reintentarOptimizacion(input: {
+  organizationId: string;
+  userId: string;
+  puedeAdministrar: boolean;
+  id: string;
+}): Promise<MedioDto> {
+  const db = getDb();
+  const m = schema.mediaLibraryItem;
+  const leer = async () => {
+    const [f] = await db.select().from(m).where(scoped(m.organizationId, input.organizationId, eq(m.id, input.id))).limit(1);
+    return f;
+  };
+  const fila = await leer();
+  if (!fila || fila.status !== "ready") throw new MedioError("not_found", "Ese archivo ya no existe.");
+  if (!input.puedeAdministrar && fila.createdBy !== input.userId) {
+    throw new MedioError("forbidden", "Solo quien lo subió, el dueño o un administrador puede reintentar la optimización.");
+  }
+  if (fila.kind !== "video") throw new MedioError("conflict", "Solo los videos se optimizan para WhatsApp.");
+  if (fila.variantStatus === "processing") return medioToDto(fila);
+  if (fila.variantStatus === "ready") throw new MedioError("conflict", "Este video ya está listo para WhatsApp.");
+  const e = estadoDeEnvio(fila);
+  if (!e.puedeReintentar) throw new MedioError("conflict", "Este video ya se puede enviar por WhatsApp: no hace falta optimizarlo.");
+  if (!colaDeOptimizacionActiva()) {
+    throw new MedioError("conflict", "La optimización de video no está disponible en esta instancia (requiere MEDIA_VIDEO_OPTIMIZE y ffmpeg).");
+  }
+  if (!(await originalExiste(fila))) {
+    throw new MedioError("gone", "El archivo original ya no está en el almacenamiento: vuelve a subir el video.");
+  }
+
+  const ahora = new Date();
+  const nuevo = await db.transaction(async (tx) => {
+    const filas = await tx
+      .update(m)
+      .set({
+        variantStatus: "processing",
+        variantAttempts: 0,
+        variantLeaseUntil: null,
+        variantNextAttemptAt: ahora,
+        variantError: null,
+        variantProcessedAt: null,
+      })
+      .where(and(eq(m.organizationId, input.organizationId), eq(m.id, input.id), eq(m.status, "ready"), eq(m.kind, "video"), sql`${m.variantStatus} in ('failed','none')`))
+      .returning();
+    if (filas.length !== 1) return null;
+    await olvidarMediaIds(tx, input.organizationId, input.id);
+    return filas[0]!;
+  });
+  if (!nuevo) {
+    // Otro clic u otro proceso cambió el estado entre la lectura y el UPDATE: se responde con lo que quedó.
+    const actual = await leer();
+    if (!actual) throw new MedioError("not_found", "Ese archivo ya no existe.");
+    if (actual.variantStatus === "processing") return medioToDto(actual);
+    throw new MedioError("conflict", "El estado del video cambió: recarga la página.");
+  }
+  despertarOptimizador();
+  return medioToDto(nuevo);
+}
+
+/** ¿El binario ORIGINAL sigue en el almacenamiento? (disco: stat; R2: HEAD). */
+async function originalExiste(f: Fila): Promise<boolean> {
+  const l = lecturaDe(f);
+  if (l.donde === "local") return stat(l.ruta).then(() => true, () => false);
+  const r2 = objectStore();
+  if (!r2) return false;
+  return r2.head(l.clave).then((h) => !!h, () => false);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { lecturaDe, medioPublico } from "@/server/medios/store";
+import { lecturaDe, medioPublico, rutaDeVariante } from "@/server/medios/store";
 import { objectStore } from "@/server/storage";
 
 export const dynamic = "force-dynamic";
@@ -38,9 +38,22 @@ export async function GET(req: Request, ctx: Params) {
   const medio = await medioPublico(id);
   if (!medio) return new Response("No encontrado", { status: 404 });
 
-  const lectura = lecturaDe(medio);
-  const descargar = new URL(req.url).searchParams.has("descargar");
-  const nombre = `${medio.name.replace(/[^\w.-]+/g, "_") || "medio"}.${medio.mimeType.split("/")[1]?.replace("jpeg", "jpg").replace("svg+xml", "svg") ?? "bin"}`;
+  const params = new URL(req.url).searchParams;
+  const descargar = params.has("descargar");
+  // `?version=whatsapp`: la variante optimizada (la que recibe el cliente), mientras esté lista. La descarga del original no cambia.
+  const conVariante = params.get("version") === "whatsapp";
+  if (conVariante && !(medio.variantStatus === "ready" && medio.variantStorageKey && medio.variantMimeType)) {
+    return new Response("La versión para WhatsApp todavía no está lista", { status: 404 });
+  }
+  const mime = conVariante ? medio.variantMimeType! : medio.mimeType;
+  const lectura = conVariante
+    ? medio.storage === "r2"
+      ? ({ donde: "r2", clave: medio.variantStorageKey! } as const)
+      : ({ donde: "local", ruta: rutaDeVariante(medio.organizationId, medio.id) } as const)
+    : lecturaDe(medio);
+  // La variante SÍ puede cambiar (un reintento la reemplaza): caché corta, no «para siempre».
+  const cache: Record<string, string> = conVariante ? { "cache-control": "public, max-age=300" } : {};
+  const nombre = `${medio.name.replace(/[^\w.-]+/g, "_") || "medio"}.${mime.split("/")[1]?.replace("jpeg", "jpg").replace("svg+xml", "svg") ?? "bin"}`;
 
   // 048: un archivo en R2 NO pasa por este servidor: se redirige a una URL firmada de 10 min y los bytes salen de R2
   // directo al visitante. El enlace público (el id) no caduca; lo que vence es la firma interna.
@@ -48,7 +61,7 @@ export async function GET(req: Request, ctx: Params) {
     const r2 = objectStore();
     if (!r2) return new Response("El almacenamiento no está disponible", { status: 503 });
     const url = await r2
-      .signRead(lectura.clave, { fileName: nombre, download: descargar, contentType: medio.mimeType, ttlSeconds: 600 })
+      .signRead(lectura.clave, { fileName: nombre, download: descargar, contentType: mime, ttlSeconds: 600 })
       .catch(() => null);
     if (!url) return new Response("El almacenamiento no está disponible", { status: 503 });
     return new Response(null, { status: 302, headers: { location: url, "cache-control": "private, max-age=300" } });
@@ -85,19 +98,21 @@ export async function GET(req: Request, ctx: Params) {
     const cuerpo = Readable.toWeb(createReadStream(archivo, { start: inicio, end: fin })) as ReadableStream;
     return new Response(cuerpo, {
       status: 206,
-      headers: cabeceras(medio.mimeType, {
+      headers: cabeceras(mime, {
         "content-range": `bytes ${inicio}-${fin}/${tam}`,
         "content-length": String(fin - inicio + 1),
         "content-disposition": disposicion,
+        ...cache,
       }),
     });
   }
 
   const cuerpo = Readable.toWeb(createReadStream(archivo)) as ReadableStream;
   return new Response(cuerpo, {
-    headers: cabeceras(medio.mimeType, {
+    headers: cabeceras(mime, {
       "content-length": String(tam),
       "content-disposition": disposicion,
+      ...cache,
     }),
   });
 }

@@ -96,7 +96,19 @@ const ERROR_EXPLANATIONS: [RegExp, string][] = [
     "Pasaron más de 24 h desde el último mensaje del cliente y una imagen o un video no tiene plantilla: solo se pueden enviar con la ventana abierta. Antes, usa un paso de plantilla para que conteste.",
   ],
   [/media_not_found/, "El archivo de este paso ya no está en la biblioteca de Medios: elige otro."],
-  [/media_too_large/, "El video pesa más de 16 MB, el máximo que WhatsApp deja enviar: elige uno más ligero."],
+  [
+    /media_too_large/,
+    "El video pesa más de 16 MB, el máximo que WhatsApp deja enviar, y no tiene una versión optimizada. Elige uno más ligero o, en Medios, optimízalo para WhatsApp.",
+  ],
+  [/media_unsupported_format/, "Este archivo no se puede enviar por WhatsApp tal cual (por ejemplo, un video MOV sin versión optimizada). Elige un MP4 o espera a que se optimice en Medios."],
+  [
+    /media_variant_pending/,
+    "El video todavía se estaba preparando para WhatsApp y se esperó una hora sin que terminara. Revisa su estado en Medios y, si falló, reintenta la optimización.",
+  ],
+  [
+    /media_variant_failed/,
+    "No se pudo preparar el video para WhatsApp (el motivo va en el texto del error). Recórtalo o sube otro video, o reintenta la optimización en Medios.",
+  ],
   [/media_file_missing/, "El archivo existe en la biblioteca pero no se pudo leer del servidor: vuelve a subirlo."],
   [/max_attempts_exceeded/, "Se agotaron los reintentos: el envío falló todas las veces que se intentó."],
   [/no_conversation/, "El contacto no tiene una conversación de WhatsApp a la que enviar."],

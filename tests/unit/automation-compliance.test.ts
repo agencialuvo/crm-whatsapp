@@ -12,7 +12,7 @@ import { stepCreateSchema } from "@/lib/automation-schemas";
 import { describeStep } from "@/lib/automation-dto";
 import { PALETTE, nodeKindOf } from "@/lib/automation-canvas";
 import { handlesOf, validateGraph } from "@/lib/automation-graph";
-import { processRow, type Deps, type LogInput, type MediaFile, type Row, type Step, type Target } from "@/server/automation/engine";
+import { MEDIA_PROCESSING_HOLD_MS, MEDIA_PROCESSING_RETRY_MS, processRow, type Deps, type LogInput, type MediaFile, type Row, type Step, type Target } from "@/server/automation/engine";
 import { onInboundOptOut, type OptOutDeps } from "@/server/automation/opt-out";
 
 /**
@@ -434,6 +434,52 @@ describe("motor — send_media", () => {
     const lost = setup({ step: MEDIA_STEP, media: { ok: false, reason: "file_missing" } });
     expect(await lost.run()).toBe("failed");
     expect(lost.deps.markFailed).toHaveBeenCalledWith(lost.row, "media_file_missing");
+  });
+
+  it("variante lista: registra el MIME y el peso de la VARIANTE que se manda", async () => {
+    const t = setup({ step: MEDIA_STEP, media: { ok: true, bytes: 9_000_000, mimeType: "video/mp4", fileName: "promo.mp4" } });
+    expect(await t.run()).toBe("completed");
+    expect(t.logs[0]!.metadata).toMatchObject({ payload: { mode: "media", mimeType: "video/mp4", bytes: 9_000_000 } });
+  });
+
+  it("un video que aún se optimiza: pospone UN minuto SIN gastar intento ni escribir en el historial", async () => {
+    const t = setup({ step: MEDIA_STEP, media: { ok: false, reason: "processing" }, row: { createdAt: new Date(NOW.getTime() - 5 * 60_000) } });
+    expect(await t.run()).toBe("retry");
+    expect(t.deps.defer).toHaveBeenCalledWith(t.row, new Date(NOW.getTime() + MEDIA_PROCESSING_RETRY_MS), "media_variant_pending");
+    expect(t.deps.reschedule).not.toHaveBeenCalled();
+    expect(t.deps.sendMedia).not.toHaveBeenCalled();
+    expect(t.deps.markFailed).not.toHaveBeenCalled();
+    expect(t.logs).toHaveLength(0);
+  });
+
+  it("pasado el tope (60 min desde que se encoló) deja de esperar: falla con media_variant_pending", async () => {
+    const justo = setup({ step: MEDIA_STEP, media: { ok: false, reason: "processing" }, row: { createdAt: new Date(NOW.getTime() - MEDIA_PROCESSING_HOLD_MS) } });
+    expect(await justo.run()).toBe("retry"); // exactamente en el tope todavía espera
+    const t = setup({ step: MEDIA_STEP, media: { ok: false, reason: "processing" }, row: { createdAt: new Date(NOW.getTime() - MEDIA_PROCESSING_HOLD_MS - 1000) } });
+    expect(await t.run()).toBe("failed");
+    expect(t.deps.defer).not.toHaveBeenCalled();
+    expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "media_variant_pending");
+    expect(t.logs[0]).toMatchObject({ status: "failed" });
+    expect(t.logs[0]!.metadata).toMatchObject({ error: "media_variant_pending", mediaId: "med_1" });
+  });
+
+  it("una optimización fallida sin original enviable falla con media_variant_failed y su motivo", async () => {
+    const t = setup({ step: MEDIA_STEP, media: { ok: false, reason: "variant_failed", detail: "El video dura más de 3 minutos" } });
+    expect(await t.run()).toBe("failed");
+    expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "media_variant_failed: El video dura más de 3 minutos");
+    expect(t.deps.sendMedia).not.toHaveBeenCalled();
+    const sinMotivo = setup({ step: MEDIA_STEP, media: { ok: false, reason: "variant_failed" } });
+    await sinMotivo.run();
+    expect(sinMotivo.deps.markFailed).toHaveBeenCalledWith(sinMotivo.row, "media_variant_failed");
+  });
+
+  it("too_large y unsupported siguen siendo fallos definitivos con su código", async () => {
+    const grande = setup({ step: MEDIA_STEP, media: { ok: false, reason: "too_large" } });
+    expect(await grande.run()).toBe("failed");
+    expect(grande.deps.markFailed).toHaveBeenCalledWith(grande.row, "media_too_large");
+    const mov = setup({ step: MEDIA_STEP, media: { ok: false, reason: "unsupported" } });
+    expect(await mov.run()).toBe("failed");
+    expect(mov.deps.markFailed).toHaveBeenCalledWith(mov.row, "media_unsupported_format");
   });
 
   it("una configuración inválida falla con invalid_step_config", async () => {

@@ -117,23 +117,41 @@ export type VarianteLista = { clave: string; bytes: number; mime: string; ancho:
 
 /** La variante quedó publicada: pasa a `ready`. `false` = el trabajo ya no era suyo (el llamador borra lo que publicó). */
 export async function publicar(id: string, intento: number, v: VarianteLista, now: Date): Promise<boolean> {
-  const filas = await getDb()
-    .update(m)
-    .set({
-      variantStatus: "ready",
-      variantStorageKey: v.clave,
-      variantSizeBytes: v.bytes,
-      variantMimeType: v.mime,
-      variantWidth: v.ancho,
-      variantHeight: v.alto,
-      variantError: null,
-      variantLeaseUntil: null,
-      variantNextAttemptAt: null,
-      variantProcessedAt: now,
-    })
-    .where(suyo(id, intento))
-    .returning({ id: m.id });
-  return filas.length === 1;
+  // Una sola transacción: la variante nueva y el olvido de los `media_id` que Meta guardó del contenido anterior.
+  return getDb().transaction(async (tx) => {
+    const filas = await tx
+      .update(m)
+      .set({
+        variantStatus: "ready",
+        variantStorageKey: v.clave,
+        variantSizeBytes: v.bytes,
+        variantMimeType: v.mime,
+        variantWidth: v.ancho,
+        variantHeight: v.alto,
+        variantError: null,
+        variantLeaseUntil: null,
+        variantNextAttemptAt: null,
+        variantProcessedAt: now,
+      })
+      .where(suyo(id, intento))
+      .returning({ id: m.id, organizationId: m.organizationId });
+    if (filas.length !== 1) return false;
+    await olvidarMediaIds(tx, filas[0]!.organizationId, id);
+    return true;
+  });
+}
+
+type Ejecutor = Pick<ReturnType<typeof getDb>, "delete">;
+
+/**
+ * Borra los `media_id` de WhatsApp guardados de un medio (todos los números). Se llama cuando cambia lo que se manda: al
+ * publicar una variante y al volver a encolar la optimización. Sin esto, una variante con el MISMO peso y MIME que lo ya
+ * subido reutilizaría un `media_id` de contenido distinto (la caché solo compara MIME y peso). El `media_id` viejo queda
+ * sin dueño en Meta, que lo borra solo a los 30 días.
+ */
+export async function olvidarMediaIds(ejecutor: Ejecutor, organizationId: string, mediaItemId: string): Promise<void> {
+  const c = schema.whatsappMediaCache;
+  await ejecutor.delete(c).where(and(eq(c.organizationId, organizationId), eq(c.mediaItemId, mediaItemId)));
 }
 
 /** Caso A: el original ya sirve, no hace falta variante. */

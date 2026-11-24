@@ -108,7 +108,9 @@ export type LogInput = {
 /** El archivo de un `send_media` ya leído de la biblioteca, o por qué no se pudo. */
 export type MediaFile =
   | { ok: true; mimeType: string; fileName: string; bytes: number }
-  | { ok: false; reason: "not_found" | "file_missing" | "too_large" | "unsupported" };
+  | { ok: false; reason: "not_found" | "file_missing" | "too_large" | "unsupported" | "processing" }
+  /** La optimización del video falló (o quedó incompleta) y el original no se puede enviar; `detail` es el motivo. */
+  | { ok: false; reason: "variant_failed"; detail?: string };
 
 export type Deps = {
   now(): Date;
@@ -209,6 +211,9 @@ const MAX_ERROR_CHARS = 500;
 /** Monedas: cada cuánto se reintenta una tarea retenida por falta de saldo, y cuánto se la retiene antes de descartarla. */
 const NO_CREDIT_RETRY_MS = 60 * 60_000;
 const NO_CREDIT_HOLD_MS = 48 * 60 * 60_000;
+/** Un video que aún se está optimizando: se reintenta cada minuto, sin gastar intento, hasta esta espera (desde que se encoló el paso). */
+export const MEDIA_PROCESSING_RETRY_MS = 60_000;
+export const MEDIA_PROCESSING_HOLD_MS = 60 * 60_000;
 const clip = (s: string) => (s.length > MAX_ERROR_CHARS ? `${s.slice(0, MAX_ERROR_CHARS)}…` : s);
 
 export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
@@ -608,7 +613,18 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       }
       const mediaId = (cfgResult.data as { mediaId: string }).mediaId;
       const loaded = await deps.loadMedia(row.organizationId, mediaId);
+      if (!loaded.ok && loaded.reason === "processing") {
+        // Se está preparando para WhatsApp: no es un fallo del paso. Se espera sin gastar intento (como `no_credit`) y solo se
+        // abandona pasado el tope; los diferimientos no se anotan en el historial (uno por minuto lo llenaría).
+        const heldTooLong = !!row.createdAt && now.getTime() - row.createdAt.getTime() > MEDIA_PROCESSING_HOLD_MS;
+        if (heldTooLong) return await fail("media_variant_pending", { mediaId });
+        await deps.defer(row, new Date(now.getTime() + MEDIA_PROCESSING_RETRY_MS), "media_variant_pending");
+        return "retry";
+      }
       if (!loaded.ok) {
+        if (loaded.reason === "variant_failed") {
+          return await fail(loaded.detail ? `media_variant_failed: ${loaded.detail}` : "media_variant_failed", { mediaId });
+        }
         const error =
           loaded.reason === "not_found"
             ? "media_not_found"

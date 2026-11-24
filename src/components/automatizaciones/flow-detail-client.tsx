@@ -126,7 +126,19 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
       setTemplates(tpl.templates);
       setStages(st.stages);
       setTags(tg.tags);
-      setMedia(md.medios.map((m) => ({ id: m.id, nombre: m.nombre, tipo: m.tipo, ruta: m.ruta })));
+      // `noEnviable` y la variante viajan hasta el selector del paso: sin ellos el filtro de «no enviable» nunca excluía nada.
+      setMedia(
+        md.medios.map((m) => ({
+          id: m.id,
+          nombre: m.nombre,
+          tipo: m.tipo,
+          ruta: m.ruta,
+          noEnviable: m.noEnviable,
+          varianteEstado: m.varianteEstado,
+          varianteError: m.varianteError,
+          urlVariante: m.urlVariante,
+        }))
+      );
     } catch (err) {
       if (apiErrorStatus(err) === 404) setNotFound(true);
       else setLoadError(describeError(err));

@@ -4,7 +4,8 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { cacheExpiry, decideMediaSource, LEASE_MS, leaseId } from "@/lib/media-cache";
-import { leerBytesDeMedio } from "@/server/medios/store";
+import { nombreDeEnvio, resolverEnvio, type Envio } from "@/server/medios/envio";
+import { leerBytesDeMedio, leerBytesDeVariante } from "@/server/medios/store";
 import { uploadGraphMedia } from "@/server/whatsapp/media";
 import type { Credentials } from "@/server/whatsapp/credentials";
 
@@ -32,6 +33,23 @@ export class MediaArchivoAusente extends Error {
   }
 }
 
+/** El medio no tiene nada que enviar ahora (variante pendiente o fallida, o el original no sirve): no se sube nada a Meta. */
+export class MediaNoEnviable extends Error {
+  constructor(readonly razon: Extract<Envio, { ok: false }>["razon"], readonly detalle?: string) {
+    super(`El medio no se puede enviar por WhatsApp (${razon})`);
+    this.name = "MediaNoEnviable";
+  }
+}
+
+/** Lo que se sube y se cachea: el MIME y el peso de la FUENTE (variante u original), no los del original a secas. */
+type Fuente = { mimeType: string; sizeBytes: number; esVariante: boolean };
+
+function fuenteDe(item: Item): Fuente {
+  const e = resolverEnvio(item);
+  if (!e.ok) throw new MediaNoEnviable(e.razon, e.detalle);
+  return { mimeType: e.mimeType, sizeBytes: e.sizeBytes, esVariante: e.fuente === "variante" };
+}
+
 export type ResolvedMedia = { waMediaId: string; reused: boolean };
 
 export type ResolveDeps = {
@@ -41,19 +59,14 @@ export type ResolveDeps = {
 
 const enVuelo = new Map<string, Promise<ResolvedMedia>>();
 
-function nombreDeArchivo(item: Item): string {
-  const ext = item.mimeType.split("/")[1]?.replace("jpeg", "jpg") ?? "";
-  return ext ? `${item.name}.${ext}` : item.name;
-}
-
-async function vigente(item: Item, phoneNumberId: string, now: Date) {
+async function vigente(item: Item, fuente: Fuente, phoneNumberId: string, now: Date) {
   const c = schema.whatsappMediaCache;
   const [fila] = await getDb()
     .select()
     .from(c)
     .where(scoped(c.organizationId, item.organizationId, eq(c.mediaItemId, item.id), eq(c.phoneNumberId, phoneNumberId)))
     .limit(1);
-  const d = decideMediaSource(fila ?? null, item, phoneNumberId, now);
+  const d = decideMediaSource(fila ?? null, fuente, phoneNumberId, now);
   return { fila, decision: d };
 }
 
@@ -73,10 +86,11 @@ export async function resolveWaMediaId(
   opts: { forceRefresh?: boolean; rejectedWaMediaId?: string; pollMs?: number } & ResolveDeps = {}
 ): Promise<ResolvedMedia> {
   const now = (opts.now ?? (() => new Date()))();
+  const fuente = fuenteDe(item);
   const rechazado = opts.forceRefresh ? opts.rejectedWaMediaId : undefined;
   // Sin forceRefresh, o con un id rechazado concreto: lo vigente SOLO sirve si no es el id que falló.
   if (!opts.forceRefresh || rechazado) {
-    const { decision } = await vigente(item, credentials.phoneNumberId, now);
+    const { decision } = await vigente(item, fuente, credentials.phoneNumberId, now);
     if (decision.action === "reuse" && decision.waMediaId !== rechazado) return { waMediaId: decision.waMediaId, reused: true };
   }
 
@@ -87,7 +101,7 @@ export async function resolveWaMediaId(
     // La subida en curso puede haber devuelto justo el id rechazado (si empezó antes de invalidarlo): ese no sirve.
     if (!rechazado || r.waMediaId !== rechazado) return { waMediaId: r.waMediaId, reused: true };
   }
-  const trabajo = subirUnaVez(item, credentials, { ...opts, rejectedWaMediaId: rechazado }).finally(() => {
+  const trabajo = subirUnaVez(item, fuente, credentials, { ...opts, rejectedWaMediaId: rechazado }).finally(() => {
     if (enVuelo.get(clave) === trabajo) enVuelo.delete(clave);
   });
   enVuelo.set(clave, trabajo);
@@ -109,7 +123,7 @@ type OpcionesDeSubida = { forceRefresh?: boolean; rejectedWaMediaId?: string; po
  * Con `forceRefresh` sin id rechazado (uso anterior) lo vigente no se reutiliza, salvo tras haber esperado a otra subida:
  * ese id es justo el renovado.
  */
-async function reclamar(item: Item, credentials: Credentials, token: string, opts: OpcionesDeSubida, now: Date, yaEspero: boolean): Promise<ReclamoDeSubida> {
+async function reclamar(item: Item, fuente: Fuente, credentials: Credentials, token: string, opts: OpcionesDeSubida, now: Date, yaEspero: boolean): Promise<ReclamoDeSubida> {
   const c = schema.whatsappMediaCache;
   return getDb().transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`wmc:${item.id}:${credentials.phoneNumberId}`}))`);
@@ -118,11 +132,11 @@ async function reclamar(item: Item, credentials: Credentials, token: string, opt
       .from(c)
       .where(and(eq(c.mediaItemId, item.id), eq(c.phoneNumberId, credentials.phoneNumberId)))
       .limit(1);
-    const d = decideMediaSource(fila ?? null, item, credentials.phoneNumberId, now);
+    const d = decideMediaSource(fila ?? null, fuente, credentials.phoneNumberId, now);
     const puedeReutilizar = !opts.forceRefresh || !!opts.rejectedWaMediaId || yaEspero;
     if (puedeReutilizar && d.action === "reuse" && d.waMediaId !== opts.rejectedWaMediaId) return { tipo: "reuse", waMediaId: d.waMediaId };
     if (d.action === "upload" && d.reason === "in_progress") return { tipo: "wait" };
-    const arriendo = { waMediaId: leaseId(token), mimeType: item.mimeType, sizeBytes: item.sizeBytes, uploadedAt: now, expiresAt: new Date(now.getTime() + LEASE_MS) };
+    const arriendo = { waMediaId: leaseId(token), mimeType: fuente.mimeType, sizeBytes: fuente.sizeBytes, uploadedAt: now, expiresAt: new Date(now.getTime() + LEASE_MS) };
     await tx
       .insert(c)
       .values({
@@ -145,7 +159,7 @@ async function liberar(item: Item, phoneNumberId: string, token: string): Promis
     .where(and(eq(c.organizationId, item.organizationId), eq(c.mediaItemId, item.id), eq(c.phoneNumberId, phoneNumberId), eq(c.waMediaId, leaseId(token))));
 }
 
-async function subirUnaVez(item: Item, credentials: Credentials, opts: OpcionesDeSubida): Promise<ResolvedMedia> {
+async function subirUnaVez(item: Item, fuente: Fuente, credentials: Credentials, opts: OpcionesDeSubida): Promise<ResolvedMedia> {
   const subir = opts.upload ?? uploadGraphMedia;
   const reloj = opts.now ?? (() => new Date());
   const c = schema.whatsappMediaCache;
@@ -155,7 +169,7 @@ async function subirUnaVez(item: Item, credentials: Credentials, opts: OpcionesD
   let yaEspero = false;
 
   for (;;) {
-    const r = await reclamar(item, credentials, token, opts, reloj(), yaEspero);
+    const r = await reclamar(item, fuente, credentials, token, opts, reloj(), yaEspero);
     if (r.tipo === "reuse") return { waMediaId: r.waMediaId, reused: true };
     if (r.tipo === "owner") break;
     if (Date.now() > limite) throw new Error("La subida del medio por otra instancia no terminó a tiempo");
@@ -166,16 +180,17 @@ async function subirUnaVez(item: Item, credentials: Credentials, opts: OpcionesD
   // De aquí hasta guardar el id NO hay transacción ni conexión retenida: es E/S de red pura.
   let waMediaId: string;
   try {
-    const data = await leerBytesDeMedio(item, Math.max(item.sizeBytes, 1) + 1024);
+    const max = Math.max(fuente.sizeBytes, 1) + 1024;
+    const data = fuente.esVariante ? await leerBytesDeVariante(item, max) : await leerBytesDeMedio(item, max);
     if (!data) throw new MediaArchivoAusente();
-    waMediaId = await subir(credentials, { data, mimeType: item.mimeType, fileName: nombreDeArchivo(item) });
+    waMediaId = await subir(credentials, { data, mimeType: fuente.mimeType, fileName: nombreDeEnvio(item.name, fuente.mimeType) });
   } catch (err) {
     await liberar(item, credentials.phoneNumberId, token).catch(() => {});
     throw err;
   }
 
   const ahora = reloj();
-  const real = { waMediaId, mimeType: item.mimeType, sizeBytes: item.sizeBytes, uploadedAt: ahora, expiresAt: cacheExpiry(ahora) };
+  const real = { waMediaId, mimeType: fuente.mimeType, sizeBytes: fuente.sizeBytes, uploadedAt: ahora, expiresAt: cacheExpiry(ahora) };
   try {
     // Una sola sentencia: reemplaza el arrendamiento por el id real (y, si el arrendamiento venció y otro lo retomó, el
     // último en escribir gana: ambos ids son válidos en Meta).

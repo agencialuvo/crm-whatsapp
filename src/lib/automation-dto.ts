@@ -325,7 +325,19 @@ export const BRANCH_ACTION_LABELS: Record<BranchAction, string> = {
 
 /** Lo que resuelve nombres de etiquetas y etapas en las tarjetas (por id: el motor nunca compara nombres). */
 /** Un archivo de la biblioteca de Medios, lo justo para elegirlo y mostrarlo en un bloque `send_media`. */
-export type MediaOption = { id: string; nombre: string; tipo: "image" | "video" | "document"; ruta: string; noEnviable?: boolean };
+export type MediaOption = {
+  id: string;
+  nombre: string;
+  tipo: "image" | "video" | "document";
+  ruta: string;
+  /** No se puede enviar por WhatsApp (ni con variante ni el original). Un video optimizándose NO lo es. */
+  noEnviable?: boolean;
+  /** Paso 3b: estado de la variante para WhatsApp, para marcar «(optimizando…)» y avisar si falló. */
+  varianteEstado?: "none" | "processing" | "ready" | "failed";
+  varianteError?: string | null;
+  /** La versión ligera lista (vista previa del paso); null/ausente = se ve el original. */
+  urlVariante?: string | null;
+};
 
 export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOption[]; media?: readonly MediaOption[] };
 

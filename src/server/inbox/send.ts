@@ -49,6 +49,7 @@ import { SendError } from "@/server/inbox/send-error";
 import { BYTES_CABECERA_ADJUNTO, validarAdjuntoManual } from "@/server/inbox/adjunto-manual";
 import { isStaleMediaError, StaleMediaRetry, withStaleMediaRetry } from "@/lib/media-cache";
 import { invalidateWaMediaId, MediaArchivoAusente, resolveWaMediaId } from "@/server/whatsapp/media-cache";
+import { nombreDeEnvio, resolverEnvio } from "@/server/medios/envio";
 import { enviarYRegistrar } from "@/server/inbox/outbox";
 import {
   saveMediaFile,
@@ -505,6 +506,19 @@ export async function sendMediaMessage(input: {
   return { messageId };
 }
 
+function mensajeDeNoEnviable(razon: "processing" | "variant_failed" | "too_large" | "unsupported", detalle?: string): string {
+  switch (razon) {
+    case "processing":
+      return "El video todavía se está preparando para WhatsApp: inténtalo en unos minutos";
+    case "variant_failed":
+      return `No se pudo preparar el video para WhatsApp${detalle ? `: ${detalle}` : ""}`;
+    case "too_large":
+      return "El video pesa más de 16 MB y no tiene una versión optimizada para WhatsApp";
+    default:
+      return "Este archivo no se puede enviar por WhatsApp";
+  }
+}
+
 /**
  * 048 — Envía un medio de la BIBLIOTECA por su `media_id` de WhatsApp, sin copiar el archivo: la fila del adjunto
  * (`media_asset`) solo apunta al medio (`library_item_id`), así un envío repetido no deja una copia en disco por mensaje.
@@ -528,8 +542,11 @@ export async function sendLibraryMedia(input: {
     .where(and(eq(m.organizationId, input.organizationId), eq(m.id, input.mediaId), eq(m.status, "ready")))
     .limit(1);
   if (!item) throw new SendError("meta_error", "El archivo ya no está en la biblioteca de Medios");
-  // Tipo y peso contra los límites de la Cloud API (antes de tocar red).
-  const kind = validateOutgoing(item.mimeType, item.sizeBytes);
+  // Qué se manda (la variante optimizada de un video, o el original) y su tipo y peso contra los límites de la Cloud API,
+  // antes de tocar red.
+  const envio = resolverEnvio(item);
+  if (!envio.ok) throw new SendError("meta_error", mensajeDeNoEnviable(envio.razon, envio.detalle));
+  const kind = validateOutgoing(envio.mimeType, envio.sizeBytes);
 
   const target = await prepareSend(input.conversationId, input.organizationId);
   const { credentials } = target;
@@ -538,17 +555,16 @@ export async function sendLibraryMedia(input: {
     throw new SendError("meta_error", `Todavía no se pueden enviar adjuntos por ${sendCaps.label}; manda el texto`);
   }
 
-  const ext = item.mimeType.split("/")[1]?.replace("jpeg", "jpg") ?? "";
-  const fileName = ext ? `${item.name}.${ext}` : item.name;
+  const fileName = nombreDeEnvio(item.name, envio.mimeType);
   const assetRows = await db
     .insert(schema.mediaAsset)
     .values({
       id: newId("mediaAsset"),
       organizationId: input.organizationId,
       kind,
-      mimeType: item.mimeType,
+      mimeType: envio.mimeType,
       fileName,
-      fileSize: item.sizeBytes,
+      fileSize: envio.sizeBytes,
       caption: input.caption ?? null,
       storagePath: null,
       libraryItemId: item.id,

@@ -7,7 +7,7 @@ import {
   mediaFilePath,
 } from "@/server/whatsapp/media";
 import { serveFileStream } from "@/server/whatsapp/media-stream";
-import { lecturaDe } from "@/server/medios/store";
+import { lecturaDe, rutaDeVariante } from "@/server/medios/store";
 import { objectStore } from "@/server/storage";
 import {
   contentTypeFor,
@@ -61,10 +61,21 @@ export const GET = withAuth(async (session, req: Request, ctx: Params) => {
       .where(scoped(m.organizationId, session.organizationId, eq(m.id, asset.libraryItemId)))
       .limit(1);
     if (!item) return apiError(410, "gone", "Ese archivo se eliminó de la biblioteca de Medios");
-    const l = lecturaDe(item);
+    // Lo que recibió el cliente fue la VARIANTE optimizada si el adjunto guardó su MIME y su peso (y no los del original).
+    const esVariante =
+      item.variantStatus === "ready" &&
+      !!item.variantStorageKey &&
+      asset.mimeType === item.variantMimeType &&
+      asset.fileSize === item.variantSizeBytes &&
+      !(asset.mimeType === item.mimeType && asset.fileSize === item.sizeBytes);
+    const l = esVariante
+      ? item.storage === "r2"
+        ? ({ donde: "r2", clave: item.variantStorageKey! } as const)
+        : ({ donde: "local", ruta: rutaDeVariante(item.organizationId, item.id) } as const)
+      : lecturaDe(item);
     if (l.donde === "r2") {
       const url = await objectStore()
-        ?.signRead(l.clave, { contentType: item.mimeType, ttlSeconds: 600 })
+        ?.signRead(l.clave, { contentType: esVariante ? item.variantMimeType! : item.mimeType, ttlSeconds: 600 })
         .catch(() => null);
       if (!url) return apiError(503, "unavailable", "El almacenamiento no está disponible");
       return new Response(null, { status: 302, headers: { location: url, "cache-control": "private, max-age=300" } });
