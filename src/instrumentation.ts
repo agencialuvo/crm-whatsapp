@@ -6,6 +6,7 @@
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const {
+      checkFfmpeg,
       checkMediaDir,
       checkR2Config,
       cleanupOrphanRuns,
@@ -13,6 +14,7 @@ export async function register(): Promise<void> {
       resumeAutomations,
       resumeDispatch,
       resumeMediaMaintenance,
+      resumeMediaOptimizer,
       resumeMetaAds,
       resumeOutboxSweeper,
       resumeSubscriptionSweeper,
@@ -21,6 +23,8 @@ export async function register(): Promise<void> {
       await import("./instrumentation-node");
     await checkMediaDir();
     checkR2Config();
+    // Antes de aceptar nada: si MEDIA_VIDEO_OPTIMIZE está encendida, ¿hay ffmpeg que la sostenga?
+    await checkFfmpeg();
     await cleanupOrphanRuns();
     await encryptLegacySecrets();
     await seedPlatformData();
@@ -30,5 +34,6 @@ export async function register(): Promise<void> {
     resumeOutboxSweeper();
     resumeSubscriptionSweeper();
     resumeMediaMaintenance();
+    resumeMediaOptimizer();
   }
 }

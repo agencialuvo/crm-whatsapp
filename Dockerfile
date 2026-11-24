@@ -51,7 +51,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV MEDIA_DIR=/data/media
 # su-exec: el entrypoint arranca como root SOLO para dejar /data escribible y
 # baja a `vocero` antes de correr la app (idea de #40).
-RUN apk add --no-cache su-exec
+# ffmpeg/ffprobe: la optimizacion de video para WhatsApp (MEDIA_VIDEO_OPTIMIZE); sin la bandera no se usan.
+RUN apk add --no-cache su-exec ffmpeg
 RUN addgroup -S vocero && adduser -S vocero -G vocero
 # El punto de montaje nace de `vocero`: un volumen nombrado nuevo hereda ese
 # dueño al montarse vacío. Los que llegan como root (Coolify, Railway, un bind

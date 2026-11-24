@@ -1588,6 +1588,14 @@ export const mediaLibraryItem = pgTable(
     variantWidth: integer("variant_width"),
     variantHeight: integer("variant_height"),
     variantProcessedAt: timestamp("variant_processed_at"),
+    /**
+     * La cola de optimización (Paso 2): cuántas veces se reclamó el trabajo (máx. 3; también es la «ficha» con la que un
+     * trabajo publica: si otro lo reclamó, el viejo ya no puede pisarlo), hasta cuándo es suyo (arrendamiento; vencido =
+     * otra instancia puede recogerlo) y cuándo vuelve a poder intentarse tras un fallo transitorio.
+     */
+    variantAttempts: smallint("variant_attempts").notNull().default(0),
+    variantLeaseUntil: timestamp("variant_lease_until"),
+    variantNextAttemptAt: timestamp("variant_next_attempt_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
@@ -1597,6 +1605,7 @@ export const mediaLibraryItem = pgTable(
     check("media_library_item_size_pos", sql`${t.sizeBytes} > 0`),
     check("media_library_item_variant_status_ck", sql`${t.variantStatus} in ('none', 'processing', 'ready', 'failed')`),
     // El tope de WhatsApp (16 MB) protegido en la base, no solo en el código.
+    check("media_library_item_variant_attempts_ck", sql`${t.variantAttempts} >= 0`),
     check("media_library_item_variant_size_ck", sql`${t.variantSizeBytes} is null or (${t.variantSizeBytes} > 0 and ${t.variantSizeBytes} <= 16777216)`),
     check("media_library_item_variant_needs_ready_ck", sql`${t.variantStatus} = 'none' or ${t.status} = 'ready'`),
     check(

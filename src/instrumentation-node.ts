@@ -203,6 +203,36 @@ export function resumeSubscriptionSweeper(): void {
  * 048 — Mantenimiento de Medios: subidas directas sin confirmar y caché vencida del `media_id` de WhatsApp. Del núcleo:
  * corre siempre. Import dinámico y a prueba de fallos: nunca tumba el arranque.
  */
+/**
+ * Medios — con `MEDIA_VIDEO_OPTIMIZE` encendida, comprueba que `ffmpeg`/`ffprobe` sirven (ver `optimizar/binarios.ts`). Si no,
+ * la bandera queda efectivamente apagada y se avisa a gritos: aceptar videos de 250 MB que luego fallarían todos sería peor.
+ * Apagada, no ejecuta nada.
+ */
+export async function checkFfmpeg(): Promise<void> {
+  try {
+    const { parseVideoOptimizeFlag } = await import("@/server/medios/flag");
+    if (!parseVideoOptimizeFlag(process.env.MEDIA_VIDEO_OPTIMIZE)) return;
+    const { comprobarFfmpeg } = await import("@/server/medios/optimizar/binarios");
+    const e = await comprobarFfmpeg();
+    if (e.ok) console.log(`[boot] optimización de video activa (ffmpeg listo${e.zscale ? ", con tone-mapping HDR" : ", sin tone-mapping HDR"})`);
+    else console.error(`[boot] MEDIA_VIDEO_OPTIMIZE=on pero ${e.motivo ?? "ffmpeg no está disponible"}: la optimización de video queda APAGADA (solo MP4 de hasta 16 MB)`);
+  } catch (err) {
+    console.error("[boot] no se pudo comprobar ffmpeg:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Medios — arranca el trabajador que optimiza los videos en cola (solo con la bandera encendida y ffmpeg comprobado). */
+export function resumeMediaOptimizer(): void {
+  void import("@/server/medios/flag")
+    .then(async ({ colaDeOptimizacionActiva }) => {
+      if (!colaDeOptimizacionActiva()) return;
+      const { startMediaOptimizer } = await import("@/server/medios/optimizar/trabajador");
+      startMediaOptimizer();
+      console.log("[boot] optimizador de video en marcha");
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar el optimizador de video:", err));
+}
+
 export function resumeMediaMaintenance(): void {
   void import("@/server/medios/mantenimiento")
     .then(({ startMediaMaintenance, tickMediaMaintenance }) => {

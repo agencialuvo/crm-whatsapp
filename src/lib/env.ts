@@ -53,6 +53,13 @@ export const envSchema = z.object({
   // Medios: video de hasta 250 MB (MP4 y MOV) para optimizarlo a WhatsApp. Apagada por defecto; se lee de process.env directo
   // (server/medios/flag.ts). Ej.: MEDIA_VIDEO_OPTIMIZE=on
   MEDIA_VIDEO_OPTIMIZE: z.string().optional(),
+  // Optimización de video (todas opcionales; se leen de process.env en server/medios/optimizar/binarios.ts):
+  // FFMPEG_PATH / FFPROBE_PATH (por defecto «ffmpeg» / «ffprobe» del PATH), MEDIA_OPTIMIZE_MAX_SECONDS (duración máxima, 180),
+  // MEDIA_OPTIMIZE_THREADS (hilos de ffmpeg, 2).
+  FFMPEG_PATH: z.string().optional(),
+  FFPROBE_PATH: z.string().optional(),
+  MEDIA_OPTIMIZE_MAX_SECONDS: z.string().optional(),
+  MEDIA_OPTIMIZE_THREADS: z.string().optional(),
   // Correo saliente (opcional): solo para restablecer la contraseña con un
   // código. Apuntan al servidor SMTP del propio negocio; sin SMTP_HOST y
   // SMTP_FROM la función se apaga y lo demás funciona igual. Se leen de

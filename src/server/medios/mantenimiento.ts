@@ -1,4 +1,5 @@
 import { limpiarSubidasPendientes } from "@/server/medios/store";
+import { limpiarTemporales } from "@/server/medios/optimizar/temporales";
 import { reconciliarMedios } from "@/server/medios/reconciliar";
 import { reintentarAdjuntosPendientes } from "@/server/medios/reintentar-adjuntos";
 import { pruneWaMediaCache } from "@/server/whatsapp/media-cache";
@@ -8,6 +9,7 @@ import { pruneWaMediaCache } from "@/server/whatsapp/media-cache";
  *
  * - Cada hora: borra las subidas directas que se firmaron pero nunca se confirmaron (y su objeto huérfano en R2) y poda las
  *   filas vencidas de la caché del `media_id` de WhatsApp.
+ * - Cada hora también: borra los temporales abandonados de `medios-tmp` (más de 2 h y sin arrendamiento vigente).
  * - Hallazgo H, una vez al día: reconcilia archivos huérfanos entre la base, R2 y el disco (`reconciliar.ts`). **Por
  *   defecto solo INFORMA en el log**; borra por sí sola únicamente con `MEDIA_RECONCILE_AUTO=on` (y entonces con tope de
  *   100 por corrida y solo lo de más de 72 h). Para borrar a mano y con control: `pnpm reconciliar-medios`.
@@ -43,6 +45,14 @@ export async function tickMediaMaintenance(now = new Date()): Promise<void> {
     const n = await limpiarSubidasPendientes(now);
     if (n > 0) console.log(`[medios] ${n} subida(s) sin confirmar se limpiaron`);
     await pruneWaMediaCache(now);
+    // Temporales de subidas y optimizaciones interrumpidas (`medios-tmp`): siempre activa, solo toca esa carpeta.
+    // Aislada: si falla (volumen caído), no frena la poda ni la reconciliación de debajo.
+    try {
+      const temporales = await limpiarTemporales({ now });
+      if (temporales > 0) console.log(`[medios] ${temporales} archivo(s) temporal(es) abandonado(s) se borraron`);
+    } catch (err) {
+      console.error("[medios] la limpieza de temporales falló:", err instanceof Error ? err.message : err);
+    }
     if (now.getTime() - s.ultimaReconciliacion >= RECONCILIAR_CADA_MS) {
       s.ultimaReconciliacion = now.getTime();
       await tickReconciliacion(now);

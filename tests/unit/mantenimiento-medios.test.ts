@@ -10,12 +10,14 @@ const m = vi.hoisted(() => ({
   reintentar: vi.fn(),
   limpiar: vi.fn(),
   podar: vi.fn(),
+  temporales: vi.fn(),
 }));
 
 vi.mock("@/server/medios/reconciliar", () => ({ reconciliarMedios: m.reconciliar }));
 vi.mock("@/server/medios/reintentar-adjuntos", () => ({ reintentarAdjuntosPendientes: m.reintentar }));
 vi.mock("@/server/medios/store", () => ({ limpiarSubidasPendientes: m.limpiar }));
 vi.mock("@/server/whatsapp/media-cache", () => ({ pruneWaMediaCache: m.podar }));
+vi.mock("@/server/medios/optimizar/temporales", () => ({ limpiarTemporales: m.temporales }));
 
 const RES_VACIO = { huerfanos: [], borrados: 0, fallidos: 0, bytes: 0, truncado: false, siguienteCursorR2: null, abortado: null };
 const ENV_ORIGINAL = { ...process.env };
@@ -33,6 +35,7 @@ beforeEach(() => {
   m.reintentar.mockResolvedValue({ revisados: 0, reintentados: 0, recuperados: 0, fallidos: 0, detenido: false });
   m.limpiar.mockResolvedValue(0);
   m.podar.mockResolvedValue(undefined);
+  m.temporales.mockResolvedValue(0);
   delete process.env.MEDIA_RECONCILE_AUTO;
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -42,6 +45,26 @@ afterEach(() => {
   process.env = { ...ENV_ORIGINAL };
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("limpieza de temporales (medios-tmp)", () => {
+  it("cada tick horario limpia los temporales abandonados, y avisa si borró alguno", async () => {
+    const mt = await cargar();
+    m.temporales.mockResolvedValue(3);
+    await mt.tickMediaMaintenance(new Date());
+    expect(m.temporales).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("3 archivo(s) temporal(es)"));
+  });
+  it("si la limpieza falla, NO frena el resto del mantenimiento (poda y reconciliación)", async () => {
+    const mt = await cargar();
+    m.temporales.mockRejectedValue(new Error("volumen caído"));
+    const ahora = new Date();
+    await mt.tickMediaMaintenance(ahora);
+    expect(m.podar).toHaveBeenCalled();
+    await mt.tickMediaMaintenance(new Date(ahora.getTime() + DIA + 1000));
+    expect(m.reconciliar).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("limpieza de temporales"), "volumen caído");
+  });
 });
 
 describe("reconciliación (H)", () => {

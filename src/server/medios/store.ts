@@ -17,8 +17,9 @@ import {
   type MedioTipo,
 } from "@/lib/medios";
 import { BYTES_PARA_RECONOCER, detectarFormato, revisarCodecsMp4, revisarSvg } from "@/server/medios/sniff";
-import { videoOptimizeEnabled } from "@/server/medios/flag";
-import { claveDeMedio, clavePendiente, objectStore, StorageError } from "@/server/storage";
+import { colaDeOptimizacionActiva, videoOptimizeEnabled } from "@/server/medios/flag";
+import { despertarOptimizador } from "@/server/medios/optimizar/despertar";
+import { claveDeMedio, claveDeVariante, clavePendiente, objectStore, StorageError } from "@/server/storage";
 
 /**
  * Módulo Medios — la biblioteca de imágenes, videos y PDF del negocio.
@@ -85,9 +86,28 @@ export function rutaDeVariante(organizationId: string, id: string): string {
   return path.join(getEnv().MEDIA_DIR, segmentoSeguro(organizationId), "medios-wa", segmentoSeguro(id));
 }
 
-/** El archivo temporal de una subida en curso (otra carpeta, en el mismo volumen: el `rename` final es atómico). */
-function rutaTemporalDeMedio(organizationId: string, id: string): string {
-  return path.join(getEnv().MEDIA_DIR, segmentoSeguro(organizationId), "medios-tmp", segmentoSeguro(id));
+/** La carpeta de temporales de una organización (subidas en curso y trabajo de la optimización de video). */
+export function carpetaTemporal(organizationId: string): string {
+  return path.join(getEnv().MEDIA_DIR, segmentoSeguro(organizationId), "medios-tmp");
+}
+
+/**
+ * Un archivo temporal (otra carpeta, en el mismo volumen: el `rename` final es atómico). Sin sufijo es el de una subida en
+ * curso; la optimización usa `.src` (el original bajado de R2) y `.wa.mp4` (la salida de ffmpeg). El id va primero: la
+ * limpieza de temporales lo recupera con `nombre.split(".")[0]`.
+ */
+export function rutaTemporalDeMedio(organizationId: string, id: string, sufijo = ""): string {
+  return path.join(carpetaTemporal(organizationId), `${segmentoSeguro(id)}${sufijo}`);
+}
+
+/**
+ * Los valores de una fila de video recién confirmada: con la bandera encendida y ffmpeg comprobado, nace en cola
+ * (`processing`, en la misma sentencia que la deja `ready`: sin hueco). Sin ellas, sin variante.
+ */
+function encolado(kind: string) {
+  return kind === "video" && colaDeOptimizacionActiva()
+    ? { variantStatus: "processing" as const, variantAttempts: 0, variantNextAttemptAt: new Date(), variantError: null }
+    : {};
 }
 
 export function medioToDto(f: Fila, urlFirmada: string | null = null): MedioDto {
@@ -181,8 +201,10 @@ export async function crearMedio(input: {
         createdBy: input.userId,
         storage: r2 ? "r2" : "local",
         storageKey: clave,
+        ...encolado(formato.tipo),
       })
       .returning();
+    if (fila!.variantStatus === "processing") despertarOptimizador();
     return medioToDto(fila!);
   } catch (err) {
     // Sin fila, el archivo sería un huérfano que nadie podría borrar.
@@ -303,8 +325,10 @@ export async function crearMedioDesdeFlujo(input: {
             createdBy: input.userId,
             storage: "local",
             storageKey: null,
+            ...encolado(formato.tipo),
           })
           .returning();
+        if (fila!.variantStatus === "processing") despertarOptimizador();
         return medioToDto(fila!);
       } catch (err) {
         // Sin fila, el archivo sería un huérfano que nadie podría borrar.
@@ -428,8 +452,23 @@ export async function leerBytesDeMedio(f: Fila, max: number): Promise<Buffer | n
   }
 }
 
-/** Quita el binario de un medio (disco o R2). Nunca lanza: un huérfano lo barre el mantenimiento. */
+/**
+ * Quita la variante optimizada de un video (disco y R2). Va por la ubicación DERIVADA (`medios-wa/<id>`), no solo por la
+ * columna: si el trabajo la publicó justo cuando se borraba el medio, la columna aún no la anotaba. Nunca lanza.
+ */
+async function quitarVariante(f: Fila): Promise<void> {
+  if (f.kind !== "video") return;
+  await rm(rutaDeVariante(f.organizationId, f.id), { force: true }).catch(() => {});
+  const r2 = objectStore();
+  if (r2) {
+    const clave = f.variantStorageKey ?? claveDeVariante(f.organizationId, f.id);
+    await r2.delete(clave).catch((e) => console.warn(`[medios] no se pudo borrar la variante ${clave} (queda huérfana hasta la reconciliación):`, e instanceof Error ? e.message : e));
+  }
+}
+
+/** Quita el binario de un medio (disco o R2) y su variante optimizada. Nunca lanza: un huérfano lo barre el mantenimiento. */
 async function quitarBinario(f: Fila): Promise<void> {
+  await quitarVariante(f);
   const l = lecturaDe(f);
   if (l.donde === "local") {
     await rm(l.ruta, { force: true }).catch(() => {});
@@ -574,10 +613,11 @@ export async function confirmarSubida(input: {
   }
   const [listo] = await db
     .update(m)
-    .set({ status: "ready", storageKey: definitiva, mimeType: formato.mime })
+    .set({ status: "ready", storageKey: definitiva, mimeType: formato.mime, ...encolado(fila.kind) })
     .where(and(eq(m.organizationId, input.organizationId), eq(m.id, fila.id), eq(m.status, "pending")))
     .returning();
   await r2.delete(pendiente).catch(() => {});
+  if (listo?.variantStatus === "processing") despertarOptimizador();
   if (!listo) {
     // Otra confirmación ganó la carrera: devuelve lo que quedó.
     const [ya] = await db.select().from(m).where(scoped(m.organizationId, input.organizationId, eq(m.id, fila.id))).limit(1);

@@ -645,6 +645,13 @@
       "when": 1795556271497,
       "tag": "0091_medios_variante_whatsapp",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1795557950699,
+      "tag": "0092_medios_variante_cola",
+      "breakpoints": true
     }
   ]
 }
