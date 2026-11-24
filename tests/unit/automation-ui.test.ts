@@ -35,10 +35,14 @@ describe("disparadores", () => {
       "birthday",
       "stage_changed",
       "lead_created",
+      "manual",
       "booking_created",
       "booking_confirmed",
       "booking_no_show",
       "ad_referral",
+      // Paso 2: ya tienen quién los dispare.
+      "tag_added",
+      "loyalty_reward_unlocked",
     ]);
   });
   it("etiquetas en español, y un tipo desconocido se muestra tal cual", () => {

@@ -38,7 +38,18 @@ import { STEP_TYPES, parseStepConfig, parseTriggerConfigFor, type StepType } fro
 describe("la paleta", () => {
   it("ofrece los disparadores, la lógica y las acciones pedidas", () => {
     const labels = (cat: string) => PALETTE.filter((i) => i.category === cat).map((i) => i.label);
-    expect(labels("triggers")).toEqual(["Lead nuevo", "Cambio de etapa", "Anuncio", "Cita agendada", "Cita confirmada", "No asistió", "Cumpleaños"]);
+    expect(labels("triggers")).toEqual([
+      "Lead nuevo",
+      "Cambio de etapa",
+      "Etiqueta asignada",
+      "Anuncio",
+      "Cita agendada",
+      "Cita confirmada",
+      "No asistió",
+      "Cumpleaños",
+      "Premio de fidelidad",
+      "Manual",
+    ]);
     expect(labels("logic")).toEqual(["Condición (Sí / No)", "Esperar tiempo", "Esperar hasta la cita", "Esperar respuesta"]);
     expect(labels("actions")).toEqual(["Enviar WhatsApp", "Enviar multimedia", "Asignar etiqueta", "Quitar etiqueta", "Cambiar etapa"]);
   });
@@ -306,7 +317,7 @@ describe("metadatos de los bloques (una sola fuente)", () => {
     expect(find("no asistio")).toContain("trigger:booking_no_show");
     expect(find("citas")).toEqual(["trigger:booking_created", "trigger:booking_confirmed", "trigger:booking_no_show"]);
     expect(find("cita")).toEqual(expect.arrayContaining(["trigger:booking_created", "step:wait_until"]));
-    expect(find("etiqueta")).toEqual(["step:add_tag", "step:remove_tag"]);
+    expect(find("etiqueta")).toEqual(["trigger:tag_added", "step:add_tag", "step:remove_tag"]);
     expect(find("zzzz")).toEqual([]);
   });
 });

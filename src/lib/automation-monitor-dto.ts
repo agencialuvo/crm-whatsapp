@@ -1,5 +1,6 @@
 import { LOGS_MAX_LIMIT, type LogStatusFilter } from "@/lib/automation-schemas";
 import { stepLabel } from "@/lib/automation-dto";
+import type { ManualRunOrigin } from "@/lib/automation";
 
 /**
  * Automatizaciones (monitoreo) — tipos y textos de las pantallas de estado e historial (compartidos y
@@ -43,6 +44,8 @@ export type LogDto = {
   contact: { id: string; name: string; phone: string | null };
   error: string | null;
   metadata: Record<string, unknown> | null;
+  /** Solo si la ejecución nació de un disparo manual (quién y con qué lote); `null`/ausente en el resto. */
+  origin?: ManualRunOrigin | null;
   executedAt: string;
 };
 

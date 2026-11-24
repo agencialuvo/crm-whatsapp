@@ -3,6 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { MAX_TAGS_PER_ORG, tagKey, type TagDto, type TagWithCount } from "@/lib/tags";
+import { onTagAdded } from "@/server/automation/triggers";
 
 /**
  * Etiquetas de contacto: alta, lista, edición, borrado y asignación. Todo pasa por `scoped()`.
@@ -163,15 +164,30 @@ async function assertContact(organizationId: string, contactId: string) {
   if (!row) throw new TagError("contact_not_found", 404, "El contacto no existe");
 }
 
-/** Asigna la etiqueta al contacto. Devuelve `true` si fue una asignación nueva, `false` si ya la tenía. */
-export async function assignTag(organizationId: string, contactId: string, tagId: string): Promise<boolean> {
+/**
+ * Asigna la etiqueta al contacto. Devuelve `true` si fue una asignación nueva, `false` si ya la tenía.
+ *
+ * Una asignación NUEVA avisa a las automatizaciones (`tag_added`), ya hecha y sin poder fallar hacia arriba. Con
+ * `viaAutomation` (el paso `add_tag` del motor) NO avisa: es el anti-bucle de siempre (`set_stage` hace lo mismo), así
+ * un flujo que etiqueta no puede disparar otro que etiqueta, y así sin fin.
+ */
+export async function assignTag(
+  organizationId: string,
+  contactId: string,
+  tagId: string,
+  opts: { viaAutomation?: boolean } = {}
+): Promise<boolean> {
   if (!(await getTag(organizationId, tagId))) throw new TagError("not_found", 404, "La etiqueta no existe");
   await assertContact(organizationId, contactId);
   const rows = await getDb()
     .insert(schema.contactTag)
     .values({ organizationId, contactId, tagId })
     .onConflictDoNothing()
-    .returning({ tagId: schema.contactTag.tagId });
+    .returning({ tagId: schema.contactTag.tagId, assignedAt: schema.contactTag.assignedAt });
+  const added = rows[0];
+  if (added && !opts.viaAutomation) {
+    await onTagAdded({ organizationId, contactId, tagId, assignedAt: added.assignedAt });
+  }
   return rows.length > 0;
 }
 

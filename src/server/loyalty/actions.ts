@@ -18,6 +18,7 @@ import {
   type LoyaltySettingsInput,
 } from "@/lib/loyalty";
 import { normalizeMx } from "@/lib/meta/client";
+import { onLoyaltyRewardUnlocked } from "@/server/automation/triggers";
 import { SalonError } from "@/server/business/http";
 
 /**
@@ -521,6 +522,26 @@ export async function registerLoyaltyTransaction(
   });
 }
 
+/**
+ * Avisa a las automatizaciones de los premios que un movimiento de sellos acaba de desbloquear
+ * (`loyalty_reward_unlocked`). Se llama DESPUÉS del commit de la transacción que lo registró —nunca desde dentro de
+ * ella—: ningún mensaje puede salir por un sello que luego se deshace. Nunca lanza.
+ */
+export async function announceLoyaltyUnlock(r: RegisterLoyaltyTransactionResult): Promise<void> {
+  if (r.unlocked.length === 0) return;
+  try {
+    await onLoyaltyRewardUnlocked({
+      organizationId: r.card.organizationId,
+      contactId: r.card.contactId,
+      transactionId: r.transaction.id,
+      currentStamps: r.card.currentStamps,
+      unlocked: r.unlocked,
+    });
+  } catch (err) {
+    console.error("[loyalty] no se pudo avisar a las automatizaciones del premio", err);
+  }
+}
+
 /* --------------------------------- consultas -------------------------------- */
 
 export interface LoyaltyCardView {
@@ -660,6 +681,8 @@ export async function syncSaleStamp(
     staffId: string | null;
     amountCents: number;
     birthdayDiscount: boolean;
+    /** Recibe el sello que acaba de otorgarse: quien llama avisa de un premio desbloqueado cuando la transacción termine. */
+    onStamped?: (r: RegisterLoyaltyTransactionResult) => void;
   }
 ): Promise<{ had: boolean; has: boolean }> {
   const [earned] = await tx
@@ -692,6 +715,7 @@ export async function syncSaleStamp(
       birthdayDiscount: false,
       amountCents: p.amountCents,
     });
+    if (stamped) p.onStamped?.(stamped);
     return { had, has: stamped !== null };
   }
   return { had, has: keeps };

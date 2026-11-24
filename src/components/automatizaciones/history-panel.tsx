@@ -197,7 +197,14 @@ export function HistoryPanel({
                     >
                       <td className="whitespace-nowrap px-4 py-3 tabular-nums">{formatWhen(log.executedAt)}</td>
                       <td className="px-4 py-3">
-                        <p className="font-medium">{log.contact.name}</p>
+                        <p className="font-medium">
+                          {log.contact.name}
+                          {log.origin && (
+                            <Badge variant="secondary" className="ml-2 align-middle" title="Se inició a mano desde «Ejecutar para un contacto»">
+                              Manual
+                            </Badge>
+                          )}
+                        </p>
                         {log.contact.phone && <p className="text-xs text-text-3">{log.contact.phone}</p>}
                       </td>
                       <td className="px-4 py-3">{logStepTitle(log)}</td>

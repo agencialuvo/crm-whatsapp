@@ -14,7 +14,7 @@ import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
 import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { ConfirmDialog } from "@/components/negocio/modal";
-import { activationBlock, triggerLabel, type FlowListItem, type StageOption } from "@/lib/automation-dto";
+import { activationBlock, triggerLabel, type FlowListItem, type StageOption, type TagOption } from "@/lib/automation-dto";
 
 /** Lista vacía estable mientras los flujos cargan. */
 const NONE: never[] = [];
@@ -31,6 +31,7 @@ export function AutomationsClient() {
   const router = useRouter();
   const [flows, setFlows] = useState<FlowListItem[] | null>(null);
   const [stages, setStages] = useState<StageOption[]>([]);
+  const [tags, setTags] = useState<TagOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -42,13 +43,16 @@ export function AutomationsClient() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [list, st] = await Promise.all([
+      const [list, st, tg] = await Promise.all([
         apiFetch<{ flows: FlowListItem[] }>("/api/automations"),
         // Las etapas solo sirven para el formulario: si fallan, la lista se muestra igual.
         apiFetch<{ stages: StageOption[] }>("/api/pipeline/stages").catch(() => ({ stages: [] as StageOption[] })),
+        // Las etiquetas solo sirven para el disparador «Etiqueta asignada».
+        apiFetch<{ tags: TagOption[] }>("/api/tags").catch(() => ({ tags: [] as TagOption[] })),
       ]);
       setFlows(list.flows);
       setStages(st.stages);
+      setTags(tg.tags);
     } catch (err) {
       setLoadError(describeError(err));
     }
@@ -269,6 +273,7 @@ export function AutomationsClient() {
         <FlowDialog
           flow={null}
           stages={stages}
+          tags={tags}
           onClose={() => setCreating(false)}
           // Recién creado está vacío: se va a su detalle para agregarle pasos.
           onSaved={(flow) => router.push(`/automatizaciones/${flow.id}`)}

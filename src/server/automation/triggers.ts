@@ -7,11 +7,16 @@ import {
   birthdayTargetDate,
   birthdaysDueOn,
   leadCreatedDedupeKey,
+  loyaltyFlowMatches,
+  loyaltyRewardDedupeKey,
   parseTriggerConfig,
   splitISODate,
   stageDedupeKey,
   stageFlowMatches,
+  tagAddedDedupeKey,
+  tagFlowMatches,
 } from "@/lib/automation";
+import type { LoyaltyMilestone } from "@/lib/db/schema";
 import { todayInTz } from "@/lib/time/slots";
 import { emitAutomationEvent } from "@/server/automation/events";
 import { automationsEnabled } from "@/server/automation/flag";
@@ -145,6 +150,91 @@ export async function onLeadCreated(
     console.error("[automatizaciones] el disparador de lead nuevo falló:", err);
     return 0;
   }
+}
+
+/**
+ * Se le asignó una etiqueta a un contacto: arranca cada flujo `tag_added` activo que reaccione a ella. La llave lleva la
+ * hora de la asignación: quitarla y volver a ponerla rearma el flujo; el mismo aviso dos veces no lo duplica.
+ * Nunca lanza (lo llama `assignTag` y un fallo aquí no puede costar la asignación). Quien la llama decide si el
+ * evento aplica: una etiqueta puesta por una automatización NO lo emite (anti-bucle, como `set_stage`).
+ */
+export async function onTagAdded(
+  input: { organizationId: string; contactId: string; tagId: string; assignedAt: Date },
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    return await emitAutomationEvent(
+      {
+        organizationId: input.organizationId,
+        trigger: "tag_added",
+        contactId: input.contactId,
+        dedupeKey: tagAddedDedupeKey(input.tagId, input.assignedAt),
+        context: { tagId: input.tagId },
+        matches: (f) => tagFlowMatches(parseTriggerConfig(f.triggerConfig), input.tagId),
+      },
+      store,
+      now
+    );
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de etiqueta falló:", err);
+    return 0;
+  }
+}
+
+/** Lo que se sabe de un premio desbloqueado: viaja en el `context` de la ejecución. */
+export type LoyaltyUnlockInput = {
+  organizationId: string;
+  contactId: string;
+  /** El movimiento de sellos que cruzó el hito (`loyalty_transaction.id`): con el hito, la llave de idempotencia. */
+  transactionId: string;
+  currentStamps: number;
+  unlocked: readonly LoyaltyMilestone[];
+};
+
+/**
+ * Un cliente desbloqueó uno o más premios. DEBE llamarse DESPUÉS del commit de la transacción que sumó el sello (el
+ * mensaje no puede salir por un sello que luego se deshace). Arranca cada flujo `loyalty_reward_unlocked` activo, una
+ * vez por premio cruzado, con el detalle del hito en `context.loyalty`. Nunca lanza.
+ */
+export async function onLoyaltyRewardUnlocked(
+  input: LoyaltyUnlockInput,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled() || input.unlocked.length === 0) return 0;
+  let started = 0;
+  for (const m of input.unlocked) {
+    try {
+      started += await emitAutomationEvent(
+        {
+          organizationId: input.organizationId,
+          trigger: "loyalty_reward_unlocked",
+          contactId: input.contactId,
+          dedupeKey: loyaltyRewardDedupeKey(input.transactionId, m.stamps),
+          context: {
+            loyalty: {
+              milestoneStamps: m.stamps,
+              title: m.title,
+              rewardType: m.rewardType,
+              ...(m.discountPercentage !== undefined ? { discountPercentage: m.discountPercentage } : {}),
+              currentStamps: input.currentStamps,
+              transactionId: input.transactionId,
+            },
+          },
+          matches: (f) => loyaltyFlowMatches(parseTriggerConfig(f.triggerConfig), m.stamps),
+        },
+        store,
+        now
+      );
+    } catch (err) {
+      console.error("[automatizaciones] el disparador de premio de fidelidad falló:", err);
+    }
+  }
+  return started;
 }
 
 /* ─── Citas ─── */

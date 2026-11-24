@@ -33,6 +33,7 @@ import { catalogStaffMaps, staffGivesItem } from "@/server/business/catalog-staf
 import { publish } from "@/server/events/bus";
 import { advanceLeadForContact } from "@/server/leads/auto-stage";
 import {
+  announceLoyaltyUnlock,
   birthdayUsedInYear,
   getBirthdayCampaign,
   redeemInSale,
@@ -40,6 +41,7 @@ import {
   reverseSaleStamp,
   stampSale,
   syncSaleStamp,
+  type RegisterLoyaltyTransactionResult,
 } from "@/server/loyalty/actions";
 
 /**
@@ -314,6 +316,8 @@ export async function registerServiceSale(
     soldAt = zonedWallClockToUtc(input.soldOn, "12:00", tz) ?? undefined;
   }
 
+  // Premios que el sello de esta venta desbloquea: se avisan a las automatizaciones DESPUÉS del commit.
+  let unlockedByStamp: RegisterLoyaltyTransactionResult | null = null;
   const result = await db.transaction(async (tx) => {
     // Sin `staffId` la venta es del negocio (sin comisión). Con `staffId`, el profesional debe existir y estar activo.
     let member: StaffRow | null = null;
@@ -579,6 +583,7 @@ export async function registerServiceSale(
         amountCents: input.amountCents,
       });
       if (stamped) {
+        if (stamped.rewardJustUnlocked) unlockedByStamp = stamped;
         loyalty = {
           type: input.birthdayDiscount === true ? "birthday_excluded" : "earned",
           currentStamps: stamped.card.currentStamps,
@@ -626,6 +631,9 @@ export async function registerServiceSale(
     };
     return { sale, commissionPercentage: percentage, commissionSource: source, loyalty };
   });
+
+  // Ya con la venta confirmada: un premio desbloqueado por su sello puede arrancar un flujo (`loyalty_reward_unlocked`).
+  if (unlockedByStamp) await announceLoyaltyUnlock(unlockedByStamp);
 
   // 044: una venta vinculada al contacto lo lleva a «Cliente» (incluso un salto directo desde «Nuevo» si el
   // pago es inmediato). Si el contacto no tiene lead, no se crea uno. Si el lead no tenía monto, toma el de la venta.
@@ -1013,6 +1021,7 @@ export async function updateSale(
   actorUserId: string
 ): Promise<{ id: string; changed: boolean }> {
   const tz = input.soldOn ? await businessTimezone(organizationId) : null;
+  const unlockedByEdit: RegisterLoyaltyTransactionResult[] = [];
   const result = await getDb().transaction(async (tx) => {
     const sale = schema.serviceSale;
     const [current] = await tx
@@ -1203,6 +1212,9 @@ export async function updateSale(
       staffId: member?.id ?? null,
       amountCents: input.amountCents,
       birthdayDiscount: current.birthdayDiscount,
+      onStamped: (r) => {
+        if (r.rewardJustUnlocked) unlockedByEdit.push(r);
+      },
     });
     await tx.insert(schema.serviceSaleEdit).values({
       id: newId("serviceSaleEdit"),
@@ -1220,6 +1232,7 @@ export async function updateSale(
       newContactId: nextContactId && nextContactId !== current.contactId ? nextContactId : null,
     };
   });
+  for (const r of unlockedByEdit) await announceLoyaltyUnlock(r);
   if ("newContactId" in result && result.newContactId) {
     await advanceLeadForContact({
       organizationId,

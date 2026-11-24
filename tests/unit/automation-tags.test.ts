@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CONDITION_RULE_TYPES,
   addTagConfigSchema,
   compileLinearEdges,
   conditionConfigSchema,
   conditionHandle,
   evaluateCondition,
   setStageConfigSchema,
+  wholeDaysSince,
   type ConditionFacts,
 } from "@/lib/automation";
+import { validateGraph } from "@/lib/automation-graph";
 import { STEP_TYPES, parseStepConfig, stepCreateSchema } from "@/lib/automation-schemas";
-import { describeRule, describeStep } from "@/lib/automation-dto";
+import { CONDITION_RULE_LABELS, describeRule, describeStep } from "@/lib/automation-dto";
 import { TAG_COLORS, tagAssignSchema, tagCreateSchema, tagKey, tagPatchSchema } from "@/lib/tags";
 import { processRow, type Deps, type Row, type Step } from "@/server/automation/engine";
 
@@ -167,7 +170,7 @@ const baseRow: Row = {
 function setup(
   step: Pick<Step, "stepType" | "config">,
   over: {
-    facts?: { tagIds: string[]; stageId: string | null };
+    facts?: { tagIds: string[]; stageId: string | null } & Partial<ConditionFacts>;
     booking?: { status: string; scheduledAt: Date; confirmedAt?: Date | null } | null;
     trigger?: string;
     row?: Partial<Row>;
@@ -327,5 +330,120 @@ describe("motor — condition", () => {
     const t = setup(cond({ rule: { type: "tag_has" } }));
     expect(await t.run()).toBe("failed");
     expect(t.deps.markFailed).toHaveBeenCalledWith(t.row, "invalid_step_config");
+  });
+});
+
+
+/* ─── Paso 2: cumpleaños, asistencia y fidelización ─── */
+
+describe("evaluateCondition — hechos del paso 2", () => {
+  it("has_upcoming_booking: sin el dato cuenta como «no»", () => {
+    const rule = { type: "has_upcoming_booking" } as const;
+    expect(evaluateCondition(rule, facts({ hasUpcomingBooking: true })).result).toBe(true);
+    expect(evaluateCondition(rule, facts({ hasUpcomingBooking: false })).result).toBe(false);
+    expect(evaluateCondition(rule, facts()).result).toBe(false);
+  });
+  it("visited_within_days: dentro del plazo sí; pasado, nunca o sin dato, no", () => {
+    const rule = { type: "visited_within_days", days: 30 } as const;
+    expect(evaluateCondition(rule, facts({ daysSinceLastVisit: 0 })).result).toBe(true);
+    expect(evaluateCondition(rule, facts({ daysSinceLastVisit: 30 })).result).toBe(true);
+    expect(evaluateCondition(rule, facts({ daysSinceLastVisit: 31 })).result).toBe(false);
+    expect(evaluateCondition(rule, facts({ daysSinceLastVisit: null })).result).toBe(false);
+    expect(evaluateCondition(rule, facts()).result).toBe(false);
+  });
+  it("stamps_gte: igual o más sí; menos o sin dato, no", () => {
+    const rule = { type: "stamps_gte", stamps: 5 } as const;
+    expect(evaluateCondition(rule, facts({ stamps: 5 })).result).toBe(true);
+    expect(evaluateCondition(rule, facts({ stamps: 9 })).result).toBe(true);
+    expect(evaluateCondition(rule, facts({ stamps: 4 })).result).toBe(false);
+    expect(evaluateCondition(rule, facts()).result).toBe(false);
+  });
+  it("birthday_today", () => {
+    const rule = { type: "birthday_today" } as const;
+    expect(evaluateCondition(rule, facts({ birthdayToday: true })).result).toBe(true);
+    expect(evaluateCondition(rule, facts({ birthdayToday: false })).result).toBe(false);
+    expect(evaluateCondition(rule, facts()).result).toBe(false);
+  });
+  it("wholeDaysSince cuenta días enteros y nunca es negativo", () => {
+    const now = new Date("2026-03-15T12:00:00.000Z");
+    expect(wholeDaysSince(new Date("2026-03-15T11:00:00.000Z"), now)).toBe(0);
+    expect(wholeDaysSince(new Date("2026-03-14T11:59:00.000Z"), now)).toBe(1);
+    expect(wholeDaysSince(new Date("2026-02-13T12:00:00.000Z"), now)).toBe(30);
+    expect(wholeDaysSince(new Date("2026-03-16T12:00:00.000Z"), now)).toBe(0);
+  });
+});
+
+describe("conditionConfigSchema — reglas del paso 2", () => {
+  it("las que no llevan datos se aceptan tal cual", () => {
+    for (const type of ["has_upcoming_booking", "birthday_today"]) {
+      expect(conditionConfigSchema.safeParse({ rule: { type } }).success, type).toBe(true);
+    }
+  });
+  it("visited_within_days y stamps_gte exigen un entero dentro de su tope", () => {
+    const ok = (rule: Record<string, unknown>) => conditionConfigSchema.safeParse({ rule }).success;
+    expect(ok({ type: "visited_within_days", days: 30 })).toBe(true);
+    expect(ok({ type: "visited_within_days", days: 3650 })).toBe(true);
+    for (const days of [0, -1, 1.5, 3651, "30"]) expect(ok({ type: "visited_within_days", days }), String(days)).toBe(false);
+    expect(ok({ type: "visited_within_days" })).toBe(false);
+    expect(ok({ type: "stamps_gte", stamps: 8 })).toBe(true);
+    for (const stamps of [0, -2, 2.5, 1001]) expect(ok({ type: "stamps_gte", stamps }), String(stamps)).toBe(false);
+    expect(ok({ type: "stamps_gte" })).toBe(false);
+  });
+  it("tienen etiqueta en español y frase para la tarjeta", () => {
+    expect(describeRule({ type: "has_upcoming_booking" })).toBe("El contacto tiene una cita próxima");
+    expect(describeRule({ type: "visited_within_days", days: 1 })).toBe("Vino a una cita en los últimos 1 día");
+    expect(describeRule({ type: "visited_within_days", days: 30 })).toBe("Vino a una cita en los últimos 30 días");
+    expect(describeRule({ type: "stamps_gte", stamps: 1 })).toBe("Su tarjeta tiene al menos 1 sello");
+    expect(describeRule({ type: "stamps_gte", stamps: 8 })).toBe("Su tarjeta tiene al menos 8 sellos");
+    expect(describeRule({ type: "birthday_today" })).toBe("Hoy es su cumpleaños");
+  });
+  it("cada tipo de regla tiene su etiqueta para el formulario", () => {
+    for (const t of CONDITION_RULE_TYPES) expect(CONDITION_RULE_LABELS[t], t).toBeTruthy();
+  });
+});
+
+describe("motor — condition con los hechos del paso 2", () => {
+  const cond = (config: Record<string, unknown>) => ({ stepType: "condition", config });
+  const withFacts = (extra: Omit<Partial<ConditionFacts>, "tagIds" | "stageId">) => ({ tagIds: [] as string[], stageId: null as string | null, ...extra });
+
+  it("«cumpleañero sin cita próxima»: la rama Sí/No sale de los hechos de AHORA", async () => {
+    const yes = setup(cond({ rule: { type: "has_upcoming_booking" } }), { facts: withFacts({ hasUpcomingBooking: false, birthdayToday: true }) });
+    await yes.run();
+    expect(yes.deps.completeAndAdvance).toHaveBeenCalledWith(yes.row, NOW, { handle: "false" });
+    expect(yes.logs[0]!.metadata).toMatchObject({ rule: { type: "has_upcoming_booking" }, result: false });
+
+    const has = setup(cond({ rule: { type: "has_upcoming_booking" } }), { facts: withFacts({ hasUpcomingBooking: true }) });
+    await has.run();
+    expect(has.deps.completeAndAdvance).toHaveBeenCalledWith(has.row, NOW, { handle: "true" });
+  });
+  it("visited_within_days, stamps_gte y birthday_today salen por su asa", async () => {
+    const a = setup(cond({ rule: { type: "visited_within_days", days: 60 } }), { facts: withFacts({ daysSinceLastVisit: 45 }) });
+    await a.run();
+    expect(a.deps.completeAndAdvance).toHaveBeenCalledWith(a.row, NOW, { handle: "true" });
+
+    const b = setup(cond({ rule: { type: "stamps_gte", stamps: 8 } }), { facts: withFacts({ stamps: 3 }) });
+    await b.run();
+    expect(b.deps.completeAndAdvance).toHaveBeenCalledWith(b.row, NOW, { handle: "false" });
+
+    const c = setup(cond({ rule: { type: "birthday_today" } }), { facts: withFacts({ birthdayToday: true }) });
+    await c.run();
+    expect(c.deps.completeAndAdvance).toHaveBeenCalledWith(c.row, NOW, { handle: "true" });
+  });
+  it("un proveedor de hechos viejo (solo etiquetas y etapa) no rompe: todo cuenta como «no»", async () => {
+    const t = setup(cond({ rule: { type: "stamps_gte", stamps: 1 } }));
+    expect(await t.run()).toBe("completed");
+    expect(t.logs[0]!.metadata.result).toBe(false);
+  });
+  it("estas reglas NO exigen una cita (a diferencia de booking_confirmed): valen en cualquier flujo", () => {
+    for (const rule of [{ type: "has_upcoming_booking" }, { type: "visited_within_days", days: 7 }, { type: "stamps_gte", stamps: 2 }, { type: "birthday_today" }]) {
+      const r = validateGraph({
+        nodes: [
+          { id: "trigger", type: "trigger", config: { triggerType: "manual", triggerConfig: null } },
+          { id: "c", type: "condition", config: { rule } },
+        ],
+        edges: [{ source: "trigger", target: "c", sourceHandle: "default" }],
+      });
+      expect(r.errors.filter((e) => e.code === "requires_booking"), rule.type).toEqual([]);
+    }
   });
 });

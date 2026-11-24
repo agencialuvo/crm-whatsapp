@@ -1,4 +1,7 @@
-import { eq } from "drizzle-orm";
+import { desc, eq, gt, lte } from "drizzle-orm";
+import { birthdaysDueOn, wholeDaysSince, type ConditionFacts } from "@/lib/automation";
+import { todayInTz } from "@/lib/time/slots";
+import { businessTimezone } from "@/server/analytics/period";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { moveLeadToStage } from "@/server/leads/stage-history";
@@ -21,7 +24,8 @@ export async function applyTag(
   mode: "add" | "remove"
 ): Promise<TagActionResult> {
   try {
-    if (mode === "add") return (await assignTag(organizationId, contactId, tagId)) ? "added" : "unchanged";
+    // `viaAutomation`: una etiqueta puesta por un flujo no dispara `tag_added` (anti-bucle).
+    if (mode === "add") return (await assignTag(organizationId, contactId, tagId, { viaAutomation: true })) ? "added" : "unchanged";
     return (await unassignTag(organizationId, contactId, tagId)) ? "removed" : "unchanged";
   } catch (err) {
     if (err instanceof TagError && err.code === "not_found") return "tag_not_found";
@@ -66,16 +70,56 @@ export async function moveContactToStage(
   return { status: res.changed ? "moved" : "unchanged", toStageId: stageId, fromStageId: lead.stageId };
 }
 
-/** Los datos que una condición necesita del contacto: sus etiquetas y su etapa de hoy. */
+/**
+ * Los datos que una condición necesita del contacto, de AHORA (no de cuando arrancó el flujo): sus etiquetas y su
+ * etapa y, para las jugadas de cumpleaños, asistencia y fidelización, si tiene una cita próxima, hace cuántos días vino
+ * por última vez, cuántos sellos tiene y si hoy cumple años (en la zona horaria del negocio).
+ */
 export async function contactFacts(
   organizationId: string,
-  contactId: string
-): Promise<{ tagIds: string[]; stageId: string | null }> {
+  contactId: string,
+  now: Date = new Date()
+): Promise<Pick<ConditionFacts, "tagIds" | "stageId" | "hasUpcomingBooking" | "daysSinceLastVisit" | "stamps" | "birthdayToday">> {
+  const db = getDb();
   const l = schema.lead;
-  const [lead] = await getDb()
-    .select({ stageId: l.stageId })
-    .from(l)
-    .where(scoped(l.organizationId, organizationId, eq(l.contactId, contactId)))
-    .limit(1);
-  return { tagIds: await tagIdsOfContact(organizationId, contactId), stageId: lead?.stageId ?? null };
+  const b = schema.booking;
+  const card = schema.customerLoyaltyCard;
+  const c = schema.contact;
+  // Solo citas reales de un cliente (no bloqueos de agenda ni citas del Laboratorio).
+  const real = (...extra: Parameters<typeof scoped>[2][]) =>
+    scoped(b.organizationId, organizationId, eq(b.contactId, contactId), eq(b.kind, "session"), eq(b.isTest, false), ...extra);
+
+  const [lead, tagIds, upcoming, lastVisit, stampsRow, person, timezone] = await Promise.all([
+    db.select({ stageId: l.stageId }).from(l).where(scoped(l.organizationId, organizationId, eq(l.contactId, contactId))).limit(1),
+    tagIdsOfContact(organizationId, contactId),
+    db.select({ id: b.id }).from(b).where(real(eq(b.status, "agendada"), gt(b.scheduledAt, now))).limit(1),
+    db
+      .select({ at: b.scheduledAt })
+      .from(b)
+      .where(real(eq(b.status, "realizada"), lte(b.scheduledAt, now)))
+      .orderBy(desc(b.scheduledAt))
+      .limit(1),
+    db
+      .select({ stamps: card.currentStamps })
+      .from(card)
+      .where(scoped(card.organizationId, organizationId, eq(card.contactId, contactId)))
+      .limit(1),
+    db
+      .select({ day: c.birthdayDay, month: c.birthdayMonth })
+      .from(c)
+      .where(scoped(c.organizationId, organizationId, eq(c.id, contactId)))
+      .limit(1),
+    businessTimezone(organizationId),
+  ]);
+
+  const born = person[0];
+  const today = todayInTz(now, timezone);
+  return {
+    tagIds,
+    stageId: lead[0]?.stageId ?? null,
+    hasUpcomingBooking: upcoming.length > 0,
+    daysSinceLastVisit: lastVisit[0] ? wholeDaysSince(lastVisit[0].at, now) : null,
+    stamps: stampsRow[0]?.stamps ?? 0,
+    birthdayToday: !!born?.day && !!born?.month && birthdaysDueOn(today).some((d) => d.day === born.day && d.month === born.month),
+  };
 }

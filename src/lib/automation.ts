@@ -227,14 +227,36 @@ export type SetStageConfig = z.infer<typeof setStageConfigSchema>;
 
 /* ─── Condición (If/Else) ─── */
 
-export const CONDITION_RULE_TYPES = ["tag_has", "tag_missing", "booking_confirmed", "stage_is"] as const;
+export const CONDITION_RULE_TYPES = [
+  "tag_has",
+  "tag_missing",
+  "booking_confirmed",
+  "stage_is",
+  // Paso 2: cumpleaños, asistencia y fidelización.
+  "has_upcoming_booking",
+  "visited_within_days",
+  "stamps_gte",
+  "birthday_today",
+] as const;
 export type ConditionRuleType = (typeof CONDITION_RULE_TYPES)[number];
+
+/** Topes de las reglas con número: 10 años de historia; 1000 sellos (más de lo que cualquier tarjeta pide). */
+export const CONDITION_MAX_DAYS = 3650;
+export const CONDITION_MAX_STAMPS = 1000;
 
 export const conditionRuleSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("tag_has"), tagId: entityId }),
   z.object({ type: z.literal("tag_missing"), tagId: entityId }),
   z.object({ type: z.literal("booking_confirmed") }),
   z.object({ type: z.literal("stage_is"), stageId: entityId }),
+  /** El contacto tiene una cita agendada que aún no llega (con el «No» sirve para «no tiene cita»). */
+  z.object({ type: z.literal("has_upcoming_booking") }),
+  /** Tuvo una cita REALIZADA en los últimos `days` días (con el «No»: no vino o hace mucho que no viene). */
+  z.object({ type: z.literal("visited_within_days"), days: z.number().int().min(1).max(CONDITION_MAX_DAYS) }),
+  /** Su tarjeta de fidelidad tiene al menos `stamps` sellos hoy. */
+  z.object({ type: z.literal("stamps_gte"), stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS) }),
+  /** Hoy es su cumpleaños (en la zona horaria del negocio). */
+  z.object({ type: z.literal("birthday_today") }),
 ]);
 export type ConditionRule = z.infer<typeof conditionRuleSchema>;
 
@@ -262,6 +284,14 @@ export type ConditionFacts = {
   stageId: string | null;
   /** La cita en contexto, o null si el flujo no es de citas. */
   booking: { confirmedAt?: Date | null } | null;
+  /**
+   * Paso 2 (opcionales: quien no los trae, los trata como «no»): tiene una cita futura agendada; días enteros desde
+   * su última cita realizada (`null` = nunca vino); sellos actuales de su tarjeta; y si hoy es su cumpleaños.
+   */
+  hasUpcomingBooking?: boolean;
+  daysSinceLastVisit?: number | null;
+  stamps?: number;
+  birthdayToday?: boolean;
 };
 
 /** El resultado de evaluar una regla: verdadero o falso. */
@@ -356,7 +386,21 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): C
     case "booking_confirmed":
       // Sin cita en contexto no hay nada confirmado.
       return { result: !!facts.booking?.confirmedAt };
+    case "has_upcoming_booking":
+      return { result: !!facts.hasUpcomingBooking };
+    case "visited_within_days":
+      // `null`/ausente: nunca vino, así que no vino «en los últimos N días».
+      return { result: typeof facts.daysSinceLastVisit === "number" && facts.daysSinceLastVisit <= rule.days };
+    case "stamps_gte":
+      return { result: (facts.stamps ?? 0) >= rule.stamps };
+    case "birthday_today":
+      return { result: !!facts.birthdayToday };
   }
+}
+
+/** Los días enteros entre una fecha pasada y ahora (nunca negativo): el «hace cuántos días» de `visited_within_days`. */
+export function wholeDaysSince(past: Date, now: Date): number {
+  return Math.max(0, Math.floor((now.getTime() - past.getTime()) / 86_400_000));
 }
 
 /* ─── Esperar la respuesta del cliente ─── */
@@ -469,6 +513,10 @@ export const daysOffsetSchema = z.number().int().min(-BIRTHDAY_MAX_DAYS_BEFORE).
  */
 export const flowTriggerConfigSchema = z.object({
   toStageId: z.string().trim().min(1).nullish(),
+  /** `tag_added`: solo esa etiqueta (sin ella, cualquiera). */
+  tagId: z.string().trim().min(1).nullish(),
+  /** `loyalty_reward_unlocked`: solo el hito de esos sellos (sin ello, cualquier premio). */
+  stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish(),
   hour: z.number().int().min(0).max(23).optional(),
   daysOffset: daysOffsetSchema.optional(),
 });
@@ -483,6 +531,16 @@ export function parseTriggerConfig(raw: unknown): FlowTriggerConfig {
 /** ¿Este flujo `stage_changed` reacciona al cambio a `toStageId`? Sin etapa configurada, a cualquiera. */
 export function stageFlowMatches(config: FlowTriggerConfig, toStageId: string): boolean {
   return !config.toStageId || config.toStageId === toStageId;
+}
+
+/** ¿Este flujo `tag_added` reacciona a esa etiqueta? Sin etiqueta configurada, a cualquiera. */
+export function tagFlowMatches(config: FlowTriggerConfig, tagId: string): boolean {
+  return !config.tagId || config.tagId === tagId;
+}
+
+/** ¿Este flujo `loyalty_reward_unlocked` reacciona al hito de `stamps` sellos? Sin hito configurado, a cualquiera. */
+export function loyaltyFlowMatches(config: FlowTriggerConfig, stamps: number): boolean {
+  return !config.stamps || config.stamps === stamps;
 }
 
 export function isLeapYear(year: number): boolean {
@@ -528,6 +586,36 @@ export function birthdaySendAt(todayISO: string, hour: number | undefined, timez
 export const birthdayDedupeKey = (year: number) => `birthday:${year}`;
 /** Una vez por lead y etapa: ir y volver entre etapas no repite el mensaje al cliente. */
 export const stageDedupeKey = (leadId: string, stageId: string) => `stage:${leadId}:${stageId}`;
+/**
+ * Una etiqueta asignada. La hora de la asignación entra en la llave: quitarla y volver a ponerla es OTRA asignación y
+ * rearma el flujo; dos avisos de la misma asignación no lo duplican.
+ */
+export const tagAddedDedupeKey = (tagId: string, assignedAt: Date) => `tag_added:${tagId}:${assignedAt.getTime()}`;
+/** Un premio de fidelidad desbloqueado: una vez por movimiento de sellos y por hito que cruzó. */
+export const loyaltyRewardDedupeKey = (transactionId: string, stamps: number) => `loyalty_reward:${transactionId}:${stamps}`;
+/** Un disparo manual: el `batchId` lo genera la pantalla al abrir el diálogo, así el doble clic no lo repite. */
+export const manualDedupeKey = (batchId: string) => `manual:${batchId}`;
+
+/* ─── Disparo manual ─── */
+
+/** El `batchId` de un disparo manual: lo manda la pantalla; solo letras, números, guion y guion bajo. */
+export const manualBatchIdSchema = z.string().trim().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/, "batchId no válido");
+
+/** Quién y cómo arrancó una ejecución a mano: va en `automation_run.context` y se ve en el historial. */
+export type ManualRunOrigin = { source: "manual"; triggeredBy: string; batchId: string };
+export const manualRunContext = (triggeredBy: string, batchId: string): ManualRunOrigin => ({ source: "manual", triggeredBy, batchId });
+
+/** El origen manual de una ejecución, leído de su `context` (null si no nació de un disparo manual). */
+export function manualOriginOf(context: unknown): ManualRunOrigin | null {
+  const c = (context ?? {}) as Record<string, unknown>;
+  if (c.source !== "manual") return null;
+  return {
+    source: "manual",
+    triggeredBy: typeof c.triggeredBy === "string" ? c.triggeredBy : "",
+    batchId: typeof c.batchId === "string" ? c.batchId : "",
+  };
+}
+
 /** Una vez por lead. */
 export const leadCreatedDedupeKey = (leadId: string) => `lead_created:${leadId}`;
 /**

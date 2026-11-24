@@ -1,6 +1,7 @@
 import { and, count, desc, eq, inArray, max, min, type SQL } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
+import { manualOriginOf } from "@/lib/automation";
 import type { LogsQuery, LogStatusFilter } from "@/lib/automation-schemas";
 import { AutomationError } from "@/server/automation/http";
 
@@ -138,6 +139,8 @@ export async function listLogs(organizationId: string, flowId: string | null, qu
   const c = schema.contact;
   const s = schema.automationStep;
   const f = schema.automationFlow;
+  const q = schema.automationQueue;
+  const run = schema.automationRun;
 
   const where: SQL = scoped(
     l.organizationId,
@@ -161,12 +164,16 @@ export async function listLogs(organizationId: string, flowId: string | null, qu
         contactId: l.contactId,
         contactName: c.name,
         contactPhone: c.phone,
+        // De dónde nació la ejecución (p. ej. un disparo manual): sale del `context` de su `run`.
+        runContext: run.context,
       })
       .from(l)
       // Cada unión lleva también la organización: un id suelto jamás cruza de tenant.
       .innerJoin(f, and(eq(f.id, l.flowId), eq(f.organizationId, l.organizationId)))
       .innerJoin(c, and(eq(c.id, l.contactId), eq(c.organizationId, l.organizationId)))
       .leftJoin(s, and(eq(s.id, l.stepId), eq(s.organizationId, l.organizationId)))
+      .leftJoin(q, and(eq(q.id, l.queueId), eq(q.organizationId, l.organizationId)))
+      .leftJoin(run, and(eq(run.id, q.runId), eq(run.organizationId, l.organizationId)))
       .where(where)
       .orderBy(desc(l.executedAt), desc(l.id))
       .limit(query.limit)
@@ -186,6 +193,7 @@ export async function listLogs(organizationId: string, flowId: string | null, qu
       contact: { id: r.contactId, name: r.contactName, phone: r.contactPhone },
       error: logError(r.metadata),
       metadata: (r.metadata ?? null) as Record<string, unknown> | null,
+      origin: manualOriginOf(r.runContext),
       executedAt: r.executedAt,
     })),
     total: totalRows[0]?.n ?? 0,

@@ -67,6 +67,8 @@ export type IconName =
   | "CalendarCheck"
   | "CalendarX"
   | "Cake"
+  | "Gift"
+  | "Play"
   | "GitBranch"
   | "Clock"
   | "CalendarClock"
@@ -88,6 +90,9 @@ export const TRIGGER_META: Record<(typeof CREATABLE_TRIGGERS)[number], BlockMeta
   booking_confirmed: { group: "Citas", tone: "trigger", icon: "CalendarCheck" },
   booking_no_show: { group: "Citas", tone: "trigger", icon: "CalendarX" },
   birthday: { group: "Fechas", tone: "trigger", icon: "Cake" },
+  tag_added: { group: "Contactos y pipeline", tone: "trigger", icon: "Tag" },
+  loyalty_reward_unlocked: { group: "Fidelización", tone: "trigger", icon: "Gift" },
+  manual: { group: "Manual", tone: "trigger", icon: "Play" },
 };
 
 /** Pasos: subgrupo, rol visual e icono. */
@@ -221,17 +226,23 @@ const TRIGGER_ITEMS: Record<(typeof CREATABLE_TRIGGERS)[number], { label: string
   booking_confirmed: { label: "Cita confirmada", hint: "Al confirmar la asistencia" },
   booking_no_show: { label: "No asistió", hint: "Cuando se marca «No asistió»" },
   birthday: { label: "Cumpleaños", hint: "El día del cumpleaños del cliente" },
+  tag_added: { label: "Etiqueta asignada", hint: "Cuando se le asigna una etiqueta a un contacto" },
+  loyalty_reward_unlocked: { label: "Premio de fidelidad", hint: "Cuando un cliente completa los sellos de un premio" },
+  manual: { label: "Manual", hint: "Lo inicias tú, para un contacto" },
 };
 
 /** El orden en que se ofrecen los disparadores. */
 const TRIGGER_ORDER: (keyof typeof TRIGGER_ITEMS)[] = [
   "lead_created",
   "stage_changed",
+  "tag_added",
   "ad_referral",
   "booking_created",
   "booking_confirmed",
   "booking_no_show",
   "birthday",
+  "loyalty_reward_unlocked",
+  "manual",
 ];
 
 const stepItem = (

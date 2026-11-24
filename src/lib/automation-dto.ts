@@ -70,14 +70,15 @@ export const TRIGGER_LABELS: Record<string, string> = {
   booking_confirmed: "Cita confirmada",
   booking_no_show: "Cliente no asistió",
   ad_referral: "Llegó de un anuncio",
+  loyalty_reward_unlocked: "Premio de fidelidad",
 };
 
 /**
- * Los disparadores que la pantalla deja crear: los que hoy tienen quién los dispare. `manual` existe en
- * la API, pero todavía no hay un botón ni una ruta que encole a alguien, así que ofrecerlo sería crear
- * un flujo que nunca corre.
+ * Los disparadores que la pantalla deja crear: todos los que tienen quién los dispare. `manual` ya lo dispara
+ * `POST /api/automations/[id]/trigger` (botón «Ejecutar para un contacto»); `booking_reminder` sigue sin disparador
+ * y por eso no está en `FLOW_TRIGGER_TYPES`.
  */
-export const CREATABLE_TRIGGERS = FLOW_TRIGGER_TYPES.filter((t) => t !== "manual") satisfies readonly FlowTriggerType[];
+export const CREATABLE_TRIGGERS = [...FLOW_TRIGGER_TYPES] satisfies readonly FlowTriggerType[];
 
 export const TRIGGER_HINTS: Record<(typeof CREATABLE_TRIGGERS)[number], string> = {
   birthday: "Saluda a cada cliente el día de su cumpleaños, a la hora que elijas.",
@@ -89,6 +90,12 @@ export const TRIGGER_HINTS: Record<(typeof CREATABLE_TRIGGERS)[number], string> 
   booking_no_show: "Se activa cuando una cita se marca como «No asistió».",
   ad_referral:
     "Se activa cuando un cliente escribe desde un anuncio de Facebook o Instagram. Puedes acotarlo a un anuncio y usar {{servicio}} en los mensajes.",
+  manual:
+    "Lo inicias tú, para un contacto a la vez, con «Ejecutar para un contacto». Respeta las bajas, el tope de mensajes y la ventana de 24 h.",
+  tag_added:
+    "Se activa cuando se le asigna una etiqueta a un contacto (a mano o desde su ficha). Lo que haga otra automatización no lo activa.",
+  loyalty_reward_unlocked:
+    "Se activa cuando un cliente completa los sellos de un premio de su tarjeta de fidelidad. Puedes acotarlo a un premio.",
 };
 
 export const triggerLabel = (type: string): string => TRIGGER_LABELS[type] ?? type;
@@ -136,7 +143,8 @@ export function describeTrigger(
   type: string,
   config: Record<string, unknown> | null,
   stages: readonly StageOption[] = [],
-  adNode: PickerNode | null = null
+  adNode: PickerNode | null = null,
+  tags: readonly TagOption[] = []
 ): string {
   switch (type) {
     case "birthday": {
@@ -162,6 +170,16 @@ export function describeTrigger(
       return describeAdTrigger(parseAdReferralConfig(config), adNode);
     case "manual":
       return "Se inicia a mano";
+    case "tag_added": {
+      const id = config?.tagId;
+      if (typeof id !== "string") return "Cuando se le asigna una etiqueta a un contacto";
+      const name = tags.find((t) => t.id === id)?.name;
+      return name ? `Cuando se le asigna la etiqueta «${name}»` : "Cuando se le asigna una etiqueta que ya no existe";
+    }
+    case "loyalty_reward_unlocked": {
+      const stamps = config?.stamps;
+      return typeof stamps === "number" ? `Cuando un cliente completa el premio de ${stamps} sellos` : "Cuando un cliente desbloquea un premio de fidelidad";
+    }
     default:
       return triggerLabel(type);
   }
@@ -257,6 +275,10 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   tag_missing: "El contacto NO tiene la etiqueta",
   booking_confirmed: "La cita está confirmada",
   stage_is: "El lead está en la etapa",
+  has_upcoming_booking: "El contacto tiene una cita próxima",
+  visited_within_days: "Vino a una cita en los últimos días",
+  stamps_gte: "Su tarjeta de fidelidad tiene al menos X sellos",
+  birthday_today: "Hoy es su cumpleaños",
 };
 
 /** Las ramas de «Esperar respuesta» en el orden del formulario: campo de la configuración → etiqueta. */
@@ -289,7 +311,7 @@ export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOpt
 
 /** La regla en una frase: «El contacto tiene la etiqueta «VIP»». */
 export function describeRule(rule: ConditionRule | Record<string, unknown> | null | undefined, refs: StepRefs = {}): string {
-  const r = (rule ?? {}) as { type?: string; tagId?: string; stageId?: string };
+  const r = (rule ?? {}) as { type?: string; tagId?: string; stageId?: string; days?: number; stamps?: number };
   const tag = (id?: string) => {
     const n = refs.tags?.find((t) => t.id === id)?.name;
     return n ? `«${n}»` : "una etiqueta que ya no existe";
@@ -307,6 +329,14 @@ export function describeRule(rule: ConditionRule | Record<string, unknown> | nul
       return "La cita está confirmada";
     case "stage_is":
       return `El lead está en la etapa ${stage(r.stageId)}`;
+    case "has_upcoming_booking":
+      return "El contacto tiene una cita próxima";
+    case "visited_within_days":
+      return typeof r.days === "number" ? `Vino a una cita en los últimos ${r.days} ${r.days === 1 ? "día" : "días"}` : "Vino a una cita (sin configurar los días)";
+    case "stamps_gte":
+      return typeof r.stamps === "number" ? `Su tarjeta tiene al menos ${r.stamps} ${r.stamps === 1 ? "sello" : "sellos"}` : "Sellos de la tarjeta (sin configurar)";
+    case "birthday_today":
+      return "Hoy es su cumpleaños";
     default:
       return "Condición sin configurar";
   }

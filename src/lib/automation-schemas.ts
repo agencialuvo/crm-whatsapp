@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  CONDITION_MAX_STAMPS,
   addTagConfigSchema,
   conditionConfigSchema,
   daysOffsetSchema,
@@ -16,8 +17,7 @@ import {
  * Automatizaciones — contratos de la API de gestión de flujos y pasos (compartidos cliente/servidor).
  *
  * Solo se pueden CREAR los tipos de flujo y de paso que hoy tienen quién los ejecute: un flujo
- * `booking_reminder`/`tag_added` se guardaría y no haría nada, y eso
- * es peor que rechazarlo con un mensaje claro. La base conserva el catálogo completo (enum del
+ * `booking_reminder` se guardaría y no haría nada, y eso es peor que rechazarlo con un mensaje claro. La base conserva el catálogo completo (enum del
  * esquema); esta lista es lo que la API acepta.
  */
 
@@ -30,6 +30,8 @@ export const FLOW_TRIGGER_TYPES = [
   "booking_confirmed",
   "booking_no_show",
   "ad_referral",
+  "tag_added",
+  "loyalty_reward_unlocked",
 ] as const;
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number];
 
@@ -60,7 +62,12 @@ export const TRIGGER_CONFIG_SCHEMAS = {
   birthday: z.object({ hour: z.number().int().min(0).max(23).optional(), daysOffset: daysOffsetSchema.optional() }).strict(),
   stage_changed: z.object({ toStageId: z.string().trim().min(1).max(64).nullish() }).strict(),
   lead_created: z.object({}).strict(),
+  // Se dispara a mano para un contacto (`POST /api/automations/[id]/trigger`): no lleva ajustes.
   manual: z.object({}).strict(),
+  // Sin `tagId`, cualquier etiqueta asignada; con él, solo esa (debe ser de la organización: lo comprueba `resolveTriggerConfig`).
+  tag_added: z.object({ tagId: z.string().trim().min(1).max(64).nullish() }).strict(),
+  // Sin `stamps`, cualquier premio; con él, solo el hito de esos sellos.
+  loyalty_reward_unlocked: z.object({ stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish() }).strict(),
   booking_created: z.object({}).strict(),
   booking_confirmed: z.object({}).strict(),
   booking_no_show: z.object({}).strict(),
@@ -102,7 +109,7 @@ export const flowCreateSchema = z
     name: flowName,
     triggerType: z.enum(FLOW_TRIGGER_TYPES, {
       errorMap: () => ({
-        message: `triggerType debe ser uno de: ${FLOW_TRIGGER_TYPES.join(", ")} (booking_reminder y tag_added aún no tienen disparador)`,
+        message: `triggerType debe ser uno de: ${FLOW_TRIGGER_TYPES.join(", ")} (booking_reminder aún no tiene disparador)`,
       }),
     }),
     triggerConfig: z.record(z.unknown()).nullish(),

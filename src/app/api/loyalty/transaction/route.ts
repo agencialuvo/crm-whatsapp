@@ -2,7 +2,7 @@ import { apiError, parseBody, withAuth } from "@/lib/api";
 import { canConfigure } from "@/lib/auth/roles";
 import { loyaltyTransactionInputSchema } from "@/lib/loyalty";
 import { salonErrorResponse, salonGate } from "@/server/business/http";
-import { registerLoyaltyTransaction } from "@/server/loyalty/actions";
+import { announceLoyaltyUnlock, registerLoyaltyTransaction } from "@/server/loyalty/actions";
 import { moduleGate } from "@/server/business/saas-guard";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +27,8 @@ export const POST = withAuth(async (session, req: Request) => {
       organizationId: session.organizationId,
       ...body.data,
     });
+    // La transacción ya hizo commit: recién ahora un premio desbloqueado puede arrancar un flujo.
+    await announceLoyaltyUnlock(result);
     return Response.json(result, { status: 201 });
   } catch (err) {
     return salonErrorResponse(err);

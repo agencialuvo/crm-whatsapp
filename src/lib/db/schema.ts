@@ -2320,6 +2320,8 @@ export const automationFlow = pgTable(
         "booking_no_show",
         // Una conversación registra su anuncio de origen (Click-to-WhatsApp; `trigger_config.sourceId` lo acota).
         "ad_referral",
+        // Un cliente desbloquea un premio de la tarjeta de fidelidad (`trigger_config.stamps` acota el hito).
+        "loyalty_reward_unlocked",
       ],
     }).notNull(),
     /**

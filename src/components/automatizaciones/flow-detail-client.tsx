@@ -15,6 +15,7 @@ import {
   MessageCircle,
   MessageSquareReply,
   Pencil,
+  Play,
   Plus,
   Tag,
   Trash2,
@@ -26,6 +27,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
 import { HistoryPanel } from "@/components/automatizaciones/history-panel";
+import { ManualRunDialog } from "@/components/automatizaciones/manual-run-dialog";
 import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
 import { FlowCanvasLazy } from "@/components/automatizaciones/canvas/flow-canvas-loader";
 import { StepDialog } from "@/components/automatizaciones/step-dialog";
@@ -83,6 +85,8 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const [toggling, setToggling] = useState(false);
   const [reordering, setReordering] = useState(false);
   const [editingFlow, setEditingFlow] = useState(false);
+  // Disparo manual: el diálogo «Ejecutar para un contacto» (solo flujos con disparador Manual y encendidos).
+  const [manualRun, setManualRun] = useState(false);
   const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
   const [removeStep, setRemoveStep] = useState<StepDto | null>(null);
   const [removeFlow, setRemoveFlow] = useState(false);
@@ -286,10 +290,21 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
             <h3 className="break-words text-lg font-bold tracking-tight">{flow.name}</h3>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant="secondary">{triggerLabel(flow.triggerType)}</Badge>
-              <span className="text-sm text-text-2">{flow.triggerSummary ?? describeTrigger(flow.triggerType, flow.triggerConfig, stages)}</span>
+              <span className="text-sm text-text-2">{flow.triggerSummary ?? describeTrigger(flow.triggerType, flow.triggerConfig, stages, null, tags)}</span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {flow.triggerType === "manual" && (
+              <Button
+                size="sm"
+                onClick={() => setManualRun(true)}
+                disabled={!flow.active}
+                title={flow.active ? undefined : "Enciende el flujo para poder ejecutarlo"}
+              >
+                <Play className="h-4 w-4" aria-hidden />
+                Ejecutar para un contacto
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => setEditingFlow(true)}>
               <Pencil className="h-4 w-4" aria-hidden />
               Editar
@@ -388,6 +403,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
             onBack={() => router.push("/automatizaciones")}
             onHistory={() => setTab("historial")}
             onEditFlow={() => setEditingFlow(true)}
+            onRunManual={flow.triggerType === "manual" ? () => setManualRun(true) : undefined}
             onDeleteFlow={() => setRemoveFlow(true)}
             onToggleActive={(v) => void toggleActive(v)}
             toggleDisabled={toggling || block !== null}
@@ -521,10 +537,13 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
       </section>
       )}
 
+      {manualRun && <ManualRunDialog flowId={flow.id} flowName={flow.name} onClose={() => setManualRun(false)} onStarted={() => setHistoryKey((k) => k + 1)} />}
+
       {editingFlow && (
         <FlowDialog
           flow={flow}
           stages={stages}
+          tags={tags}
           onClose={() => setEditingFlow(false)}
           onSaved={(saved) => {
             setFlow(saved);

@@ -244,6 +244,13 @@ export async function resolveTriggerConfig(
   if (!parsed.ok) throw new AutomationError("invalid_trigger_config", 422, parsed.message);
   await assertStageOwned(organizationId, parsed.value);
   if (triggerType === "ad_referral") await assertAdScopeOwned(organizationId, parsed.value, current);
+  // `tag_added` con etiqueta: debe ser de ESTA organización (nunca se guarda una referencia ajena).
+  if (triggerType === "tag_added" && typeof parsed.value?.tagId === "string") {
+    const tagId = parsed.value.tagId;
+    if (!(await existingTagIds(organizationId, [tagId])).has(tagId)) {
+      throw new AutomationError("tag_not_found", 422, "La etiqueta elegida no existe");
+    }
+  }
   return parsed.value;
 }
 

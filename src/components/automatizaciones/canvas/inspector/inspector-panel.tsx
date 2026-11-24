@@ -93,6 +93,7 @@ export function InspectorPanel({
             triggerType={data.triggerType}
             triggerConfig={data.triggerConfig}
             stages={stages}
+            tags={tags}
             onChangeType={onTriggerType}
             onChangeConfig={onTriggerConfig}
           />

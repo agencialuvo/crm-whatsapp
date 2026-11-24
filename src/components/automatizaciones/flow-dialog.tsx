@@ -25,6 +25,7 @@ import {
   triggerLabel,
   type FlowDto,
   type StageOption,
+  type TagOption,
 } from "@/lib/automation-dto";
 
 const HOUR_OPTIONS: SearchSelectOption[] = Array.from({ length: 24 }, (_, h) => ({
@@ -47,12 +48,15 @@ const TRIGGER_OPTIONS: SearchSelectOption[] = CREATABLE_TRIGGERS.map((t) => ({
 export function FlowDialog({
   flow,
   stages,
+  tags = [],
   onClose,
   onSaved,
 }: {
   /** `null` crea un flujo nuevo. */
   flow: FlowDto | null;
   stages: StageOption[];
+  /** Las etiquetas del negocio (para el disparador «Etiqueta asignada»). */
+  tags?: TagOption[];
   onClose: () => void;
   onSaved: (flow: FlowDto) => void;
 }) {
@@ -66,6 +70,9 @@ export function FlowDialog({
   const [stageId, setStageId] = useState(
     typeof flow?.triggerConfig?.toStageId === "string" ? flow.triggerConfig.toStageId : ""
   );
+  // `tag_added`: a qué etiqueta reacciona (vacío = cualquiera). `loyalty_reward_unlocked`: a qué premio (vacío = cualquiera).
+  const [tagId, setTagId] = useState(typeof flow?.triggerConfig?.tagId === "string" ? flow.triggerConfig.tagId : "");
+  const [stamps, setStamps] = useState(typeof flow?.triggerConfig?.stamps === "number" ? String(flow.triggerConfig.stamps) : "");
   // 047 — A qué anuncio reacciona: cualquiera, uno, un conjunto o una campaña (solo IDs; los nombres salen del catálogo).
   const [adCfg, setAdCfg] = useState<AdReferralConfig>(() => parseAdReferralConfig(flow?.triggerConfig ?? null));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -89,11 +96,15 @@ export function FlowDialog({
     [stages]
   );
 
+  const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
+
   /** Los ajustes del disparador tal como los espera la API (`null` si no hay ninguno). */
   function buildConfig(): Record<string, unknown> | null {
     if (triggerType === "birthday") return { hour: Number(hour), daysOffset: Number(daysOffset) };
     if (triggerType === "stage_changed" && stageId) return { toStageId: stageId };
     if (triggerType === "ad_referral" && adScopeOf(adCfg).level !== "any") return { ...adCfg };
+    if (triggerType === "tag_added" && tagId) return { tagId };
+    if (triggerType === "loyalty_reward_unlocked" && stamps.trim()) return { stamps: Number(stamps) };
     return null;
   }
 
@@ -281,6 +292,52 @@ export function FlowDialog({
               searchPlaceholder="Buscar etapa…"
               ariaLabel="Etapa que activa el flujo"
               disabled={busy}
+            />
+          </Field>
+        )}
+
+        {triggerType === "tag_added" && (
+          <Field
+            label="Etiqueta"
+            htmlFor="flow-tag"
+            error={errors.triggerConfig}
+            hint="Elige una etiqueta, o déjalo en «Cualquier etiqueta» para que se active con todas."
+          >
+            <SearchSelect
+              id="flow-tag"
+              value={tagId}
+              onChange={(v) => {
+                setTagId(v);
+                clear("triggerConfig");
+              }}
+              options={tagOptions}
+              emptyLabel="Cualquier etiqueta"
+              searchPlaceholder="Buscar etiqueta…"
+              ariaLabel="Etiqueta que activa el flujo"
+              disabled={busy}
+            />
+          </Field>
+        )}
+
+        {triggerType === "loyalty_reward_unlocked" && (
+          <Field
+            label="Premio (sellos)"
+            htmlFor="flow-stamps"
+            error={errors.triggerConfig}
+            hint="Los sellos del premio que lo activa, por ejemplo 8. Vacío: se activa con cualquier premio."
+          >
+            <Input
+              id="flow-stamps"
+              inputMode="numeric"
+              value={stamps}
+              maxLength={4}
+              placeholder="Cualquier premio"
+              aria-invalid={!!errors.triggerConfig}
+              disabled={busy}
+              onChange={(e) => {
+                setStamps(e.target.value.replace(/\D/g, ""));
+                clear("triggerConfig");
+              }}
             />
           </Field>
         )}

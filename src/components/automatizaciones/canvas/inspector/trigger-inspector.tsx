@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { AdTriggerPicker } from "@/components/automatizaciones/ad-trigger-picker";
 import { Field } from "@/components/negocio/fields";
@@ -14,6 +15,7 @@ import {
   offsetOptionLabel,
   triggerLabel,
   type StageOption,
+  type TagOption,
 } from "@/lib/automation-dto";
 
 const TRIGGER_OPTIONS: SearchSelectOption[] = CREATABLE_TRIGGERS.map((t) => ({ value: t, label: triggerLabel(t) }));
@@ -28,17 +30,21 @@ export function TriggerInspector({
   triggerType,
   triggerConfig,
   stages,
+  tags = [],
   onChangeType,
   onChangeConfig,
 }: {
   triggerType: string;
   triggerConfig: Record<string, unknown> | null;
   stages: StageOption[];
+  tags?: TagOption[];
   onChangeType: (type: string) => void;
   onChangeConfig: (config: Record<string, unknown> | null) => void;
 }) {
   const cfg = triggerConfig ?? {};
   const stageOptions = useMemo<SearchSelectOption[]>(() => stages.map((s) => ({ value: s.id, label: s.name })), [stages]);
+
+  const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
 
   // 047 — A qué reacciona el disparador de anuncio: cualquiera, un anuncio, un conjunto o una campaña (solo IDs).
   const adCfg = parseAdReferralConfig(triggerConfig);
@@ -94,6 +100,36 @@ export function TriggerInspector({
             emptyLabel="Cualquier etapa"
             searchPlaceholder="Buscar etapa…"
             ariaLabel="Etapa que activa el flujo"
+          />
+        </Field>
+      )}
+
+      {triggerType === "tag_added" && (
+        <Field label="Etiqueta" htmlFor="trg-tag" hint="Déjalo en «Cualquier etiqueta» para que se active con todas.">
+          <SearchSelect
+            id="trg-tag"
+            value={typeof cfg.tagId === "string" ? cfg.tagId : ""}
+            onChange={(v) => onChangeConfig(v ? { tagId: v } : null)}
+            options={tagOptions}
+            emptyLabel="Cualquier etiqueta"
+            searchPlaceholder="Buscar etiqueta…"
+            ariaLabel="Etiqueta que activa el flujo"
+          />
+        </Field>
+      )}
+
+      {triggerType === "loyalty_reward_unlocked" && (
+        <Field label="Premio (sellos)" htmlFor="trg-stamps" hint="Los sellos del premio, por ejemplo 8. Vacío: cualquier premio.">
+          <Input
+            id="trg-stamps"
+            inputMode="numeric"
+            maxLength={4}
+            placeholder="Cualquier premio"
+            value={typeof cfg.stamps === "number" ? String(cfg.stamps) : ""}
+            onChange={(e) => {
+              const digits = e.target.value.replace(/\D/g, "");
+              onChangeConfig(digits ? { stamps: Number(digits) } : null);
+            }}
           />
         </Field>
       )}

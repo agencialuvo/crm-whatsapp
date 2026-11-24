@@ -58,6 +58,12 @@ export function LogDetailDialog({ log, onClose }: { log: LogDto; onClose: () => 
             <span className="font-medium">{log.contact.name}</span>
             {log.contact.phone && <span className="text-text-3"> · {log.contact.phone}</span>}
           </Row>
+          {log.origin && (
+            <Row label="Origen">
+              Disparo manual
+              {log.origin.batchId && <span className="text-text-3"> · lote <code className="text-xs">{log.origin.batchId}</code></span>}
+            </Row>
+          )}
           <Row label="Paso">
             {d.title}
             {!d.stepExists && <span className="text-text-3"> (el paso ya no existe)</span>}

@@ -5,7 +5,7 @@ import "./canvas.css";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { AlertTriangle, ArrowLeft, ArrowLeftRight, History, LayoutGrid, Loader2, Pencil, Save, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowLeftRight, History, LayoutGrid, Loader2, Pencil, Play, Save, Trash2, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -55,6 +55,8 @@ export type FlowCanvasProps = {
   onBack: () => void;
   onHistory: () => void;
   onEditFlow: () => void;
+  /** Solo en flujos con disparador Manual: abre «Ejecutar para un contacto». */
+  onRunManual?: () => void;
   onDeleteFlow: () => void;
   onToggleActive: (active: boolean) => void;
   toggleDisabled?: boolean;
@@ -85,7 +87,7 @@ export function FlowCanvas(props: FlowCanvasProps) {
   );
 }
 
-function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onDeleteFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
+function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, onRunManual, onDeleteFlow, onToggleActive, toggleDisabled, active, templates, tags, stages, media = [], onTagCreated, onFlowChanged, onDirtyChange, onBackToSimple }: FlowCanvasProps) {
   const g = useFlowGraph(flowId);
   const { screenToFlowPosition, getViewport, setCenter } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
@@ -274,6 +276,11 @@ function CanvasInner({ flowId, flowName, notice, onBack, onHistory, onEditFlow, 
                 <Button variant="outline" size="sm" onClick={onHistory} title="Estado del motor e historial de este flujo">
                   <History className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Historial</span><span className="sr-only sm:hidden">Historial</span>
                 </Button>
+                {onRunManual && (
+                  <Button size="sm" onClick={onRunManual} disabled={!active || g.dirty} title={!active ? "Enciende el flujo para poder ejecutarlo" : g.dirty ? "Guarda los cambios antes de ejecutarlo" : "Ejecutarlo para un contacto"}>
+                    <Play className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Ejecutar</span><span className="sr-only sm:hidden">Ejecutar</span>
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={onEditFlow} title="Nombre y ajustes del disparador">
                   <Pencil className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Editar</span><span className="sr-only sm:hidden">Editar</span>
                 </Button>

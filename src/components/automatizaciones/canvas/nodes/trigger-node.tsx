@@ -13,7 +13,7 @@ import { NodeShell } from "./node-shell";
 
 /** El disparador del flujo: solo tiene asa de salida (la que marca el paso por el que arranca). */
 export function TriggerNode({ data, selected }: NodeProps & { data: CanvasNodeData }) {
-  const { stages } = useCanvasRefs();
+  const { stages, tags } = useCanvasRefs();
   // 047: el nombre VIVO del anuncio/conjunto/campaña elegido (se lee del catálogo; nunca se guarda en el flujo).
   const [adNode, setAdNode] = useState<PickerNode | null>(null);
   const adCfg = data.kind === "trigger" && data.triggerType === "ad_referral" ? parseAdReferralConfig(data.triggerConfig) : null;
@@ -39,7 +39,7 @@ export function TriggerNode({ data, selected }: NodeProps & { data: CanvasNodeDa
       icon={ICONS[metaOfNode(data).icon]}
       tone={metaOfNode(data).tone}
       title={triggerLabel(data.triggerType)}
-      detail={describeTrigger(data.triggerType, data.triggerConfig, stages, adNode)}
+      detail={describeTrigger(data.triggerType, data.triggerConfig, stages, adNode, tags)}
       selected={selected}
       issues={data.issues}
       target={false}

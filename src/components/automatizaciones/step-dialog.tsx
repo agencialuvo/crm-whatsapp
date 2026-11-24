@@ -148,6 +148,9 @@ export function StepDialog({
   const [ruleType, setRuleType] = useState<string>(typeof rule?.type === "string" ? rule.type : "tag_has");
   const [ruleTagId, setRuleTagId] = useState(typeof rule?.tagId === "string" ? rule.tagId : "");
   const [ruleStageId, setRuleStageId] = useState(typeof rule?.stageId === "string" ? rule.stageId : "");
+  // Reglas con número: «vino en los últimos N días» y «tiene al menos N sellos».
+  const [ruleDays, setRuleDays] = useState(typeof rule?.days === "number" ? String(rule.days) : "30");
+  const [ruleStamps, setRuleStamps] = useState(typeof rule?.stamps === "number" ? String(rule.stamps) : "5");
   const [ifTrue, setIfTrue] = useState<string>(typeof c.ifTrue === "string" ? c.ifTrue : "continue");
   const [ifFalse, setIfFalse] = useState<string>(typeof c.ifFalse === "string" ? c.ifFalse : "stop");
   // Esperar respuesta: tiempo límite (cantidad + unidad), qué hacer en cada caso y si confirma la cita.
@@ -278,11 +281,15 @@ export function StepDialog({
       return {
         ...(name.trim() && { name: name.trim() }),
         rule:
-          ruleType === "booking_confirmed"
+          ruleType === "booking_confirmed" || ruleType === "has_upcoming_booking" || ruleType === "birthday_today"
             ? { type: ruleType }
             : ruleType === "stage_is"
               ? { type: ruleType, stageId: ruleStageId }
-              : { type: ruleType, tagId: ruleTagId },
+              : ruleType === "visited_within_days"
+                ? { type: ruleType, days: toNumber(ruleDays) }
+                : ruleType === "stamps_gte"
+                  ? { type: ruleType, stamps: toNumber(ruleStamps) }
+                  : { type: ruleType, tagId: ruleTagId },
         ifTrue,
         ifFalse,
       };
@@ -526,7 +533,7 @@ export function StepDialog({
                 value={ruleType}
                 onChange={(v) => {
                   setRuleType(v);
-                  clear("tagId", "stageId");
+                  clear("tagId", "stageId", "days", "stamps");
                 }}
                 options={ruleOptions}
                 searchPlaceholder="Buscar regla…"
@@ -573,6 +580,61 @@ export function StepDialog({
             {ruleType === "booking_confirmed" && (
               <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
                 Se mira al llegar a este paso: si el cliente confirmó mientras el flujo esperaba, cuenta como confirmada.
+              </p>
+            )}
+            {ruleType === "has_upcoming_booking" && (
+              <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+                Cuenta una cita agendada que aún no llega (no cuenta las canceladas ni las pasadas). Con la rama «No» sirve para
+                «no tiene cita».
+              </p>
+            )}
+            {ruleType === "visited_within_days" && (
+              <Field
+                label="En los últimos (días)"
+                required
+                htmlFor="step-rule-days"
+                error={errors.days}
+                hint="Cuenta citas marcadas como realizadas. Con la rama «No»: no vino en ese tiempo, o nunca vino."
+              >
+                <Input
+                  id="step-rule-days"
+                  inputMode="numeric"
+                  value={ruleDays}
+                  maxLength={4}
+                  aria-invalid={!!errors.days}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setRuleDays(e.target.value.replace(/\D/g, ""));
+                    clear("days");
+                  }}
+                />
+              </Field>
+            )}
+            {ruleType === "stamps_gte" && (
+              <Field
+                label="Sellos mínimos"
+                required
+                htmlFor="step-rule-stamps"
+                error={errors.stamps}
+                hint="Los sellos que tiene hoy en su tarjeta de fidelidad."
+              >
+                <Input
+                  id="step-rule-stamps"
+                  inputMode="numeric"
+                  value={ruleStamps}
+                  maxLength={4}
+                  aria-invalid={!!errors.stamps}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setRuleStamps(e.target.value.replace(/\D/g, ""));
+                    clear("stamps");
+                  }}
+                />
+              </Field>
+            )}
+            {ruleType === "birthday_today" && (
+              <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+                Mira el día y el mes de cumpleaños del contacto, en la zona horaria de tu negocio.
               </p>
             )}
             {!inline && (

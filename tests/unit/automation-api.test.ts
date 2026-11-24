@@ -25,7 +25,7 @@ describe("flowCreateSchema", () => {
     }
   });
   it("rechaza los disparadores sin ejecutor, con un mensaje que lo explica", () => {
-    for (const triggerType of ["booking_reminder", "tag_added", "inventado"]) {
+    for (const triggerType of ["booking_reminder", "inventado"]) {
       const r = flowCreateSchema.safeParse({ name: "F", triggerType });
       expect(r.success).toBe(false);
       if (!r.success) expect(r.error.issues[0]!.message).toContain("triggerType debe ser uno de");

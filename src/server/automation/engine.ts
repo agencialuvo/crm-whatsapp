@@ -21,6 +21,7 @@ import {
   stepLabel,
   waitReplyConfigSchema,
   waitUntilConfigSchema,
+  type ConditionFacts,
   type EdgeHandle,
   type NodeResult,
   type SendDecision,
@@ -150,8 +151,11 @@ export type Deps = {
   resolveReplyWait?(row: Row, handle: EdgeHandle): Promise<boolean>;
   /** El contexto de la ejecución (anuncio, servicio…): de ahí sale `{{servicio}}`. */
   runContext?(organizationId: string, runId: string): Promise<Record<string, unknown>>;
-  /** Etiquetas y etapa de hoy del contacto: lo que lee una condición. */
-  contactFacts(organizationId: string, contactId: string): Promise<{ tagIds: string[]; stageId: string | null }>;
+  /**
+   * Etiquetas y etapa de hoy del contacto: lo que lee una condición. Los datos de cita, visita, sellos y cumpleaños
+   * son opcionales (quien no los trae, los da por «no»).
+   */
+  contactFacts(organizationId: string, contactId: string): Promise<Pick<ConditionFacts, "tagIds" | "stageId"> & Partial<ConditionFacts>>;
   /** `add_tag` / `remove_tag`: idempotente. */
   applyTag(organizationId: string, contactId: string, tagId: string, mode: "add" | "remove"): Promise<TagActionResult>;
   /** `set_stage`: por la puerta del embudo, sin disparar flujos de cambio de etapa (anti-bucle). */
