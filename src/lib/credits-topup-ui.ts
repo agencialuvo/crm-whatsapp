@@ -54,13 +54,19 @@ export function topupView(status: TopupStatus | null, opts: { timedOut?: boolean
 
 /** El mensaje claro de un fallo de `POST /api/credits/topups` (o `unavailable` si ni siquiera llegó a responder). */
 export function purchaseErrorMessage(status: number, code?: string | null): string {
+  if (status === 422) return "Revisa el teléfono: solo dígitos con el código de país, por ejemplo 51999888777.";
   if (code === "pack_not_found") return "Ese paquete ya no está disponible. Actualizamos la lista.";
   if (code === "too_many_pending") return "Ya tienes varias recargas sin completar. Termínalas o espera a que venzan.";
   if (status === 403) return "Solo el dueño de la cuenta puede comprar recargas.";
   if (status === 429) return "Demasiados intentos. Espera un momento e inténtalo de nuevo.";
   if (status === 404 || status === 503) return "Las recargas no están disponibles por ahora.";
-  if (status === 422) return "No se pudo procesar la solicitud. Revisa los datos.";
   return "No se pudo iniciar el pago. Inténtalo de nuevo en un momento.";
+}
+
+/** El teléfono que pide Culqi: solo dígitos con código de país (7 a 14), tolerando espacios, guiones y un «+» inicial. */
+export function normalizePhone(raw: string): string | null {
+  const d = raw.replace(/[\s().-]/g, "").replace(/^\+/, "");
+  return /^[0-9]{7,14}$/.test(d) ? d : null;
 }
 
 export type CheckoutOrder = { orderId: string; publicKey: string | null; amountCents: number; currency: string };

@@ -252,7 +252,7 @@ describe("rutas de compra del cliente", () => {
 
   it("valida el cuerpo: packId obligatorio, teléfono con forma; el cuerpo NO puede traer monto ni organización", async () => {
     asOwner();
-    for (const body of [{}, { packId: "" }, { packId: "x".repeat(65) }, { packId: "crk_1", phone: "abc" }, { packId: 5 }]) {
+    for (const body of [{}, { packId: "" }, { packId: "x".repeat(65) }, { packId: "crk_1", phone: "abc" }, { packId: "crk_1" }, { packId: "crk_1", phone: "123" }, { packId: 5 }]) {
       expect((await buy.POST(req(body))).status).toBe(422);
     }
     expect(startTopupPurchase).not.toHaveBeenCalled();
@@ -269,7 +269,7 @@ describe("rutas de compra del cliente", () => {
     asOwner();
     for (const [status_, code] of [[404, "pack_not_found"], [429, "too_many_pending"], [502, "gateway_error"], [503, "not_configured"]] as const) {
       startTopupPurchase.mockResolvedValueOnce({ ok: false, status: status_, code, message: "m" });
-      const r = await buy.POST(req({ packId: "crk_1" }));
+      const r = await buy.POST(req({ packId: "crk_1", phone: "51999888777" }));
       expect(r.status).toBe(status_);
       expect((await r.json()).error.code).toBe(code);
     }

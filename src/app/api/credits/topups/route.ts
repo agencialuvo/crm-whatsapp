@@ -7,12 +7,11 @@ export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
   packId: z.string().trim().min(1).max(64),
-  /** Culqi pide un teléfono del comprador; opcional aquí, solo dígitos (con + inicial). */
+  /** Culqi EXIGE el teléfono del comprador (sin él rechaza la orden): solo dígitos con el código de país, de 7 a 14. */
   phone: z
     .string()
     .trim()
-    .regex(/^\+?[0-9]{6,15}$/, "Teléfono inválido")
-    .optional(),
+    .regex(/^\+?[0-9]{7,14}$/, "Teléfono inválido: solo dígitos con el código de país, ej. 51999888777"),
 });
 
 /**

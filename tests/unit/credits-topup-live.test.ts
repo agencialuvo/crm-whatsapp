@@ -136,7 +136,7 @@ describe.skipIf(!live)("monedas 5.4 (base real, Culqi simulado)", () => {
       expect(r.topupId).toMatch(/^crt_/);
       const sent = calls.createOrder[0] as { amount: number; currency_code: string; order_number: string; confirm: boolean; client_details: { first_name: string; last_name: string; phone_number?: string } };
       expect(sent).toMatchObject({ amount: 4990, currency_code: "PEN", order_number: r.topupId, confirm: false });
-      expect(sent.client_details).toMatchObject({ first_name: "Ana", last_name: "Pérez Soto", phone_number: "+51999888777" });
+      expect(sent.client_details).toMatchObject({ first_name: "Ana", last_name: "Pérez Soto", phone_number: "51999888777" });
       const t = await topupRow(r.topupId);
       expect(t).toMatchObject({ status: "pending", gateway: "culqi", gatewayOrderId: r.orderId, organizationId: orgId });
       expect((await bal()).topup).toBe(0); // todavía no hay saldo: nadie pagó

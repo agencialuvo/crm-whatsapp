@@ -80,7 +80,8 @@ export async function startTopupPurchase(input: { organizationId: string; userId
         first_name: first || "Cliente",
         last_name: rest.join(" ") || "-",
         email: person.email,
-        ...(input.phone ? { phone_number: input.phone } : {}),
+        // Culqi pide solo dígitos (sin el «+»).
+        ...(input.phone ? { phone_number: input.phone.replace(/\D/g, "") } : {}),
       },
       confirm: false,
     });

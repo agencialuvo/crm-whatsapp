@@ -30,6 +30,14 @@ describe("lo puro de la pantalla de compra", () => {
     expect(JSON.stringify(cfg)).not.toMatch(/sk_|secret/i);
   });
 
+  it("el teléfono que pide Culqi se normaliza a solo dígitos (7 a 14) y lo demás se rechaza", async () => {
+    const { normalizePhone } = await import("@/lib/credits-topup-ui");
+    expect(normalizePhone("51999888777")).toBe("51999888777");
+    expect(normalizePhone("+51 999-888-777")).toBe("51999888777");
+    expect(normalizePhone("(51) 999 888 777")).toBe("51999888777");
+    for (const bad of ["", "abc", "123", "519998887771234", "51 999 88x 777", "++51999888777"]) expect(normalizePhone(bad)).toBeNull();
+  });
+
   it("cada estado de la compra dice algo claro y solo los definitivos dejan de consultarse", async () => {
     const { topupView } = await import("@/lib/credits-topup-ui");
     expect(topupView("paid")).toMatchObject({ tone: "success", terminal: true, title: "Recarga acreditada" });
@@ -133,7 +141,7 @@ describe("cableado y seguridad", () => {
     expect(comp).not.toMatch(/\/api\/super-admin|\/api\/webhooks|\/api\/billing/);
     expect(comp).toMatch(/method: "POST"/);
     // El cuerpo de la compra lleva solo el paquete: ni monto ni organización los decide el navegador.
-    expect(comp).toContain("JSON.stringify({ packId: pack.id })");
+    expect(comp).toContain("JSON.stringify({ packId: pack.id, phone })");
   });
 
   it("no toca la base, la puerta de monedas ni secretos, y solo carga el script oficial de Culqi", () => {

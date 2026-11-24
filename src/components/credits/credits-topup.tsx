@@ -6,6 +6,7 @@ import { formatCoins, formatCoinsLabel, pricePerCoinCents } from "@/lib/credits"
 import {
   checkoutConfig,
   CULQI_CHECKOUT_SRC,
+  normalizePhone,
   POLL_MAX_MS,
   POLL_MS,
   purchaseErrorMessage,
@@ -16,6 +17,7 @@ import {
 import { formatMoneyCents } from "@/lib/money";
 import type { PublicPackDto } from "@/lib/super-admin-credits";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 /**
  * Ajustes → Monedas: comprar una recarga. Lista los paquetes ACTIVOS (`GET /api/credits/packs`), inicia la compra
@@ -25,6 +27,7 @@ import { Button } from "@/components/ui/button";
  */
 
 const PENDING_KEY = "lia.topup.pending";
+const PHONE_KEY = "lia.topup.phone";
 
 type CulqiCheckoutCtor = new (publicKey: string, config: unknown) => { open: () => void; culqi?: () => void };
 declare global {
@@ -72,6 +75,9 @@ export function CreditsTopup({ canBuy, gatewayReady }: { canBuy: boolean; gatewa
   const [timedOut, setTimedOut] = useState(false);
   const [pollKey, setPollKey] = useState(0);
   const [newTotal, setNewTotal] = useState<number | null>(null);
+  // Culqi exige un teléfono del comprador para crear la orden. Se recuerda en este navegador para no pedirlo cada vez.
+  const [phoneText, setPhoneText] = useState("");
+  const phone = normalizePhone(phoneText);
   const settled = useRef<string | null>(null);
 
   const loadPacks = useCallback(async () => {
@@ -85,6 +91,12 @@ export function CreditsTopup({ canBuy, gatewayReady }: { canBuy: boolean; gatewa
     void loadPacks();
     const id = remembered();
     if (id) setTopupId(id);
+    try {
+      const saved = window.localStorage.getItem(PHONE_KEY);
+      if (saved) setPhoneText(saved);
+    } catch {
+      /* sin almacenamiento: se escribe cada vez */
+    }
   }, [loadPacks]);
 
   // Consulta el estado hasta que sea definitivo o se agote la espera.
@@ -132,6 +144,12 @@ export function CreditsTopup({ canBuy, gatewayReady }: { canBuy: boolean; gatewa
 
   async function buy(pack: PublicPackDto) {
     if (busyPack || !canBuy || !gatewayReady) return;
+    if (!phone) return setError("Escribe tu teléfono con el código de país (por ejemplo 51999888777): Culqi lo pide para el pago.");
+    try {
+      window.localStorage.setItem(PHONE_KEY, phone);
+    } catch {
+      /* sin almacenamiento */
+    }
     setBusyPack(pack.id);
     setError(null);
     setNewTotal(null);
@@ -139,7 +157,7 @@ export function CreditsTopup({ canBuy, gatewayReady }: { canBuy: boolean; gatewa
     const res = await fetch("/api/credits/topups", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ packId: pack.id }),
+      body: JSON.stringify({ packId: pack.id, phone }),
     }).catch(() => null);
     if (!res?.ok) {
       const d = (await res?.json().catch(() => null)) as { error?: { code?: string } } | null;
@@ -184,6 +202,12 @@ export function CreditsTopup({ canBuy, gatewayReady }: { canBuy: boolean; gatewa
       {gatewayReady && !canBuy && <Notice tone="neutral" testId="topup-owner-only" title="Solo el dueño de la cuenta puede comprar recargas" text="Pídele que haga la compra." />}
       {error && <Notice tone="danger" testId="topup-error" title="No se pudo completar" text={error} />}
       {view && view.title && <StatusBanner view={view} units={topup?.units} newTotal={newTotal} onVerify={() => setPollKey((k) => k + 1)} />}
+
+      <div className="max-w-xs" data-testid="topup-phone-field">
+        <label className="kicker mb-1 block" htmlFor="topup-phone">Tu teléfono (con código de país)</label>
+        <Input id="topup-phone" inputMode="tel" autoComplete="tel" value={phoneText} maxLength={20} onChange={(e) => setPhoneText(e.target.value)} placeholder="51999888777" aria-invalid={phoneText !== "" && !phone} />
+        <p className="mt-1 text-xs text-text-3">Culqi lo pide para registrar el pago.</p>
+      </div>
 
       <PackGrid packs={packs} failed={packsError} disabled={!canBuy || !gatewayReady} busyId={busyPack} onBuy={(p) => void buy(p)} onRetry={() => void loadPacks()} />
     </section>
