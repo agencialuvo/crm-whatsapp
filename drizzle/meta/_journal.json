@@ -638,6 +638,13 @@
       "when": 1795455099729,
       "tag": "0090_monedas_culqi",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1795556271497,
+      "tag": "0091_medios_variante_whatsapp",
+      "breakpoints": true
     }
   ]
 }

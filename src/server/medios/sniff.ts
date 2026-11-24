@@ -78,6 +78,8 @@ export function detectarFormato(buf: Uint8Array, opts: { svg?: boolean } = {}): 
     const marca = ascii(buf, 8, 12).toLowerCase();
     if (marca === "avif" || marca === "avis") return formato("avif");
     if (MARCAS_MP4.has(marca)) return formato("mp4");
+    // QuickTime (.mov): la marca `qt  ` tras `ftyp`. El formato lo deciden los bytes, no el nombre ni el `Content-Type`.
+    if (marca === "qt  ") return formato("mov");
   }
   return null;
 }

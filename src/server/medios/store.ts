@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
@@ -8,6 +8,8 @@ import { getEnv } from "@/lib/env";
 import {
   esEnviablePorWhatsapp,
   formatBytes,
+  formatoDe,
+  limiteDe,
   MAX_VIDEO_BYTES,
   nombreLegible,
   validarMedio,
@@ -15,6 +17,7 @@ import {
   type MedioTipo,
 } from "@/lib/medios";
 import { BYTES_PARA_RECONOCER, detectarFormato, revisarCodecsMp4, revisarSvg } from "@/server/medios/sniff";
+import { videoOptimizeEnabled } from "@/server/medios/flag";
 import { claveDeMedio, clavePendiente, objectStore, StorageError } from "@/server/storage";
 
 /**
@@ -74,6 +77,19 @@ export function rutaDeMedio(organizationId: string, id: string): string {
   );
 }
 
+/**
+ * Dónde vive en disco la variante optimizada para WhatsApp (`MEDIA_DIR/<org>/medios-wa/<id>`): una carpeta aparte de la
+ * del original, porque la reconciliación compara `medios` por nombre. En R2 la clave es `claveDeVariante`.
+ */
+export function rutaDeVariante(organizationId: string, id: string): string {
+  return path.join(getEnv().MEDIA_DIR, segmentoSeguro(organizationId), "medios-wa", segmentoSeguro(id));
+}
+
+/** El archivo temporal de una subida en curso (otra carpeta, en el mismo volumen: el `rename` final es atómico). */
+function rutaTemporalDeMedio(organizationId: string, id: string): string {
+  return path.join(getEnv().MEDIA_DIR, segmentoSeguro(organizationId), "medios-tmp", segmentoSeguro(id));
+}
+
 export function medioToDto(f: Fila, urlFirmada: string | null = null): MedioDto {
   return {
     id: f.id,
@@ -86,6 +102,9 @@ export function medioToDto(f: Fila, urlFirmada: string | null = null): MedioDto 
     ruta: `/api/medios/${f.id}/archivo`,
     urlFirmada,
     noEnviable: !esEnviablePorWhatsapp(f.mimeType, f.sizeBytes),
+    varianteEstado: f.variantStatus,
+    varianteBytes: f.variantStatus === "ready" ? f.variantSizeBytes : null,
+    varianteError: f.variantStatus === "failed" ? f.variantError : null,
     creadoEn: f.createdAt.toISOString(),
   };
 }
@@ -107,12 +126,12 @@ export async function crearMedio(input: {
   /** Admite SVG (solo el selector de iconos); se revisa por dentro antes de guardarlo. */
   permitirSvg?: boolean;
 }): Promise<MedioDto> {
-  const opts = { svg: input.permitirSvg === true };
+  const opts = { svg: input.permitirSvg === true, optimizarVideo: videoOptimizeEnabled() };
   const formato = detectarFormato(input.data, opts);
   if (!formato) {
     throw new MedioError(
       "unsupported_type",
-      `«${input.nombre}» no es una imagen o video válido. Se aceptan JPG, PNG, WEBP, AVIF${opts.svg ? ", SVG" : ""} y MP4.`
+      `«${input.nombre}» no es una imagen o video válido. Se aceptan JPG, PNG, WEBP, AVIF${opts.svg ? ", SVG" : ""}, MP4${opts.optimizarVideo ? " y MOV" : ""}.`
     );
   }
   if (formato.ext === "svg") {
@@ -183,11 +202,23 @@ function unir(trozos: Uint8Array[], total: number): Buffer {
   return out;
 }
 
+async function escribirTodo(fh: FileHandle, buf: Uint8Array): Promise<void> {
+  let desde = 0;
+  while (desde < buf.byteLength) {
+    const { bytesWritten } = await fh.write(buf, desde, buf.byteLength - desde);
+    desde += bytesWritten;
+  }
+}
+
 /**
- * Guarda un medio que llega como FLUJO de bytes (cuerpo directo de la subida o la descarga de un enlace). Desde 048 el
- * tope de todo es 16 MB, así que se arma en memoria cortando EN CUANTO se pasa del límite del formato reconocido con los
- * primeros bytes (nunca se reciben GB solo para decir que no) y valida `crearMedio`. Con R2 encendido la pantalla no
- * usa esta vía: sube directo al bucket (`prepararSubida` / `confirmarSubida`).
+ * Guarda un medio que llega como FLUJO de bytes (cuerpo directo de la subida o la descarga de un enlace).
+ *
+ * - Sin `MEDIA_VIDEO_OPTIMIZE` el tope de todo es 16 MB: se arma en memoria cortando EN CUANTO se pasa del límite del formato
+ *   reconocido con los primeros bytes (nunca se reciben GB solo para decir que no) y valida `crearMedio`.
+ * - Con la bandera, un VIDEO (hasta 250 MB) NO pasa por la memoria: se escribe a un archivo temporal (`medios-tmp`) contando
+ *   los bytes, y solo si cuadra se mueve a su sitio. Si se pasa del tope, falla o el formato no es el admitido, el temporal se
+ *   borra. Con R2 encendido esa vía no existe en el servidor (los bytes no se guardan en disco): un video de más de 16 MB debe
+ *   subir directo al bucket (`prepararSubida` / `confirmarSubida`), que es lo que usa la pantalla.
  */
 export async function crearMedioDesdeFlujo(input: {
   organizationId: string;
@@ -197,11 +228,12 @@ export async function crearMedioDesdeFlujo(input: {
   soloTipo?: MedioTipo;
   permitirSvg?: boolean;
 }): Promise<MedioDto> {
-  const opts = { svg: input.permitirSvg === true };
+  const opts = { svg: input.permitirSvg === true, optimizarVideo: videoOptimizeEnabled() };
   const reader = input.flujo.getReader();
   const trozos: Uint8Array[] = [];
   let total = 0;
   let terminado = false;
+  let temporal: string | null = null;
   try {
     while (total < BYTES_PARA_RECONOCER && !terminado) {
       const r = await reader.read();
@@ -211,8 +243,76 @@ export async function crearMedioDesdeFlujo(input: {
         total += r.value.byteLength;
       }
     }
-    const formato = detectarFormato(unir(trozos, total), opts);
-    const tope = formato?.maxBytes ?? MAX_VIDEO_BYTES;
+    const cabeza = unir(trozos, total);
+    const formato = detectarFormato(cabeza, opts);
+    // Un formato que los bytes reconocen pero esta instancia no admite (p. ej. MOV con la bandera apagada) se rechaza ya.
+    if (formato && !formatoDe(input.nombre, formato.mime, opts)) {
+      throw new MedioError("unsupported_type", `«${input.nombre}» no es una imagen o video válido. Se aceptan JPG, PNG, WEBP, AVIF${opts.svg ? ", SVG" : ""} y MP4.`);
+    }
+
+    const r2 = objectStore();
+    const esVideoGrande = formato?.tipo === "video" && opts.optimizarVideo === true;
+    const aDisco = esVideoGrande && !r2;
+    const tope = aDisco ? limiteDe(formato!, opts) : formato ? formato.maxBytes : MAX_VIDEO_BYTES;
+    const mensajeExceso =
+      esVideoGrande && r2
+        ? `«${input.nombre}» pesa más de ${formatBytes(MAX_VIDEO_BYTES)}. Con el almacenamiento en la nube, los videos más grandes se suben con la subida directa (la de la pantalla de Medios).`
+        : `«${input.nombre}» pesa más de ${formatBytes(tope)}, el máximo para ${formato?.etiqueta ?? "este formato"}.`;
+
+    if (aDisco && formato) {
+      if (input.soloTipo && formato.tipo !== input.soloTipo) {
+        throw new MedioError("unsupported_type", `«${input.nombre}» es un video. Aquí solo se aceptan imágenes (JPG, PNG, WEBP o AVIF).`);
+      }
+      const id = newId("mediaLibraryItem");
+      temporal = rutaTemporalDeMedio(input.organizationId, id);
+      await mkdir(path.dirname(temporal), { recursive: true });
+      const fh = await open(temporal, "w");
+      try {
+        await escribirTodo(fh, cabeza);
+        while (!terminado) {
+          const r = await reader.read();
+          if (r.done) {
+            terminado = true;
+            break;
+          }
+          total += r.value.byteLength;
+          if (total > tope) throw new MedioError("too_large", mensajeExceso);
+          await escribirTodo(fh, r.value);
+        }
+      } finally {
+        await fh.close();
+      }
+      const valido = validarMedio(input.nombre, formato.mime, total, opts);
+      if (!valido.ok) throw new MedioError(valido.code, valido.message);
+
+      const destino = rutaDeMedio(input.organizationId, id);
+      await mkdir(path.dirname(destino), { recursive: true });
+      await rename(temporal, destino);
+      temporal = null;
+      try {
+        const [fila] = await getDb()
+          .insert(schema.mediaLibraryItem)
+          .values({
+            id,
+            organizationId: input.organizationId,
+            name: nombreLegible(input.nombre),
+            kind: formato.tipo,
+            mimeType: formato.mime,
+            sizeBytes: total,
+            source: "upload",
+            createdBy: input.userId,
+            storage: "local",
+            storageKey: null,
+          })
+          .returning();
+        return medioToDto(fila!);
+      } catch (err) {
+        // Sin fila, el archivo sería un huérfano que nadie podría borrar.
+        await rm(destino, { force: true }).catch(() => {});
+        throw err;
+      }
+    }
+
     while (!terminado) {
       const r = await reader.read();
       if (r.done) {
@@ -221,12 +321,7 @@ export async function crearMedioDesdeFlujo(input: {
       }
       trozos.push(r.value);
       total += r.value.byteLength;
-      if (total > tope) {
-        throw new MedioError(
-          "too_large",
-          `«${input.nombre}» pesa más de ${formatBytes(tope)}, el máximo para ${formato?.etiqueta ?? "este formato"}.`
-        );
-      }
+      if (total > tope) throw new MedioError("too_large", mensajeExceso);
     }
     return await crearMedio({
       organizationId: input.organizationId,
@@ -238,6 +333,7 @@ export async function crearMedioDesdeFlujo(input: {
       permitirSvg: input.permitirSvg,
     });
   } finally {
+    if (temporal) await rm(temporal, { force: true }).catch(() => {});
     // Si se rechazó antes de leerlo todo, se descarta lo poco que falte (cortar la conexión a media subida hace que
     // el cliente no vea la respuesta); lo mucho se corta.
     if (!terminado) {
@@ -366,7 +462,7 @@ export async function prepararSubida(input: {
 }): Promise<SubidaFirmada> {
   const r2 = objectStore();
   if (!r2) throw new MedioError("unavailable", "La subida directa no está disponible en esta instancia.");
-  const valido = validarMedio(input.nombre, input.mime, input.bytes, { svg: input.permitirSvg === true });
+  const valido = validarMedio(input.nombre, input.mime, input.bytes, { svg: input.permitirSvg === true, optimizarVideo: videoOptimizeEnabled() });
   if (!valido.ok) throw new MedioError(valido.code, valido.message);
   const formato = valido.formato;
   if (input.soloTipo && formato.tipo !== input.soloTipo) {
@@ -444,19 +540,26 @@ export async function confirmarSubida(input: {
     return rechazar("too_large", `«${fila.name}» no llegó completo o su tamaño no coincide. Vuelve a subirlo.`);
   }
 
+  const opts = { svg: fila.mimeType === "image/svg+xml", optimizarVideo: videoOptimizeEnabled() };
+  // El SVG y un video de hasta 16 MB se leen enteros para revisarlos por dentro (como siempre); un video mayor (hasta 250 MB,
+  // solo con la bandera) NO: basta su cabecera (32 bytes) para reconocer el formato, y el tamaño ya se comprobó con `head()`.
+  const leerEntero = fila.mimeType === "image/svg+xml" || (fila.kind === "video" && fila.sizeBytes <= MAX_VIDEO_BYTES);
   let datos: Buffer;
   try {
-    // El MP4 y el SVG se leen enteros (≤16 MB) para revisarlos por dentro; del resto basta la cabeza para reconocerlos.
-    datos =
-      fila.kind === "video" || fila.mimeType === "image/svg+xml"
-        ? await r2.readAll(pendiente, MAX_VIDEO_BYTES)
-        : await r2.readRange(pendiente, 0, BYTES_PARA_RECONOCER - 1);
+    datos = leerEntero ? await r2.readAll(pendiente, MAX_VIDEO_BYTES) : await r2.readRange(pendiente, 0, BYTES_PARA_RECONOCER - 1);
   } catch {
     throw new MedioError("unavailable", "No se pudo leer el archivo para comprobarlo. Inténtalo de nuevo.");
   }
-  const formato = detectarFormato(datos, { svg: fila.mimeType === "image/svg+xml" });
-  if (!formato || formato.mime !== fila.mimeType) {
+  const formato = detectarFormato(datos, opts);
+  // El formato lo deciden los bytes. Un video que el navegador declaró con otro MIME de video (un .mov que dice video/mp4 o
+  // al revés) se acepta con el MIME REAL; cualquier otra diferencia es un archivo que no es lo que dice ser.
+  const mismoVideo = !!formato && formato.tipo === "video" && fila.kind === "video" && !!formatoDe(fila.name, formato.mime, opts);
+  if (!formato || (formato.mime !== fila.mimeType && !mismoVideo)) {
     return rechazar("unsupported_type", `«${fila.name}» no es del formato que dice ser.`);
+  }
+  if (mismoVideo) {
+    const v = validarMedio(fila.name, formato.mime, fila.sizeBytes, opts);
+    if (!v.ok) return rechazar(v.code === "too_large" ? "too_large" : "unsupported_type", v.message);
   }
   if (formato.ext === "svg") {
     const motivo = revisarSvg(datos);
@@ -471,7 +574,7 @@ export async function confirmarSubida(input: {
   }
   const [listo] = await db
     .update(m)
-    .set({ status: "ready", storageKey: definitiva })
+    .set({ status: "ready", storageKey: definitiva, mimeType: formato.mime })
     .where(and(eq(m.organizationId, input.organizationId), eq(m.id, fila.id), eq(m.status, "pending")))
     .returning();
   await r2.delete(pendiente).catch(() => {});
@@ -480,7 +583,8 @@ export async function confirmarSubida(input: {
     const [ya] = await db.select().from(m).where(scoped(m.organizationId, input.organizationId, eq(m.id, fila.id))).limit(1);
     return { medio: medioToDto(ya ?? fila), aviso: null };
   }
-  return { medio: medioToDto(listo), aviso: formato.tipo === "video" ? revisarCodecsMp4(datos) : null };
+  // El aviso de códec mira el archivo entero; en un video grande (solo cabecera leída) lo reemplazará `ffprobe`.
+  return { medio: medioToDto(listo), aviso: formato.tipo === "video" && leerEntero ? revisarCodecsMp4(datos) : null };
 }
 
 /** Mantenimiento horario: las subidas firmadas que nunca se confirmaron (más de 1 h) y su objeto huérfano. */

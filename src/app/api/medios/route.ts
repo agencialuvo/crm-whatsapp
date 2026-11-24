@@ -1,5 +1,6 @@
 import { apiError, withAuth } from "@/lib/api";
-import { MAX_SUBIDA_BYTES, MAX_SUBIDA_MULTIPART_BYTES } from "@/lib/medios";
+import { maxSubidaBytes, MAX_SUBIDA_MULTIPART_BYTES } from "@/lib/medios";
+import { videoOptimizeEnabled } from "@/server/medios/flag";
 import { crearMedio, crearMedioDesdeFlujo, listarMedios, MedioError } from "@/server/medios/store";
 
 export const dynamic = "force-dynamic";
@@ -48,8 +49,10 @@ export const POST = withAuth(async (session, req: Request) => {
   if (multipart && declarado > MAX_SUBIDA_MULTIPART_BYTES) {
     return apiError(413, "too_large", "Esta forma de subir admite hasta 50 MB; para un archivo mayor manda los bytes directos en el cuerpo.");
   }
-  if (declarado > MAX_SUBIDA_BYTES) {
-    return apiError(413, "too_large", "El archivo es demasiado grande (el máximo es 16 MB).");
+  // Con `MEDIA_VIDEO_OPTIMIZE` el video admite hasta 250 MB (cuerpo directo, en flujo a disco); sin ella, 16 MB como siempre.
+  const optimizarVideo = videoOptimizeEnabled();
+  if (declarado > maxSubidaBytes(optimizarVideo)) {
+    return apiError(413, "too_large", `El archivo es demasiado grande (el máximo es ${optimizarVideo ? "250" : "16"} MB).`);
   }
 
   try {

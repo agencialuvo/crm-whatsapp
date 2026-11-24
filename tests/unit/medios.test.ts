@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
+  acceptMedios,
+  ACCEPT_MEDIOS,
+  esEnviablePorWhatsapp,
   formatBytes,
   formatoDe,
+  limiteDe,
+  MAX_SUBIDA_BYTES,
+  MAX_VIDEO_BYTES,
+  MAX_VIDEO_ENTRADA_BYTES,
+  maxSubidaBytes,
   nombreLegible,
+  resumenDeLimites,
   validarMedio,
+  FORMATOS_MEDIO,
 } from "@/lib/medios";
+import { parseVideoOptimizeFlag } from "@/server/medios/flag";
+import { medioToDto } from "@/server/medios/store";
+import { claveDeMedio, claveDeVariante } from "@/server/storage/keys";
 import { detectarFormato, revisarSvg } from "@/server/medios/sniff";
 
 const MB = 1024 * 1024;
@@ -156,5 +169,121 @@ describe("SVG (solo iconos)", () => {
     expect(revisarSvg(bytes('<svg><image href="https://e.com/a.png"/></svg>'))).not.toBeNull();
     expect(revisarSvg(bytes('<svg><foreignObject/></svg>'))).not.toBeNull();
     expect(revisarSvg(bytes('<svg><style>@import "https://e.com/x.css";</style></svg>'))).not.toBeNull();
+  });
+});
+
+const MOV = bytes([0, 0, 0, 0x14], "ftypqt  ", "x".repeat(16));
+
+describe("MEDIA_VIDEO_OPTIMIZE — la bandera", () => {
+  it("apagada por defecto; solo los valores afirmativos la encienden", () => {
+    expect(parseVideoOptimizeFlag(undefined)).toBe(false);
+    expect(parseVideoOptimizeFlag("")).toBe(false);
+    expect(parseVideoOptimizeFlag("off")).toBe(false);
+    expect(parseVideoOptimizeFlag("0")).toBe(false);
+    for (const v of ["on", "1", "true", "si", "sí", "yes", " ON "]) expect(parseVideoOptimizeFlag(v)).toBe(true);
+  });
+});
+
+describe("video con la bandera APAGADA (como siempre)", () => {
+  it("16 MB y solo MP4: un MOV no es un formato válido y un MP4 de 17 MB es demasiado grande", () => {
+    expect(validarMedio("v.mp4", "video/mp4", 16 * MB)).toMatchObject({ ok: true });
+    expect(validarMedio("v.mp4", "video/mp4", 16 * MB + 1)).toMatchObject({ ok: false, code: "too_large" });
+    expect(validarMedio("v.mov", "video/quicktime", 5 * MB)).toMatchObject({ ok: false, code: "unsupported_type" });
+    expect(formatoDe("v.mov", "")).toBeNull();
+  });
+  it("los topes y los textos no cambian", () => {
+    expect(maxSubidaBytes(false)).toBe(MAX_SUBIDA_BYTES);
+    expect(acceptMedios(false)).toBe(ACCEPT_MEDIOS);
+    expect(resumenDeLimites()).toContain("MP4 y PDF hasta 16 MB");
+    expect(resumenDeLimites()).not.toContain("MOV");
+  });
+});
+
+describe("video con la bandera ENCENDIDA", () => {
+  const on = { optimizarVideo: true };
+  it("MP4 y MOV hasta 250 MB; uno más se rechaza con el límite en el mensaje", () => {
+    expect(MAX_VIDEO_ENTRADA_BYTES).toBe(250 * MB);
+    expect(validarMedio("v.mp4", "video/mp4", 250 * MB, on)).toMatchObject({ ok: true });
+    expect(validarMedio("v.mov", "video/quicktime", 250 * MB, on)).toMatchObject({ ok: true });
+    const r = validarMedio("v.mov", "video/quicktime", 250 * MB + 1, on);
+    expect(r).toMatchObject({ ok: false, code: "too_large" });
+    if (!r.ok) expect(r.message).toContain("250 MB");
+  });
+  it("un MOV sin MIME declarado se reconoce por la extensión; uno con un MIME ajeno no", () => {
+    expect(formatoDe("v.MOV", "", on)?.ext).toBe("mov");
+    expect(formatoDe("v.mov", "text/html", on)).toBeNull();
+  });
+  it("el tope de entrada solo toca al video: imágenes y PDF siguen con el suyo", () => {
+    expect(validarMedio("a.png", "image/png", 4 * MB, on)).toMatchObject({ ok: false, code: "too_large" });
+    expect(validarMedio("a.pdf", "application/pdf", 17 * MB, on)).toMatchObject({ ok: false, code: "too_large" });
+    expect(limiteDe(FORMATOS_MEDIO.find((f) => f.ext === "png")!, on)).toBe(3 * MB);
+  });
+  it("sube el tope del cuerpo directo (pero el multipart no: se carga entero en memoria)", () => {
+    expect(maxSubidaBytes(true)).toBeGreaterThan(250 * MB);
+    expect(maxSubidaBytes(true)).toBeGreaterThan(MAX_SUBIDA_BYTES);
+    expect(acceptMedios(true)).toContain(".mov");
+    expect(resumenDeLimites(true)).toContain("MP4 y MOV hasta 250 MB");
+  });
+});
+
+describe("QuickTime (MOV) por los bytes", () => {
+  it("`ftyp` + `qt  ` es un MOV de video; no se confunde con MP4 ni con AVIF", () => {
+    expect(detectarFormato(MOV)).toMatchObject({ ext: "mov", mime: "video/quicktime", tipo: "video" });
+    expect(detectarFormato(MP4)?.ext).toBe("mp4");
+    expect(detectarFormato(AVIF)?.ext).toBe("avif");
+  });
+  it("el formato lo deciden los bytes: un .mov con HTML no es nada; un MP4 llamado .mov sigue siendo MP4", () => {
+    expect(detectarFormato(bytes("<!DOCTYPE html><html></html>"))).toBeNull();
+    expect(detectarFormato(MP4)?.mime).toBe("video/mp4");
+    expect(detectarFormato(MOV)?.mime).toBe("video/quicktime");
+  });
+  it("un MOV nunca es enviable por WhatsApp hasta que exista su variante; un MP4 de más de 16 MB tampoco", () => {
+    expect(esEnviablePorWhatsapp("video/quicktime", 1 * MB)).toBe(false);
+    expect(esEnviablePorWhatsapp("video/mp4", MAX_VIDEO_BYTES)).toBe(true);
+    expect(esEnviablePorWhatsapp("video/mp4", MAX_VIDEO_BYTES + 1)).toBe(false);
+  });
+});
+
+describe("la variante en el DTO y en las claves", () => {
+  const fila = {
+    id: "med_abcdefghij0123456789",
+    organizationId: "org_x",
+    name: "Promo",
+    kind: "video",
+    mimeType: "video/mp4",
+    sizeBytes: 100 * MB,
+    source: "upload",
+    sourceUrl: null,
+    createdBy: "u",
+    storage: "local",
+    storageKey: null,
+    status: "ready",
+    durationMs: null,
+    width: null,
+    height: null,
+    variantStatus: "none",
+    variantError: null,
+    variantStorageKey: null,
+    variantSizeBytes: null,
+    variantMimeType: null,
+    variantWidth: null,
+    variantHeight: null,
+    variantProcessedAt: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+  } as const;
+
+  it("un medio sin variante la dice `none`, y un original de más de 16 MB sigue sin ser enviable", () => {
+    const dto = medioToDto({ ...fila } as never);
+    expect(dto).toMatchObject({ varianteEstado: "none", varianteBytes: null, varianteError: null, noEnviable: true });
+  });
+  it("solo expone el peso de la variante lista y el error de la que falló", () => {
+    expect(medioToDto({ ...fila, variantStatus: "processing", variantSizeBytes: 5 } as never)).toMatchObject({ varianteEstado: "processing", varianteBytes: null });
+    expect(medioToDto({ ...fila, variantStatus: "ready", variantSizeBytes: 9 * MB } as never)).toMatchObject({ varianteEstado: "ready", varianteBytes: 9 * MB, varianteError: null });
+    expect(medioToDto({ ...fila, variantStatus: "failed", variantError: "ffmpeg falló" } as never)).toMatchObject({ varianteEstado: "failed", varianteBytes: null, varianteError: "ffmpeg falló" });
+  });
+  it("la variante vive en `medios-wa`, aparte del original (`medios`)", () => {
+    expect(claveDeVariante("org_x", "med_1")).toBe("org/org_x/medios-wa/med_1");
+    expect(claveDeMedio("org_x", "med_1")).toBe("org/org_x/medios/med_1");
+    expect(() => claveDeVariante("org/../x", "med_1")).toThrow();
   });
 });

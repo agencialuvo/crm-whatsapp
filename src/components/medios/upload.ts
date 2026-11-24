@@ -122,11 +122,13 @@ export async function subirArchivo(
   soloTipo?: "image" | "video",
   /** Admite SVG (solo el selector de iconos). */
   icono?: boolean,
-  onAviso?: (aviso: string) => void
+  onAviso?: (aviso: string) => void,
+  /** La bandera `MEDIA_VIDEO_OPTIMIZE` que el servidor resolvió: admite MOV y video de hasta 250 MB. */
+  optimizarVideo?: boolean
 ): Promise<MedioDto> {
   const o: Opciones = { soloTipo, icono, onAviso };
   // Misma validación que hará el servidor, ANTES de pedir la firma: no se gasta una subida en algo que se rechazará.
-  const v = validarMedio(file.name, file.type, file.size, { svg: icono === true });
+  const v = validarMedio(file.name, file.type, file.size, { svg: icono === true, optimizarVideo });
   if (!v.ok) throw new Error(v.message);
   if (directa !== false) {
     const r = await subirDirecto(file, onProgress, o);

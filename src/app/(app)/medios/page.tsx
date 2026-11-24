@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { MediosClient } from "@/components/medios/medios-client";
 import { NegocioPage } from "@/components/negocio/negocio-page";
 import { getSessionOrNull } from "@/lib/auth/session";
+import { videoOptimizeEnabled } from "@/server/medios/flag";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export default async function MediosPage() {
   if (!session) redirect("/iniciar-sesion");
   return (
     <NegocioPage title="Medios">
-      <MediosClient />
+      <MediosClient optimizarVideo={videoOptimizeEnabled()} />
     </NegocioPage>
   );
 }

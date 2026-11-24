@@ -3,7 +3,7 @@ import { createR2Store } from "@/server/storage/r2";
 import type { ObjectStore } from "@/server/storage/types";
 
 export { r2Enabled } from "@/server/storage/config";
-export { claveDeMedio, clavePendiente } from "@/server/storage/keys";
+export { claveDeMedio, claveDeVariante, clavePendiente } from "@/server/storage/keys";
 export { StorageError, type ObjectStore } from "@/server/storage/types";
 
 let reemplazo: ObjectStore | null = null;

@@ -1569,11 +1569,40 @@ export const mediaLibraryItem = pgTable(
     storageKey: text("storage_key"),
     /** 048: `pending` = la subida directa se firmó pero aún no se confirmó (no se lista ni se envía). */
     status: text("status", { enum: ["pending", "ready"] }).notNull().default("ready"),
+    /** Metadatos del ORIGINAL (los llena la optimización con `ffprobe`; NULL mientras no se haya medido). */
+    durationMs: integer("duration_ms"),
+    width: integer("width"),
+    height: integer("height"),
+    /**
+     * Variante optimizada para WhatsApp (video < 16 MB, lado mayor ≤ 720 px, 30 fps, H.264 + AAC + faststart). Es un eje
+     * APARTE de `status` (que solo dice si la subida se confirmó): `none` = sin variante (ni pedida), `processing` = en
+     * cola o transcodificando, `ready` = lista para enviar, `failed` = no se pudo (ver `variant_error`).
+     * Solo un medio `ready` puede tener variante: la limpieza de subidas sin confirmar (`status = 'pending'`) no la ve nunca.
+     */
+    variantStatus: text("variant_status", { enum: ["none", "processing", "ready", "failed"] }).notNull().default("none"),
+    variantError: text("variant_error"),
+    /** El binario de la variante vive aparte del original (`org/<org>/medios-wa/<id>`; ver `server/storage/keys.ts`). */
+    variantStorageKey: text("variant_storage_key"),
+    variantSizeBytes: integer("variant_size_bytes"),
+    variantMimeType: text("variant_mime_type"),
+    variantWidth: integer("variant_width"),
+    variantHeight: integer("variant_height"),
+    variantProcessedAt: timestamp("variant_processed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
     index("media_library_item_org_idx").on(t.organizationId, t.createdAt),
+    // Lo que el trabajo de optimización busca: solo lo que está en proceso.
+    index("media_library_item_variant_processing_idx").on(t.variantStatus).where(sql`${t.variantStatus} = 'processing'`),
     check("media_library_item_size_pos", sql`${t.sizeBytes} > 0`),
+    check("media_library_item_variant_status_ck", sql`${t.variantStatus} in ('none', 'processing', 'ready', 'failed')`),
+    // El tope de WhatsApp (16 MB) protegido en la base, no solo en el código.
+    check("media_library_item_variant_size_ck", sql`${t.variantSizeBytes} is null or (${t.variantSizeBytes} > 0 and ${t.variantSizeBytes} <= 16777216)`),
+    check("media_library_item_variant_needs_ready_ck", sql`${t.variantStatus} = 'none' or ${t.status} = 'ready'`),
+    check(
+      "media_library_item_variant_ready_ck",
+      sql`${t.variantStatus} <> 'ready' or (${t.variantStorageKey} is not null and ${t.variantSizeBytes} is not null and ${t.variantMimeType} is not null)`
+    ),
   ]
 );
 

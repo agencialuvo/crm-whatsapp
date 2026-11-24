@@ -11,7 +11,7 @@ import { absoluteMediaUrl, copyText } from "@/components/medios/copy-url";
 import { MedioDialog } from "@/components/medios/medio-dialog";
 import { subirArchivo } from "@/components/medios/upload";
 import {
-  ACCEPT_MEDIOS,
+  acceptMedios,
   formatBytes,
   resumenDeLimites,
   validarMedio,
@@ -36,7 +36,7 @@ type Envio = {
  * compacta con el nombre editable, borrado rápido al pasar el cursor y
  * selección múltiple para borrar varios a la vez.
  */
-export function MediosClient() {
+export function MediosClient({ optimizarVideo = false }: { /** La bandera `MEDIA_VIDEO_OPTIMIZE`, resuelta en el servidor. */ optimizarVideo?: boolean }) {
   const [medios, setMedios] = useState<MedioDto[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtro, setFiltro] = useState<Filtro>("todos");
@@ -102,7 +102,7 @@ export function MediosClient() {
     // Se validan todos primero y se enseñan de golpe: un rechazado no frena a los demás.
     const lote = archivos.map((file) => {
       contador.current += 1;
-      return { file, key: `up-${contador.current}`, v: validarMedio(file.name, file.type, file.size) };
+      return { file, key: `up-${contador.current}`, v: validarMedio(file.name, file.type, file.size, { optimizarVideo }) };
     });
     setEnvios((prev) => [
       ...prev,
@@ -116,8 +116,13 @@ export function MediosClient() {
     for (const { file, key, v } of lote) {
       if (!v.ok) continue;
       try {
-        const medio = await subirArchivo(file, (f) =>
-          setEnvios((prev) => prev.map((e) => (e.key === key ? { ...e, progreso: f } : e)))
+        const medio = await subirArchivo(
+          file,
+          (f) => setEnvios((prev) => prev.map((e) => (e.key === key ? { ...e, progreso: f } : e))),
+          undefined,
+          undefined,
+          undefined,
+          optimizarVideo
         );
         setMedios((prev) => [medio, ...(prev ?? [])]);
         setEnvios((prev) => prev.filter((e) => e.key !== key));
@@ -128,7 +133,7 @@ export function MediosClient() {
         );
       }
     }
-  }, []);
+  }, [optimizarVideo]);
 
   function alElegir(e: React.ChangeEvent<HTMLInputElement>) {
     const archivos = Array.from(e.target.files ?? []);
@@ -208,7 +213,7 @@ export function MediosClient() {
           ref={inputRef}
           type="file"
           multiple
-          accept={ACCEPT_MEDIOS}
+          accept={acceptMedios(optimizarVideo)}
           className="sr-only"
           tabIndex={-1}
           aria-label="Elegir archivos para subir"
@@ -253,7 +258,7 @@ export function MediosClient() {
         </div>
       </div>
 
-      <p className="mb-4 text-xs text-text-3">{resumenDeLimites()}. También puedes arrastrar archivos aquí.</p>
+      <p className="mb-4 text-xs text-text-3">{resumenDeLimites(optimizarVideo)}. También puedes arrastrar archivos aquí.</p>
 
       {/* Selección múltiple */}
       {marcados.length > 0 && (
