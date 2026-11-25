@@ -236,6 +236,11 @@ function setup(over: {
   /** `automation_run.context` de la ejecución (con `row.runId`). */
   context?: Record<string, unknown>;
   facts?: Partial<import("@/lib/automation").ConditionFacts>;
+  /** `human_handoff`: lo que responde la acción (por defecto `paused`) y si la dependencia no está cableada. */
+  handoffStatus?: "paused" | "already_paused" | "not_found";
+  noHandoff?: boolean;
+  /** El contacto no tiene conversación (`loadTarget` devuelve null). */
+  noTarget?: boolean;
 } = {}) {
   const logs: LogInput[] = [];
   const step: Step = {
@@ -262,13 +267,14 @@ function setup(over: {
     timezone: vi.fn(async () => "UTC"),
     contactFacts: vi.fn(async () => ({ tagIds: [] as string[], stageId: null as string | null, ...over.facts })),
     runContext: vi.fn(async () => over.context ?? {}),
+    ...(over.noHandoff ? {} : { handoff: vi.fn(async (_i: { organizationId: string; conversationId: string; note?: string }) => ({ status: over.handoffStatus ?? ("paused" as const) })) }),
     applyTag: vi.fn(async () => "added" as const),
     moveContactToStage: vi.fn(async (_o: string, _c: string, stageId: string) => ({
       status: "moved" as const,
       toStageId: stageId,
       fromStageId: null as string | null,
     })),
-    loadTarget: vi.fn(async () => target),
+    loadTarget: vi.fn(async () => (over.noTarget ? null : target)),
     templateStatus: vi.fn(async () => null),
     sendText: vi.fn(async () => ({ messageId: "msg_1" })),
     sendTemplate: vi.fn(async () => ({ messageId: "msg_2" })),
@@ -417,6 +423,42 @@ describe("motor — fidelización multi-hito (Paso 4)", () => {
   });
 
   it.each([
+    // El hito del disparo sale de context.loyalty de la ejecución (no de los hechos vivos del contacto).
+    [{ type: "loyalty_milestone_is", stamps: 8 }, LOYALTY, "true"],
+    [{ type: "loyalty_milestone_is", stamps: 4 }, LOYALTY, "false"],
+    // Un flujo de cada sello (o de otro tipo) no trae hito: la regla no se cumple.
+    [{ type: "loyalty_milestone_is", stamps: 8 }, { loyalty: { currentStamps: 8, stampsAdded: 1 } }, "false"],
+    [{ type: "loyalty_milestone_is", stamps: 8 }, { source: "manual" }, "false"],
+  ])("la condición por hito %j con el contexto %j sale por «%s»", async (rule, context, handle) => {
+    const t = setup({ step: { stepType: "condition", config: { rule } }, row: { runId: "run_1" }, context });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle });
+  });
+
+  it("un switch por hito elige la salida del premio que activó el flujo", async () => {
+    const cases = [
+      { id: "cuatro", label: "Sello 4", rule: { type: "loyalty_milestone_is", stamps: 4 } },
+      { id: "ocho", label: "Sello 8", rule: { type: "loyalty_milestone_is", stamps: 8 } },
+    ];
+    const t = setup({ step: { stepType: "switch", config: { cases } }, row: { runId: "run_1" }, context: LOYALTY });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle: "case_ocho" });
+  });
+
+  it("una regla que no usa el contexto no lo consulta (una consulta menos en el caso común)", async () => {
+    const t = setup({ step: { stepType: "condition", config: { rule: { type: "stamps_between", min: 1, max: 9 } } }, row: { runId: "run_1" }, facts: { stamps: 3 } });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.runContext).not.toHaveBeenCalled();
+  });
+
+  it("{{sellos}}, {{faltan}} y {{proximo_premio}} de un flujo de cada sello salen del contexto", async () => {
+    const ctx = { loyalty: { currentStamps: 3, stampsAdded: 1, stampsToNext: 1, nextMilestone: { stamps: 4, title: "20% de descuento" }, transactionId: "ltr_9" } };
+    const t = setup({ step: premio("¡Sello {{sellos}}! Te falta {{faltan}} para {{proximo_premio}}"), row: { runId: "run_1" }, context: ctx });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "¡Sello 3! Te falta 1 para 20% de descuento" }));
+  });
+
+  it.each([
     [{ type: "stamps_remaining_lte", stamps: 2 }, { stamps: 6, stampsToNextMilestone: 2 }, "true"],
     [{ type: "stamps_remaining_lte", stamps: 2 }, { stamps: 5, stampsToNextMilestone: 3 }, "false"],
     [{ type: "stamps_remaining_lte", stamps: 2 }, { stamps: 8, stampsToNextMilestone: null }, "false"],
@@ -426,6 +468,91 @@ describe("motor — fidelización multi-hito (Paso 4)", () => {
     const t = setup({ step: { stepType: "condition", config: { rule } }, facts });
     expect(await t.run()).toBe("completed");
     expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle });
+  });
+});
+
+describe("motor — human_handoff (Paso 5)", () => {
+  const paso = (config: Record<string, unknown> = {}) => ({ stepType: "human_handoff", config });
+  const logsDe = (t: ReturnType<typeof setup>) => t.logs.filter((l) => l.status === "success");
+
+  it("pasa la conversación a una persona, deja constancia y avanza; NO envía nada al cliente", async () => {
+    const t = setup({ step: paso() });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.handoff).toHaveBeenCalledWith({ organizationId: "org_1", conversationId: "cv_1" });
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW);
+    expect(t.deps.sendText).not.toHaveBeenCalled();
+    expect(t.deps.sendTemplate).not.toHaveBeenCalled();
+    expect(t.deps.sendMedia).not.toHaveBeenCalled();
+    expect(logsDe(t)).toHaveLength(1);
+    expect(logsDe(t)[0]!.metadata).toMatchObject({ result: "paused", step: { stepType: "human_handoff" } });
+  });
+
+  it("la nota se renderiza con el nombre, las variables y el premio del disparo, y viaja a la acción (no al cliente)", async () => {
+    const ctx = { vars: { motivo: "canje" }, loyalty: { milestoneStamps: 8, title: "50% de descuento", discountPercentage: 50, currentStamps: 8 } };
+    const t = setup({ step: paso({ note: "{{name}} ganó {{premio}} ({{descuento}}%): {{vars.motivo}}" }), row: { runId: "run_1" }, context: ctx });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.handoff).toHaveBeenCalledWith({ organizationId: "org_1", conversationId: "cv_1", note: "Ana ganó 50% de descuento (50%): canje" });
+    expect(t.deps.sendText).not.toHaveBeenCalled();
+  });
+
+  it("sin nota (o con una nota que queda vacía) no manda el campo `note`", async () => {
+    const t = setup({ step: paso({ note: "{{premio}}" }), row: { runId: "run_1" }, context: {} });
+    await t.run();
+    expect(t.deps.handoff!.mock.calls[0]![0]).not.toHaveProperty("note");
+  });
+
+  it("si la conversación ya estaba pasada a una persona, el flujo sigue igual y el resultado lo dice", async () => {
+    const t = setup({ step: paso(), handoffStatus: "already_paused" });
+    expect(await t.run()).toBe("completed");
+    expect(logsDe(t)[0]!.metadata).toMatchObject({ result: "already_paused" });
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledTimes(1);
+  });
+
+  it("sin conversación (el contacto no tiene chat) NO falla ni toca nada: el flujo sigue", async () => {
+    const t = setup({ step: paso(), noTarget: true });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.handoff).not.toHaveBeenCalled();
+    expect(logsDe(t)[0]!.metadata).toMatchObject({ result: "no_conversation" });
+    expect(t.deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("una conversación del Laboratorio (sandbox) jamás se toca", async () => {
+    const t = setup({ step: paso(), target: { isTest: true } });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.handoff).not.toHaveBeenCalled();
+    expect(logsDe(t)[0]!.metadata).toMatchObject({ result: "sandbox" });
+  });
+
+  it("no depende de la ventana de 24 h ni de la baja: escalar no es enviar", async () => {
+    const t = setup({ step: paso(), target: { lastInboundAt: hoursAgo(72) }, optedOut: true });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.handoff).toHaveBeenCalledTimes(1);
+    expect(t.deps.isOptedOut).not.toHaveBeenCalled();
+  });
+
+  it("si un intento anterior ya lo registró y se cayó antes de avanzar, solo se cierra: no se repite la acción", async () => {
+    const t = setup({ step: paso(), alreadySucceeded: true });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.handoff).not.toHaveBeenCalled();
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW);
+  });
+
+  it("una configuración inválida falla con invalid_step_config; sin la acción cableada, con handoff_unavailable", async () => {
+    const mala = setup({ step: paso({ note: "x".repeat(501) }) });
+    expect(await mala.run()).toBe("failed");
+    expect(mala.deps.markFailed).toHaveBeenCalledWith(mala.row, "invalid_step_config");
+    expect(mala.deps.handoff).not.toHaveBeenCalled();
+    const sin = setup({ step: paso(), noHandoff: true });
+    expect(await sin.run()).toBe("failed");
+    expect(sin.deps.markFailed).toHaveBeenCalledWith(sin.row, "handoff_unavailable");
+  });
+
+  it("un fallo de la acción se trata como cualquier otro fallo del paso (reintento con backoff)", async () => {
+    const t = setup({ step: paso() });
+    t.deps.handoff!.mockRejectedValueOnce(new Error("bd caída"));
+    expect(await t.run()).toBe("retry");
+    expect(t.deps.reschedule).toHaveBeenCalledTimes(1);
+    expect(t.deps.completeAndAdvance).not.toHaveBeenCalled();
   });
 });
 

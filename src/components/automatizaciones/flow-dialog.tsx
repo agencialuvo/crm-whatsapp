@@ -74,6 +74,8 @@ export function FlowDialog({
   // `tag_added`: a qué etiqueta reacciona (vacío = cualquiera). `loyalty_reward_unlocked`: a qué premio (vacío = cualquiera).
   const [tagId, setTagId] = useState(typeof flow?.triggerConfig?.tagId === "string" ? flow.triggerConfig.tagId : "");
   const [stamps, setStamps] = useState(typeof flow?.triggerConfig?.stamps === "number" ? String(flow.triggerConfig.stamps) : "");
+  // `loyalty_stamp_earned`: «N o más» (el exacto usa `stamps`, igual que el premio).
+  const [minStamps, setMinStamps] = useState(typeof flow?.triggerConfig?.minStamps === "number" ? String(flow.triggerConfig.minStamps) : "");
   // 047 — A qué anuncio reacciona: cualquiera, uno, un conjunto o una campaña (solo IDs; los nombres salen del catálogo).
   const [adCfg, setAdCfg] = useState<AdReferralConfig>(() => parseAdReferralConfig(flow?.triggerConfig ?? null));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -117,6 +119,9 @@ export function FlowDialog({
     if (triggerType === "ad_referral" && adScopeOf(adCfg).level !== "any") return { ...adCfg };
     if (triggerType === "tag_added" && tagId) return { tagId };
     if (triggerType === "loyalty_reward_unlocked" && stamps.trim()) return { stamps: Number(stamps) };
+    if (triggerType === "loyalty_stamp_earned" && (stamps.trim() || minStamps.trim())) {
+      return { ...(stamps.trim() && { stamps: Number(stamps) }), ...(minStamps.trim() && { minStamps: Number(minStamps) }) };
+    }
     return null;
   }
 
@@ -329,6 +334,48 @@ export function FlowDialog({
               disabled={busy}
             />
           </Field>
+        )}
+
+        {triggerType === "loyalty_stamp_earned" && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Exactamente en el sello"
+              htmlFor="flow-stamp-exact"
+              error={errors.triggerConfig}
+              hint="Solo cuando la tarjeta llega a esos sellos (por ejemplo 3). Vacío: en cualquier sello."
+            >
+              <Input
+                id="flow-stamp-exact"
+                inputMode="numeric"
+                value={stamps}
+                maxLength={4}
+                placeholder="Cualquiera"
+                disabled={busy}
+                onChange={(e) => {
+                  setStamps(e.target.value.replace(/\D/g, ""));
+                  clear("triggerConfig");
+                }}
+              />
+            </Field>
+            <Field
+              label="Desde el sello"
+              htmlFor="flow-stamp-min"
+              hint="Con cada sello a partir de ese número. Vacío: desde el primero."
+            >
+              <Input
+                id="flow-stamp-min"
+                inputMode="numeric"
+                value={minStamps}
+                maxLength={4}
+                placeholder="Desde el primero"
+                disabled={busy}
+                onChange={(e) => {
+                  setMinStamps(e.target.value.replace(/\D/g, ""));
+                  clear("triggerConfig");
+                }}
+              />
+            </Field>
+          </div>
         )}
 
         {triggerType === "loyalty_reward_unlocked" && (

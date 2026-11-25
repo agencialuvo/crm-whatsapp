@@ -63,6 +63,9 @@ describe("readLoyaltyContext", () => {
       title: "T",
       discountPercentage: 50,
       currentStamps: 9,
+      stampsAdded: null,
+      stampsToNext: null,
+      nextTitle: null,
     });
   });
   it("ausente, mal formado o vacío → null; los tipos raros se ignoran campo a campo", () => {
@@ -71,7 +74,7 @@ describe("readLoyaltyContext", () => {
     expect(readLoyaltyContext({ loyalty: "x" })).toBeNull();
     expect(readLoyaltyContext({ loyalty: [] })).toBeNull();
     expect(readLoyaltyContext({ loyalty: { foo: 1 } })).toBeNull();
-    expect(readLoyaltyContext({ loyalty: { title: 5, milestoneStamps: "8", currentStamps: 3 } })).toEqual({ milestoneStamps: null, title: null, discountPercentage: null, currentStamps: 3 });
+    expect(readLoyaltyContext({ loyalty: { title: 5, milestoneStamps: "8", currentStamps: 3 } })).toEqual({ milestoneStamps: null, title: null, discountPercentage: null, currentStamps: 3, stampsAdded: null, stampsToNext: null, nextTitle: null });
   });
 });
 

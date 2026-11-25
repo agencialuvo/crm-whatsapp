@@ -18,6 +18,7 @@ import {
   mergeVars,
   readVars,
   removeTagConfigSchema,
+  humanHandoffConfigSchema,
   readLoyaltyContext,
   renderVars,
   sendMediaConfigSchema,
@@ -165,6 +166,11 @@ export type Deps = {
   resolveReplyWait?(row: Row, handle: EdgeHandle): Promise<boolean>;
   /** El contexto de la ejecución (anuncio, servicio…): de ahí sale `{{servicio}}`. */
   runContext?(organizationId: string, runId: string): Promise<Record<string, unknown>>;
+  /**
+   * Paso 5 — `human_handoff`: pasa la conversación a una persona (apaga la IA, deja el motivo y avisa en la bandeja).
+   * Idempotente. Opcional: sin definir, el paso falla a la vista (`handoff_unavailable`).
+   */
+  handoff?(input: { organizationId: string; conversationId: string; note?: string }): Promise<{ status: "paused" | "already_paused" | "not_found" }>;
   /** Paso 3: ejecuta el código de un bloque `code_js` en el sandbox (sin definir, o con la bandera apagada: falla a la vista). */
   runCode?(input: { code: string; input: unknown }): Promise<CodeRunResult>;
   /**
@@ -428,6 +434,33 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       return "completed";
     }
 
+    // Paso 5 — escalar a una persona. No envía nada al cliente: no necesita ventana de 24 h ni plantilla, y no se frena por una baja.
+    if (step.stepType === "human_handoff") {
+      const cfg = humanHandoffConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      if (!deps.handoff) return await fail("handoff_unavailable");
+      const target = await deps.loadTarget(row.organizationId, row.contactId);
+      let result: "paused" | "already_paused" | "no_conversation" | "sandbox" | "not_found";
+      if (!target) result = "no_conversation"; // sin chat no hay a quién escalar: el flujo sigue
+      else if (target.isTest) result = "sandbox"; // el Laboratorio nunca se toca
+      else {
+        const ctx = row.runId && deps.runContext ? await deps.runContext(row.organizationId, row.runId) : {};
+        const note = cfg.data.note ? renderVars(cfg.data.note, { name: target.contactName, vars: readVars(ctx), loyalty: readLoyaltyContext(ctx) }) : "";
+        result = (await deps.handoff({ organizationId: row.organizationId, conversationId: target.conversationId, ...(note ? { note } : {}) })).status;
+      }
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: { ...snapshot, result },
+      });
+      await deps.completeAndAdvance(row, now);
+      return "completed";
+    }
+
     if (step.stepType === "set_stage") {
       const cfg = setStageConfigSchema.safeParse(step.config);
       if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
@@ -460,10 +493,15 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
       // Datos de ahora, no de cuando se disparó el flujo: la confirmación o una etiqueta pudo llegar mientras esperaba.
       const facts = await deps.contactFacts(row.organizationId, row.contactId);
-      // Las variables solo se leen si la regla las usa (una consulta menos en el caso común).
-      const vars =
-        cfg.data.rule.type === "var_equals" && row.runId && deps.runContext ? readVars(await deps.runContext(row.organizationId, row.runId)) : {};
-      const outcome = evaluateCondition(cfg.data.rule, { ...facts, booking, vars });
+      // Las variables y el premio del disparo solo se leen si la regla los usa (una consulta menos en el caso común).
+      const usesCtx = cfg.data.rule.type === "var_equals" || cfg.data.rule.type === "loyalty_milestone_is";
+      const ctx = usesCtx && row.runId && deps.runContext ? await deps.runContext(row.organizationId, row.runId) : {};
+      const outcome = evaluateCondition(cfg.data.rule, {
+        ...facts,
+        booking,
+        vars: readVars(ctx),
+        loyaltyMilestoneStamps: readLoyaltyContext(ctx)?.milestoneStamps ?? null,
+      });
       const result: NodeResult = { handle: conditionHandle(outcome) };
       await deps.writeLog({
         organizationId: row.organizationId,
@@ -483,9 +521,14 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       const cfg = switchConfigSchema.safeParse(step.config);
       if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
       const facts = await deps.contactFacts(row.organizationId, row.contactId);
-      const usesVars = cfg.data.cases.some((k) => k.rule.type === "var_equals");
-      const vars = usesVars && row.runId && deps.runContext ? readVars(await deps.runContext(row.organizationId, row.runId)) : {};
-      const picked = evaluateSwitch(cfg.data.cases, { ...facts, booking, vars });
+      const usesCtx = cfg.data.cases.some((k) => k.rule.type === "var_equals" || k.rule.type === "loyalty_milestone_is");
+      const ctx = usesCtx && row.runId && deps.runContext ? await deps.runContext(row.organizationId, row.runId) : {};
+      const picked = evaluateSwitch(cfg.data.cases, {
+        ...facts,
+        booking,
+        vars: readVars(ctx),
+        loyaltyMilestoneStamps: readLoyaltyContext(ctx)?.milestoneStamps ?? null,
+      });
       const label = cfg.data.cases.find((k) => k.id === picked.caseId)?.label ?? null;
       await deps.writeLog({
         organizationId: row.organizationId,

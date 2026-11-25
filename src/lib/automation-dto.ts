@@ -72,6 +72,7 @@ export const TRIGGER_LABELS: Record<string, string> = {
   booking_no_show: "Cliente no asistió",
   ad_referral: "Llegó de un anuncio",
   loyalty_reward_unlocked: "Premio de fidelidad",
+  loyalty_stamp_earned: "Sello ganado",
 };
 
 /**
@@ -97,6 +98,8 @@ export const TRIGGER_HINTS: Record<(typeof CREATABLE_TRIGGERS)[number], string> 
     "Se activa cuando se le asigna una etiqueta a un contacto (a mano o desde su ficha). Lo que haga otra automatización no lo activa.",
   loyalty_reward_unlocked:
     "Se activa cuando un cliente completa los sellos de un premio de su tarjeta de fidelidad. Puedes acotarlo a un premio.",
+  loyalty_stamp_earned:
+    "Se activa con CADA sello que gana un cliente en Caja, llegue o no a un premio. Puedes acotarlo a un número exacto de sellos o a «N o más», y usar {{sellos}}, {{faltan}} y {{proximo_premio}} en los mensajes.",
 };
 
 export const triggerLabel = (type: string): string => TRIGGER_LABELS[type] ?? type;
@@ -192,6 +195,14 @@ export function describeTrigger(
       const name = tags.find((t) => t.id === id)?.name;
       return name ? `Cuando se le asigna la etiqueta «${name}»` : "Cuando se le asigna una etiqueta que ya no existe";
     }
+    case "loyalty_stamp_earned": {
+      const exact = config?.stamps;
+      const min = config?.minStamps;
+      if (typeof exact === "number" && typeof min === "number") return `Cuando su tarjeta llega a ${exact} sellos (y al menos ${min})`;
+      if (typeof exact === "number") return `Cuando su tarjeta llega a ${exact} ${exact === 1 ? "sello" : "sellos"}`;
+      if (typeof min === "number") return `Con cada sello, desde que su tarjeta tiene ${min} ${min === 1 ? "sello" : "sellos"}`;
+      return "Cada vez que un cliente gana un sello";
+    }
     case "loyalty_reward_unlocked": {
       const stamps = config?.stamps;
       return typeof stamps === "number" ? `Cuando un cliente completa el premio de ${stamps} sellos` : "Cuando un cliente desbloquea un premio de fidelidad";
@@ -216,6 +227,7 @@ export const STEP_LABELS: Record<string, string> = {
   set_var: "Establecer variable",
   switch: "Switch (varias salidas)",
   code_js: "Código JavaScript",
+  human_handoff: "Pasar a una persona",
 };
 
 export const stepLabel = (type: string): string => STEP_LABELS[type] ?? type;
@@ -299,6 +311,7 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   stamps_gte: "Su tarjeta de fidelidad tiene al menos X sellos",
   stamps_remaining_lte: "Le faltan pocos sellos para su próximo premio",
   stamps_between: "Sus sellos están entre X y Y",
+  loyalty_milestone_is: "El premio que activó el flujo es el del sello X",
   birthday_today: "Hoy es su cumpleaños",
   var_equals: "Una variable del flujo vale…",
 };
@@ -379,6 +392,8 @@ export function describeRule(rule: ConditionRule | Record<string, unknown> | nul
         ? `Su tarjeta tiene entre ${b.min} y ${b.max} sellos`
         : "Rango de sellos de la tarjeta (sin configurar)";
     }
+    case "loyalty_milestone_is":
+      return typeof r.stamps === "number" ? `El premio que activó el flujo es el del sello ${r.stamps}` : "Premio del disparo (sin configurar)";
     case "birthday_today":
       return "Hoy es su cumpleaños";
     case "var_equals": {
@@ -420,6 +435,10 @@ export function describeStep(
         `Sin respuesta → ${action("onTimeout", "stop")}`,
       ].join(" · "),
     };
+  }
+  if (step.stepType === "human_handoff") {
+    const note = typeof c.note === "string" && c.note.trim() ? ` Nota: «${clip(c.note, 100)}».` : "";
+    return { title: "Pasar la conversación a una persona", detail: `Apaga la IA en esa conversación y avisa en la bandeja.${note}` };
   }
   if (step.stepType === "set_var") {
     const key = typeof c.key === "string" && c.key ? c.key : "(sin nombre)";

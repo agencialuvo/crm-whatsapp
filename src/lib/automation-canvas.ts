@@ -50,7 +50,7 @@ export function nodeKindOf(type: string): NodeKind {
     case "wait_reply":
       return "waitReply";
     default:
-      return "action"; // add_tag · remove_tag · set_stage · set_var · code_js
+      return "action"; // add_tag · remove_tag · set_stage · set_var · code_js · human_handoff
   }
 }
 
@@ -70,6 +70,8 @@ export type IconName =
   | "CalendarX"
   | "Cake"
   | "Gift"
+  | "Headset"
+  | "Stamp"
   | "Play"
   | "GitBranch"
   | "Clock"
@@ -97,6 +99,7 @@ export const TRIGGER_META: Record<(typeof CREATABLE_TRIGGERS)[number], BlockMeta
   birthday: { group: "Fechas", tone: "trigger", icon: "Cake" },
   tag_added: { group: "Contactos y pipeline", tone: "trigger", icon: "Tag" },
   loyalty_reward_unlocked: { group: "Fidelización", tone: "trigger", icon: "Gift" },
+  loyalty_stamp_earned: { group: "Fidelización", tone: "trigger", icon: "Stamp" },
   manual: { group: "Manual", tone: "trigger", icon: "Play" },
 };
 
@@ -114,6 +117,7 @@ export const STEP_META: Record<StepType, BlockMeta> = {
   switch: { group: "Decisiones", tone: "condition", icon: "Split" },
   set_var: { group: "Datos", tone: "crm", icon: "Variable" },
   code_js: { group: "Datos", tone: "crm", icon: "Braces" },
+  human_handoff: { group: "CRM", tone: "crm", icon: "Headset" },
 };
 
 const FALLBACK_META: BlockMeta = { group: "Otros", tone: "crm", icon: "Zap" };
@@ -280,6 +284,7 @@ const TRIGGER_ITEMS: Record<(typeof CREATABLE_TRIGGERS)[number], { label: string
   birthday: { label: "Cumpleaños", hint: "El día del cumpleaños del cliente" },
   tag_added: { label: "Etiqueta asignada", hint: "Cuando se le asigna una etiqueta a un contacto" },
   loyalty_reward_unlocked: { label: "Premio de fidelidad", hint: "Cuando un cliente completa los sellos de un premio" },
+  loyalty_stamp_earned: { label: "Sello ganado", hint: "Con cada sello que suma un cliente, llegue o no a un premio" },
   manual: { label: "Manual", hint: "Lo inicias tú, para un contacto" },
 };
 
@@ -294,6 +299,7 @@ const TRIGGER_ORDER: (keyof typeof TRIGGER_ITEMS)[] = [
   "booking_no_show",
   "birthday",
   "loyalty_reward_unlocked",
+  "loyalty_stamp_earned",
   "manual",
 ];
 
@@ -326,6 +332,7 @@ export const PALETTE: PaletteItem[] = [
   stepItem("add_tag", "actions", "Asignar etiqueta", "Marca al contacto"),
   stepItem("remove_tag", "actions", "Quitar etiqueta", "Desmarca al contacto"),
   stepItem("set_stage", "actions", "Cambiar etapa", "Mueve al lead en el pipeline"),
+  stepItem("human_handoff", "actions", "Pasar a una persona", "Apaga la IA y avisa al equipo en la bandeja"),
 ];
 
 /** ¿Un texto de búsqueda encaja con el bloque? Sin acentos ni mayúsculas, contra nombre, ayuda y subgrupo. */

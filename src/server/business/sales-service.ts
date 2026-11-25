@@ -583,7 +583,8 @@ export async function registerServiceSale(
         amountCents: input.amountCents,
       });
       if (stamped) {
-        if (stamped.rewardJustUnlocked) unlockedByStamp = stamped;
+        // Cada sello ganado (y todo premio que cruce) se avisa a las automatizaciones tras el commit.
+        if (stamped.transaction.type === "earned" || stamped.rewardJustUnlocked) unlockedByStamp = stamped;
         loyalty = {
           type: input.birthdayDiscount === true ? "birthday_excluded" : "earned",
           currentStamps: stamped.card.currentStamps,
@@ -1213,7 +1214,7 @@ export async function updateSale(
       amountCents: input.amountCents,
       birthdayDiscount: current.birthdayDiscount,
       onStamped: (r) => {
-        if (r.rewardJustUnlocked) unlockedByEdit.push(r);
+        if (r.transaction.type === "earned" || r.rewardJustUnlocked) unlockedByEdit.push(r);
       },
     });
     await tx.insert(schema.serviceSaleEdit).values({

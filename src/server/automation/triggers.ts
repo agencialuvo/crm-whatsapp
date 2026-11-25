@@ -9,10 +9,12 @@ import {
   leadCreatedDedupeKey,
   loyaltyFlowMatches,
   loyaltyRewardDedupeKey,
+  loyaltyStampDedupeKey,
   parseTriggerConfig,
   splitISODate,
   stageDedupeKey,
   stageFlowMatches,
+  stampFlowMatches,
   tagAddedDedupeKey,
   tagFlowMatches,
 } from "@/lib/automation";
@@ -235,6 +237,68 @@ export async function onLoyaltyRewardUnlocked(
     }
   }
   return started;
+}
+
+/** Un sello ganado: lo que se sabe de la tarjeta tras sumarlo (viaja en el `context` de la ejecución). */
+export type LoyaltyStampInput = {
+  organizationId: string;
+  contactId: string;
+  /** El movimiento que sumó el sello (`loyalty_transaction.id`): la llave de idempotencia. */
+  transactionId: string;
+  /** Sellos de la tarjeta DESPUÉS de sumar. */
+  currentStamps: number;
+  /** Cuántos sumó este movimiento (un cobro suma 1). */
+  stampsAdded: number;
+  /** Su próximo premio (null si ya los alcanzó todos) y cuántos sellos le faltan. */
+  nextMilestone: Pick<LoyaltyMilestone, "stamps" | "title" | "rewardType" | "discountPercentage"> | null;
+  stampsToNext: number | null;
+};
+
+/**
+ * Un cliente ganó un sello (cruce o no un premio). DEBE llamarse DESPUÉS del commit de la transacción que lo sumó. Arranca cada
+ * flujo `loyalty_stamp_earned` activo cuyo filtro (`stamps` exacto / `minStamps`) coincida con los sellos de la tarjeta, una
+ * sola vez por movimiento. El contexto usa la misma clave `loyalty` que el premio, sin los campos del hito: no interfiere con
+ * `loyalty_reward_unlocked`. Nunca lanza.
+ */
+export async function onLoyaltyStampEarned(
+  input: LoyaltyStampInput,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled() || input.stampsAdded <= 0) return 0;
+  try {
+    return await emitAutomationEvent(
+      {
+        organizationId: input.organizationId,
+        trigger: "loyalty_stamp_earned",
+        contactId: input.contactId,
+        dedupeKey: loyaltyStampDedupeKey(input.transactionId),
+        context: {
+          loyalty: {
+            currentStamps: input.currentStamps,
+            stampsAdded: input.stampsAdded,
+            stampsToNext: input.stampsToNext,
+            nextMilestone: input.nextMilestone
+              ? {
+                  stamps: input.nextMilestone.stamps,
+                  title: input.nextMilestone.title,
+                  rewardType: input.nextMilestone.rewardType,
+                  ...(input.nextMilestone.discountPercentage !== undefined ? { discountPercentage: input.nextMilestone.discountPercentage } : {}),
+                }
+              : null,
+            transactionId: input.transactionId,
+          },
+        },
+        matches: (f) => stampFlowMatches(parseTriggerConfig(f.triggerConfig), input.currentStamps),
+      },
+      store,
+      now
+    );
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de sello ganado falló:", err);
+    return 0;
+  }
 }
 
 /* ─── Citas ─── */

@@ -354,6 +354,21 @@ describe("processRow — esperas", () => {
     expect(await t.run()).toBe("completed");
     expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, new Date(NOW.getTime() + 45_000));
   });
+  it("delay en segundos respeta la ventana horaria del negocio: espera 30 s y sale a la próxima hora fija local", async () => {
+    // NOW = 12:00 UTC = 06:00 en Ciudad de México (UTC-6, sin horario de verano en esa fecha). «A las 10:00» → 16:00 UTC del mismo día.
+    const t = setup({ timezone: "America/Mexico_City", step: { stepType: "delay", config: { amount: 30, unit: "seconds", window: { mode: "at", hour: 10, minute: 0 } } } });
+    expect(await t.run()).toBe("completed");
+    const nextAt = (t.deps.completeAndAdvance.mock.calls[0] as unknown as [unknown, Date])[1];
+    expect(nextAt.getTime()).toBeGreaterThanOrEqual(NOW.getTime() + 30_000);
+    expect(nextAt.toISOString()).toBe(`${NOW.toISOString().slice(0, 10)}T16:00:00.000Z`);
+    expect(t.deps.timezone).toHaveBeenCalledWith("org_1");
+  });
+  it("delay en segundos sin ventana no consulta la zona horaria (solo suma los segundos)", async () => {
+    const t = setup({ step: { stepType: "delay", config: { amount: 1, unit: "seconds" } } });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, new Date(NOW.getTime() + 1_000));
+    expect(t.deps.timezone).not.toHaveBeenCalled();
+  });
   it("delay valida el tope por unidad (3600 en segundos, 366 en el resto)", () => {
     const ok = (amount: number, unit: string) => delayConfigSchema.safeParse({ amount, unit }).success;
     expect(ok(3600, "seconds")).toBe(true);

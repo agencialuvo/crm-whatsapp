@@ -239,6 +239,8 @@ export const CONDITION_RULE_TYPES = [
   // Fidelización multi-hito: cuánto falta para el próximo premio y un rango de sellos.
   "stamps_remaining_lte",
   "stamps_between",
+  // Flujos de premio: el hito (en sellos) que activó la ejecución es N (`context.loyalty.milestoneStamps`).
+  "loyalty_milestone_is",
   "birthday_today",
   "var_equals",
 ] as const;
@@ -355,6 +357,8 @@ export const conditionRuleSchema = z.discriminatedUnion("type", [
     min: z.number().int().min(0).max(CONDITION_MAX_STAMPS),
     max: z.number().int().min(1).max(CONDITION_MAX_STAMPS),
   }),
+  /** Flujo de premio: el hito que activó esta ejecución es el de `stamps` sellos (sin premio en el disparo, no se cumple). */
+  z.object({ type: z.literal("loyalty_milestone_is"), stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS) }),
   /** Hoy es su cumpleaños (en la zona horaria del negocio). */
   z.object({ type: z.literal("birthday_today") }),
   /** Paso 3: una variable de la ejecución (`context.vars`, escrita por «Establecer variable» o «Código JS») vale `value`. */
@@ -426,6 +430,21 @@ export const codeJsConfigSchema = z.object({
 });
 export type CodeJsConfig = z.infer<typeof codeJsConfigSchema>;
 
+/* ─── Atención humana (Paso 5) ─── */
+
+export const HUMAN_HANDOFF_NOTE_MAX = 500;
+
+/**
+ * `human_handoff`: pasa la conversación a una persona del equipo. Apaga la IA de esa conversación y avisa en la bandeja.
+ * `note` (opcional) es el contexto para quien atiende y admite `{{name}}`, `{{vars.x}}` y las variables de fidelidad; va en el
+ * aviso, nunca se manda al cliente.
+ */
+export const humanHandoffConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  note: z.string().trim().max(HUMAN_HANDOFF_NOTE_MAX).optional(),
+});
+export type HumanHandoffConfig = z.infer<typeof humanHandoffConfigSchema>;
+
 /**
  * Qué hace el Modo Simple según la rama: `continue` sigue con el paso siguiente, `skip_next` lo omite y
  * sigue con el que viene después, `stop` termina el flujo. El motor no las lee: se compilan a aristas
@@ -459,6 +478,8 @@ export type ConditionFacts = {
   stamps?: number;
   /** Sellos que le faltan para su próximo premio (`null` = ya los alcanzó todos o no hay programa). */
   stampsToNextMilestone?: number | null;
+  /** Los sellos del hito que activó la ejecución (`context.loyalty.milestoneStamps`); `null`/ausente si no nació de un premio. */
+  loyaltyMilestoneStamps?: number | null;
   birthdayToday?: boolean;
   /** Paso 3: las variables de la ejecución (`context.vars`). */
   vars?: RunVars;
@@ -573,6 +594,8 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): C
       const n = facts.stamps ?? 0;
       return { result: n >= rule.min && n <= rule.max };
     }
+    case "loyalty_milestone_is":
+      return { result: facts.loyaltyMilestoneStamps === rule.stamps };
     case "birthday_today":
       return { result: !!facts.birthdayToday };
     case "var_equals": {
@@ -669,6 +692,9 @@ export function renderVars(
       // Fidelidad: el premio y el hito que activó el flujo. Fuera de un flujo de premio quedan vacías (nunca «undefined»).
       if (key === "premio") return vars.loyalty?.title?.trim() || "";
       if (key === "descuento") return vars.loyalty?.discountPercentage != null ? String(vars.loyalty.discountPercentage) : "";
+      // Disparador de cada sello: cuánto falta y cuál es el próximo premio (vacías en un flujo de premio o de otro tipo).
+      if (key === "faltan") return vars.loyalty?.stampsToNext != null ? String(vars.loyalty.stampsToNext) : "";
+      if (key === "proximo_premio") return vars.loyalty?.nextTitle?.trim() || "";
       if (key === "sellos") {
         const n = vars.loyalty?.currentStamps ?? vars.loyalty?.milestoneStamps;
         return n == null ? "" : String(n);
@@ -694,8 +720,14 @@ export type LoyaltyRunContext = {
   title: string | null;
   /** Porcentaje, si el premio es un descuento. */
   discountPercentage: number | null;
-  /** Sellos de la tarjeta cuando se cruzó el hito. */
+  /** Sellos de la tarjeta cuando se cruzó el hito (o tras el sello ganado). */
   currentStamps: number | null;
+  /** `loyalty_stamp_earned`: sellos que sumó este movimiento. */
+  stampsAdded?: number | null;
+  /** `loyalty_stamp_earned`: sellos que le faltan para su próximo premio (`null` = ya los alcanzó todos). */
+  stampsToNext?: number | null;
+  /** `loyalty_stamp_earned`: el título de su próximo premio. */
+  nextTitle?: string | null;
 };
 
 /** `context.loyalty` de una ejecución, o `null` si no nació de un premio de fidelidad. Ignora lo que no tenga la forma esperada. */
@@ -709,6 +741,9 @@ export function readLoyaltyContext(ctx: Record<string, unknown> | null | undefin
     title: typeof o.title === "string" ? o.title : null,
     discountPercentage: int(o.discountPercentage),
     currentStamps: int(o.currentStamps),
+    stampsAdded: int(o.stampsAdded),
+    stampsToNext: int(o.stampsToNext),
+    nextTitle: o.nextMilestone && typeof o.nextMilestone === "object" && typeof (o.nextMilestone as { title?: unknown }).title === "string" ? (o.nextMilestone as { title: string }).title : null,
   };
   return out.milestoneStamps === null && out.title === null && out.currentStamps === null ? null : out;
 }
@@ -782,8 +817,10 @@ export const flowTriggerConfigSchema = z.object({
   toStageId: z.string().trim().min(1).nullish(),
   /** `tag_added`: solo esa etiqueta (sin ella, cualquiera). */
   tagId: z.string().trim().min(1).nullish(),
-  /** `loyalty_reward_unlocked`: solo el hito de esos sellos (sin ello, cualquier premio). */
+  /** `loyalty_reward_unlocked`: solo el hito de esos sellos (sin ello, cualquier premio). `loyalty_stamp_earned`: solo al llegar a EXACTAMENTE esos sellos. */
   stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish(),
+  /** `loyalty_stamp_earned`: solo al llegar a esos sellos o más. */
+  minStamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish(),
   hour: z.number().int().min(0).max(23).optional(),
   daysOffset: daysOffsetSchema.optional(),
 });
@@ -808,6 +845,16 @@ export function tagFlowMatches(config: FlowTriggerConfig, tagId: string): boolea
 /** ¿Este flujo `loyalty_reward_unlocked` reacciona al hito de `stamps` sellos? Sin hito configurado, a cualquiera. */
 export function loyaltyFlowMatches(config: FlowTriggerConfig, stamps: number): boolean {
   return !config.stamps || config.stamps === stamps;
+}
+
+/**
+ * ¿Este flujo `loyalty_stamp_earned` reacciona a un sello tras el cual la tarjeta quedó en `currentStamps`? Sin ajustes, a
+ * todos; con `stamps`, solo al exacto; con `minStamps`, a ese y los siguientes; con ambos, deben cumplirse los dos.
+ */
+export function stampFlowMatches(config: FlowTriggerConfig, currentStamps: number): boolean {
+  if (config.stamps && config.stamps !== currentStamps) return false;
+  if (config.minStamps && currentStamps < config.minStamps) return false;
+  return true;
 }
 
 export function isLeapYear(year: number): boolean {
@@ -860,6 +907,8 @@ export const stageDedupeKey = (leadId: string, stageId: string) => `stage:${lead
 export const tagAddedDedupeKey = (tagId: string, assignedAt: Date) => `tag_added:${tagId}:${assignedAt.getTime()}`;
 /** Un premio de fidelidad desbloqueado: una vez por movimiento de sellos y por hito que cruzó. */
 export const loyaltyRewardDedupeKey = (transactionId: string, stamps: number) => `loyalty_reward:${transactionId}:${stamps}`;
+/** Un sello ganado: una vez por movimiento de sellos (`loyalty_transaction.id`; un movimiento suma un solo sello). */
+export const loyaltyStampDedupeKey = (transactionId: string) => `loyalty_stamp:${transactionId}`;
 /** Un disparo manual: el `batchId` lo genera la pantalla al abrir el diálogo, así el doble clic no lo repite. */
 export const manualDedupeKey = (batchId: string) => `manual:${batchId}`;
 

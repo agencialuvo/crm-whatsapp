@@ -18,7 +18,7 @@ import {
   type LoyaltySettingsInput,
 } from "@/lib/loyalty";
 import { normalizeMx } from "@/lib/meta/client";
-import { onLoyaltyRewardUnlocked } from "@/server/automation/triggers";
+import { onLoyaltyRewardUnlocked, onLoyaltyStampEarned } from "@/server/automation/triggers";
 import { SalonError } from "@/server/business/http";
 
 /**
@@ -74,6 +74,8 @@ export interface RegisterLoyaltyTransactionResult {
   stampsRequired: number;
   /** Sellos que faltan para el siguiente hito (0 si ya alcanzó todos). */
   stampsRemaining: number;
+  /** El siguiente hito tras esta transacción (null si ya alcanzó todos): lo usa el disparador de cada sello. */
+  nextMilestone?: LoyaltyMilestone | null;
 }
 
 /* ------------------------------- configuración ------------------------------ */
@@ -518,6 +520,7 @@ export async function registerLoyaltyTransaction(
       redeemed: redeemedMilestone,
       stampsRequired: finalStamps,
       stampsRemaining: progress.stampsRemaining,
+      nextMilestone: progress.next,
     };
   });
 }
@@ -528,6 +531,24 @@ export async function registerLoyaltyTransaction(
  * ella—: ningún mensaje puede salir por un sello que luego se deshace. Nunca lanza.
  */
 export async function announceLoyaltyUnlock(r: RegisterLoyaltyTransactionResult): Promise<void> {
+  // Cada sello ganado (`earned`) avisa a los flujos `loyalty_stamp_earned`, cruce o no un premio. Solo el sello de una venta:
+  // un ajuste manual o un canje no «ganan» un sello, y la constancia de cumpleaños no suma. Va antes que el premio para que
+  // «¡Un sello más!» salga antes que «¡Ganaste tu premio!» cuando el mismo sello cruza un hito.
+  if (r.transaction.type === "earned" && r.transaction.stampsChange > 0) {
+    try {
+      await onLoyaltyStampEarned({
+        organizationId: r.card.organizationId,
+        contactId: r.card.contactId,
+        transactionId: r.transaction.id,
+        currentStamps: r.card.currentStamps,
+        stampsAdded: r.transaction.stampsChange,
+        nextMilestone: r.nextMilestone ?? null,
+        stampsToNext: r.nextMilestone ? r.nextMilestone.stamps - r.card.currentStamps : null,
+      });
+    } catch (err) {
+      console.error("[loyalty] no se pudo avisar a las automatizaciones del sello", err);
+    }
+  }
   if (r.unlocked.length === 0) return;
   try {
     await onLoyaltyRewardUnlocked({

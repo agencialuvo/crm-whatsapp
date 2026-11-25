@@ -3,6 +3,7 @@ import {
   CONDITION_MAX_STAMPS,
   addTagConfigSchema,
   codeJsConfigSchema,
+  humanHandoffConfigSchema,
   conditionConfigSchema,
   daysOffsetSchema,
   delayConfigSchema,
@@ -35,6 +36,8 @@ export const FLOW_TRIGGER_TYPES = [
   "ad_referral",
   "tag_added",
   "loyalty_reward_unlocked",
+  // Cada sello que se suma a la tarjeta (cruce o no un premio): `stamps` = exactamente N; `minStamps` = N o más.
+  "loyalty_stamp_earned",
 ] as const;
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number];
 
@@ -52,6 +55,8 @@ export const STEP_TYPES = [
   "set_var",
   "switch",
   "code_js",
+  // Paso 5: escala la conversación a una persona del equipo (apaga la IA y avisa en la bandeja).
+  "human_handoff",
 ] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
@@ -75,6 +80,17 @@ export const TRIGGER_CONFIG_SCHEMAS = {
   tag_added: z.object({ tagId: z.string().trim().min(1).max(64).nullish() }).strict(),
   // Sin `stamps`, cualquier premio; con él, solo el hito de esos sellos.
   loyalty_reward_unlocked: z.object({ stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish() }).strict(),
+  // Cada sello ganado. `stamps`: solo cuando la tarjeta llega a EXACTAMENTE esos sellos; `minStamps`: cuando llega a esos o más.
+  loyalty_stamp_earned: z
+    .object({
+      stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish(),
+      minStamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS).nullish(),
+    })
+    .strict()
+    .refine((v) => !(v.stamps && v.minStamps && v.stamps < v.minStamps), {
+      message: "Con una cantidad exacta menor que el mínimo el flujo nunca se activaría",
+      path: ["minStamps"],
+    }),
   booking_created: z.object({}).strict(),
   booking_confirmed: z.object({}).strict(),
   booking_no_show: z.object({}).strict(),
@@ -156,6 +172,7 @@ export const stepCreateSchema = z
       z.object({ stepType: z.literal("set_var"), config: setVarConfigSchema }),
       z.object({ stepType: z.literal("switch"), config: switchConfigSchema }),
       z.object({ stepType: z.literal("code_js"), config: codeJsConfigSchema }),
+      z.object({ stepType: z.literal("human_handoff"), config: humanHandoffConfigSchema }),
     ],
     {
       errorMap: (issue, ctx) =>
@@ -196,6 +213,7 @@ const STEP_CONFIG_SCHEMAS = {
   set_var: setVarConfigSchema,
   switch: switchConfigSchema,
   code_js: codeJsConfigSchema,
+  human_handoff: humanHandoffConfigSchema,
 } as const satisfies Record<StepType, z.ZodTypeAny>;
 
 /** Valida `config` de un paso contra su tipo. */

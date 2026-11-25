@@ -48,6 +48,7 @@ describe("la paleta", () => {
       "No asistió",
       "Cumpleaños",
       "Premio de fidelidad",
+      "Sello ganado",
       "Manual",
     ]);
     expect(labels("logic")).toEqual([
@@ -59,7 +60,7 @@ describe("la paleta", () => {
       "Establecer variable",
       "Código JavaScript",
     ]);
-    expect(labels("actions")).toEqual(["Enviar WhatsApp", "Enviar multimedia", "Asignar etiqueta", "Quitar etiqueta", "Cambiar etapa"]);
+    expect(labels("actions")).toEqual(["Enviar WhatsApp", "Enviar multimedia", "Asignar etiqueta", "Quitar etiqueta", "Cambiar etapa", "Pasar a una persona"]);
   });
 
   it("los disparadores de la paleta son EXACTAMENTE los que la pantalla deja crear", () => {

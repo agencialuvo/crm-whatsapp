@@ -228,6 +228,7 @@ export function ruleFromCase(k: CaseForm): Record<string, unknown> {
       return { type: k.type, days: toNumber(k.days) };
     case "stamps_gte":
     case "stamps_remaining_lte":
+    case "loyalty_milestone_is":
       return { type: k.type, stamps: toNumber(k.stamps) };
     case "stamps_between":
       return { type: k.type, min: toNumber(k.min), max: toNumber(k.max) };
@@ -360,6 +361,11 @@ export function SwitchFields({
             )}
             {k.type === "stamps_remaining_lte" && (
               <Field label="Le faltan como máximo (sellos)" required htmlFor={`case-${k.id}-stamps`} error={errors[`case.${i}.stamps`]}>
+                <Input id={`case-${k.id}-stamps`} inputMode="numeric" value={k.stamps} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { stamps: e.target.value.replace(/\D/g, "") })} />
+              </Field>
+            )}
+            {k.type === "loyalty_milestone_is" && (
+              <Field label="Sellos del premio del disparo" required htmlFor={`case-${k.id}-stamps`} error={errors[`case.${i}.stamps`]}>
                 <Input id={`case-${k.id}-stamps`} inputMode="numeric" value={k.stamps} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { stamps: e.target.value.replace(/\D/g, "") })} />
               </Field>
             )}

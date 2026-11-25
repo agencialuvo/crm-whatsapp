@@ -6,6 +6,7 @@ import * as queue from "@/server/automation/queue";
 import { applyTag, contactFacts, moveContactToStage } from "@/server/automation/actions";
 import { runBirthdayTrigger } from "@/server/automation/triggers";
 import { loadMediaFile } from "@/server/automation/media";
+import { handoffConversation } from "@/server/automation/handoff";
 import { isOptedOut } from "@/server/automation/opt-out";
 import { codeJsEnabled } from "@/server/automation/flag";
 import { runSandboxedCode } from "@/server/automation/sandbox";
@@ -36,6 +37,7 @@ export function defaultDeps(): Deps {
     // Paso 3: el código del cliente solo corre con la bandera de plataforma encendida, y siempre en el sandbox WASM.
     runCode: async (input) =>
       codeJsEnabled() ? runSandboxedCode(input) : { ok: false, code: "code_js_disabled", message: "El bloque de código no está activado en esta instancia" },
+    handoff: handoffConversation,
     enterReplyWait: (row, timeoutAt) => queue.enterReplyWait(row as queue.QueueRow, timeoutAt),
     resolveReplyWait: async (row, handle) =>
       (await queue.resolveReplyWait({ organizationId: row.organizationId, runId: row.runId!, handle })).resolved,

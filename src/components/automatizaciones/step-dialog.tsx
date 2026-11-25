@@ -160,6 +160,8 @@ export function StepDialog({
   // Paso 3: variables, código y Switch.
   const [ruleVarKey, setRuleVarKey] = useState(typeof rule?.key === "string" ? rule.key : "");
   const [ruleVarValue, setRuleVarValue] = useState(typeof rule?.value === "string" ? rule.value : "");
+  // Paso 5: la nota para quien atiende en «Pasar a una persona».
+  const [handoffNote, setHandoffNote] = useState(typeof c.note === "string" ? c.note : "");
   const [varKey, setVarKey] = useState(typeof c.key === "string" ? c.key : "");
   const [varValue, setVarValue] = useState(typeof c.value === "string" ? c.value : "");
   const [code, setCode] = useState(typeof c.code === "string" ? c.code : DEFAULT_CODE_JS);
@@ -298,6 +300,9 @@ export function StepDialog({
     if (stepType === "code_js") {
       return { ...(name.trim() && { name: name.trim() }), code };
     }
+    if (stepType === "human_handoff") {
+      return { ...(name.trim() && { name: name.trim() }), ...(handoffNote.trim() && { note: handoffNote.trim() }) };
+    }
     if (stepType === "switch") {
       return { ...(name.trim() && { name: name.trim() }), cases: casesToConfig(cases) };
     }
@@ -313,7 +318,7 @@ export function StepDialog({
               ? { type: ruleType, stageId: ruleStageId }
               : ruleType === "visited_within_days"
                 ? { type: ruleType, days: toNumber(ruleDays) }
-                : ruleType === "stamps_gte" || ruleType === "stamps_remaining_lte"
+                : ruleType === "stamps_gte" || ruleType === "stamps_remaining_lte" || ruleType === "loyalty_milestone_is"
                   ? { type: ruleType, stamps: toNumber(ruleStamps) }
                   : ruleType === "stamps_between"
                     ? { type: ruleType, min: toNumber(ruleMin), max: toNumber(ruleMax) }
@@ -706,6 +711,28 @@ export function StepDialog({
                 />
               </Field>
             )}
+            {ruleType === "loyalty_milestone_is" && (
+              <Field
+                label="Sellos del premio"
+                required
+                htmlFor="step-rule-milestone"
+                error={errors.stamps}
+                hint="Solo en un flujo «Premio de fidelidad»: se cumple si el premio que activó el flujo es el de esos sellos (por ejemplo 8). Útil con un flujo para «Cualquier premio» que reparte según el hito."
+              >
+                <Input
+                  id="step-rule-milestone"
+                  inputMode="numeric"
+                  value={ruleStamps}
+                  maxLength={4}
+                  aria-invalid={!!errors.stamps}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setRuleStamps(e.target.value.replace(/\D/g, ""));
+                    clear("stamps");
+                  }}
+                />
+              </Field>
+            )}
             {ruleType === "stamps_between" && (
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Desde (sellos)" required htmlFor="step-rule-min" error={errors.min} hint="Incluido.">
@@ -773,6 +800,33 @@ export function StepDialog({
               {inline
                 ? "Conecta la salida «Sí» y la salida «No» a lo que debe pasar en cada caso; una salida sin conectar termina el flujo."
                 : "Hoy los pasos se ejecutan en fila: la condición decide si el flujo sigue, se salta el siguiente paso o termina. Más adelante cada resultado podrá llevar a un camino distinto."}
+            </p>
+          </>
+        ) : stepType === "human_handoff" ? (
+          <>
+            <Field
+              label="Nota para quien atienda (opcional)"
+              htmlFor="step-handoff-note"
+              error={errors.note}
+              hint="Sale en el aviso de la bandeja, no se le manda al cliente. Puedes usar {{name}}, {{vars.clave}} y, en un flujo de fidelidad, {{premio}}, {{descuento}} y {{sellos}}."
+            >
+              <Textarea
+                id="step-handoff-note"
+                rows={3}
+                maxLength={500}
+                value={handoffNote}
+                placeholder="Ej: Ganó {{premio}}; confirmar cuándo lo quiere canjear."
+                onChange={(e) => {
+                  setHandoffNote(e.target.value);
+                  clear("note");
+                }}
+                disabled={busy}
+              />
+            </Field>
+            <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+              Apaga la IA en la conversación de este contacto y avisa al equipo en «Atención humana». No envía ningún mensaje y no
+              depende de la ventana de 24 h. Si la conversación ya estaba pasada a una persona, no repite el aviso; si el contacto no
+              tiene conversación, el flujo sigue.
             </p>
           </>
         ) : stepType === "set_var" ? (

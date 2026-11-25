@@ -47,6 +47,7 @@ describe("disparadores", () => {
       // Paso 2: ya tienen quién los dispare.
       "tag_added",
       "loyalty_reward_unlocked",
+      "loyalty_stamp_earned",
     ]);
   });
   it("etiquetas en español, y un tipo desconocido se muestra tal cual", () => {

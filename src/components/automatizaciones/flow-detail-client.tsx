@@ -10,6 +10,7 @@ import {
   CalendarClock,
   Clock,
   Braces,
+  Headset,
   GitBranch,
   Flag,
   ImageIcon,
@@ -68,6 +69,7 @@ const STEP_ICON: Record<string, typeof Clock> = {
   switch: GitBranch,
   set_var: Variable,
   code_js: Braces,
+  human_handoff: Headset,
 };
 
 /**

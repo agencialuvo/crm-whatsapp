@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { AdTriggerPicker } from "@/components/automatizaciones/ad-trigger-picker";
 import { Field } from "@/components/negocio/fields";
-import { BIRTHDAY_DEFAULT_HOUR, adScopeOf, parseAdReferralConfig } from "@/lib/automation";
+import { BIRTHDAY_DEFAULT_HOUR, adScopeOf, loyaltyHitoWarning, loyaltyMilestoneLabel, parseAdReferralConfig } from "@/lib/automation";
+import { useLoyaltyMilestones } from "@/components/automatizaciones/use-loyalty-milestones";
 import {
   BIRTHDAY_OFFSETS,
   CREATABLE_TRIGGERS,
@@ -51,6 +52,17 @@ export function TriggerInspector({
 
   const hint = (CREATABLE_TRIGGERS as readonly string[]).includes(triggerType) ? TRIGGER_HINTS[triggerType as keyof typeof TRIGGER_HINTS] : null;
   const hour = typeof cfg.hour === "number" ? cfg.hour : BIRTHDAY_DEFAULT_HOUR;
+
+  // «Premio de fidelidad»: los hitos reales del programa (null = no cargaron: queda el campo numérico).
+  const milestones = useLoyaltyMilestones(triggerType === "loyalty_reward_unlocked");
+  const premio = typeof cfg.stamps === "number" ? cfg.stamps : null;
+  const milestoneOptions = useMemo<SearchSelectOption[]>(() => {
+    if (!milestones) return [];
+    const opts = milestones.map((m) => ({ value: String(m.stamps), label: loyaltyMilestoneLabel(m) }));
+    if (premio && !opts.some((o) => o.value === String(premio))) opts.push({ value: String(premio), label: `Sello ${premio} · (ya no existe)` });
+    return opts;
+  }, [milestones, premio]);
+  const hitoWarning = milestones ? loyaltyHitoWarning(premio, milestones) : null;
 
   return (
     <div className="space-y-4">
@@ -119,19 +131,77 @@ export function TriggerInspector({
       )}
 
       {triggerType === "loyalty_reward_unlocked" && (
-        <Field label="Premio (sellos)" htmlFor="trg-stamps" hint="Los sellos del premio, por ejemplo 8. Vacío: cualquier premio.">
-          <Input
-            id="trg-stamps"
-            inputMode="numeric"
-            maxLength={4}
-            placeholder="Cualquier premio"
-            value={typeof cfg.stamps === "number" ? String(cfg.stamps) : ""}
-            onChange={(e) => {
-              const digits = e.target.value.replace(/\D/g, "");
-              onChangeConfig(digits ? { stamps: Number(digits) } : null);
-            }}
-          />
+        <Field
+          label="Premio (sellos)"
+          htmlFor="trg-stamps"
+          hint={milestones ? "Elige un premio de tu programa, o «Cualquier premio»." : "Los sellos del premio, por ejemplo 8. Vacío: cualquier premio."}
+        >
+          {milestones ? (
+            <SearchSelect
+              id="trg-stamps"
+              value={premio ? String(premio) : ""}
+              onChange={(v) => onChangeConfig(v ? { stamps: Number(v) } : null)}
+              options={milestoneOptions}
+              emptyLabel="Cualquier premio"
+              searchPlaceholder="Buscar premio…"
+              ariaLabel="Premio que activa el flujo"
+            />
+          ) : (
+            <Input
+              id="trg-stamps"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="Cualquier premio"
+              value={typeof cfg.stamps === "number" ? String(cfg.stamps) : ""}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "");
+                onChangeConfig(digits ? { stamps: Number(digits) } : null);
+              }}
+            />
+          )}
+          {hitoWarning && (
+            <p role="alert" className="mt-1.5 rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-xs text-warning-text">
+              {hitoWarning}
+            </p>
+          )}
         </Field>
+      )}
+
+      {triggerType === "loyalty_stamp_earned" && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Exactamente en el sello" htmlFor="trg-stamp-exact" hint="Solo al llegar a esos sellos. Vacío: cualquiera.">
+            <Input
+              id="trg-stamp-exact"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="Cualquiera"
+              value={typeof cfg.stamps === "number" ? String(cfg.stamps) : ""}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "");
+                const { stamps: _omit, ...rest } = cfg as Record<string, unknown>;
+                void _omit;
+                const next = { ...rest, ...(digits ? { stamps: Number(digits) } : {}) };
+                onChangeConfig(Object.keys(next).length ? next : null);
+              }}
+            />
+          </Field>
+          <Field label="Desde el sello" htmlFor="trg-stamp-min" hint="Con cada sello desde ese número. Vacío: desde el primero.">
+            <Input
+              id="trg-stamp-min"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="Desde el primero"
+              value={typeof cfg.minStamps === "number" ? String(cfg.minStamps) : ""}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "");
+                const { minStamps: _omit, ...rest } = cfg as Record<string, unknown>;
+                void _omit;
+                const next = { ...rest, ...(digits ? { minStamps: Number(digits) } : {}) };
+                onChangeConfig(Object.keys(next).length ? next : null);
+              }}
+            />
+          </Field>
+        </div>
       )}
 
       {triggerType === "ad_referral" && (

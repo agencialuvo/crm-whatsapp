@@ -1373,6 +1373,8 @@ export const conversation = pgTable(
         "ventana",
         "hostilidad",
         "manual_reply",
+        // Un flujo de automatización (`human_handoff`) pidió que una persona atienda la conversación.
+        "automatizacion",
       ],
     }),
     lastInboundAt: timestamp("last_inbound_at"),
@@ -2360,6 +2362,8 @@ export const automationFlow = pgTable(
         "ad_referral",
         // Un cliente desbloquea un premio de la tarjeta de fidelidad (`trigger_config.stamps` acota el hito).
         "loyalty_reward_unlocked",
+        // Cada sello que se suma a la tarjeta (`trigger_config.stamps` exacto / `minStamps` mínimo).
+        "loyalty_stamp_earned",
       ],
     }).notNull(),
     /**
@@ -2412,6 +2416,8 @@ export const automationStep = pgTable(
         "set_var",
         "switch",
         "code_js",
+        // Paso 5: pasa la conversación a una persona (apaga la IA y avisa en la bandeja).
+        "human_handoff",
       ],
     }).notNull(),
     /** 

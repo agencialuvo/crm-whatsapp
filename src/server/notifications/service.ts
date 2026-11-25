@@ -67,6 +67,7 @@ export async function notify(
 
 /** Por qué el agente pasó la conversación a una persona, dicho para el equipo. */
 const HANDOFF_REASON: Record<string, string> = {
+  automatizacion: "Una automatización pidió que una persona atienda esta conversación",
   cliente: "El cliente pidió hablar con una persona",
   modelo: "El agente pidió que una persona atienda esta conversación",
   error: "El agente no pudo continuar la conversación",
@@ -82,7 +83,9 @@ const HANDOFF_REASON: Record<string, string> = {
 export async function notifyHandoff(
   organizationId: string,
   conversationId: string,
-  reason: string
+  reason: string,
+  /** Contexto para quien atiende (p. ej. la nota de un paso `human_handoff`); se recorta. */
+  note?: string
 ): Promise<void> {
   try {
     const [conv] = await getDb()
@@ -107,7 +110,7 @@ export async function notifyHandoff(
 
     await notify(organizationId, {
       title: "Atención humana solicitada",
-      message: `${conv.name} · ${HANDOFF_REASON[reason] ?? "Una persona debe atender esta conversación"}`,
+      message: `${conv.name} · ${HANDOFF_REASON[reason] ?? "Una persona debe atender esta conversación"}${note?.trim() ? ` — ${note.trim().slice(0, 300)}` : ""}`,
       category: "whatsapp",
       link,
     });
