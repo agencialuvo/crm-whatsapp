@@ -297,6 +297,8 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   has_upcoming_booking: "El contacto tiene una cita próxima",
   visited_within_days: "Vino a una cita en los últimos días",
   stamps_gte: "Su tarjeta de fidelidad tiene al menos X sellos",
+  stamps_remaining_lte: "Le faltan pocos sellos para su próximo premio",
+  stamps_between: "Sus sellos están entre X y Y",
   birthday_today: "Hoy es su cumpleaños",
   var_equals: "Una variable del flujo vale…",
 };
@@ -367,6 +369,16 @@ export function describeRule(rule: ConditionRule | Record<string, unknown> | nul
       return typeof r.days === "number" ? `Vino a una cita en los últimos ${r.days} ${r.days === 1 ? "día" : "días"}` : "Vino a una cita (sin configurar los días)";
     case "stamps_gte":
       return typeof r.stamps === "number" ? `Su tarjeta tiene al menos ${r.stamps} ${r.stamps === 1 ? "sello" : "sellos"}` : "Sellos de la tarjeta (sin configurar)";
+    case "stamps_remaining_lte":
+      return typeof r.stamps === "number"
+        ? `Le ${r.stamps === 1 ? "falta" : "faltan"} como máximo ${r.stamps} ${r.stamps === 1 ? "sello" : "sellos"} para su próximo premio`
+        : "Sellos que faltan para su próximo premio (sin configurar)";
+    case "stamps_between": {
+      const b = r as { min?: number; max?: number };
+      return typeof b.min === "number" && typeof b.max === "number"
+        ? `Su tarjeta tiene entre ${b.min} y ${b.max} sellos`
+        : "Rango de sellos de la tarjeta (sin configurar)";
+    }
     case "birthday_today":
       return "Hoy es su cumpleaños";
     case "var_equals": {

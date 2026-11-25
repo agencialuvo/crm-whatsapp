@@ -228,6 +228,12 @@ export function milestoneProgress<T extends { stamps: number }>(
   };
 }
 
+/** Sellos que le faltan a una tarjeta para su próximo premio; `null` si ya alcanzó todos (o el programa no tiene hitos). */
+export function stampsToNextMilestone(milestones: readonly { stamps: number }[], stamps: number): number | null {
+  const next = milestoneProgress(milestones, stamps).next;
+  return next ? next.stamps - stamps : null;
+}
+
 /** Lo que Caja informa tras sellar una venta. */
 export type SaleLoyaltyDto = {
   /** `earned` = +1 sello; `birthday_excluded` = descuento de cumpleaños, no suma; `redeemed` = canje de un premio. */

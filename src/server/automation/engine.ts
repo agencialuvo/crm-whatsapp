@@ -18,6 +18,7 @@ import {
   mergeVars,
   readVars,
   removeTagConfigSchema,
+  readLoyaltyContext,
   renderVars,
   sendMediaConfigSchema,
   sendWhatsappConfigSchema,
@@ -515,6 +516,7 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         fecha: bookingAt && tz ? dayLabelInTz(bookingAt, tz, now) : null,
         hora: bookingAt && tz ? timeInTz(bookingAt, tz) : null,
         vars: current,
+        loyalty: readLoyaltyContext(ctx),
       });
       const merged = mergeVars(current, { [cfg.data.key]: value });
       if (!merged.ok) return await fail(merged.code, { detail: merged.message, key: cfg.data.key });
@@ -692,6 +694,8 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       servicio,
       // Paso 3: `{{vars.clave}}`, lo que dejaron `set_var` y `code_js` antes de este paso.
       vars: readVars(ctx),
+      // Premio de fidelidad: `{{premio}}`, `{{descuento}}` y `{{sellos}}` (vacías si la ejecución no nació de un premio).
+      loyalty: readLoyaltyContext(ctx),
       name: target.contactName,
       fecha: bookingIso && tz ? dayLabelInTz(bookingIso, tz, now) : null,
       hora: bookingIso && tz ? timeInTz(bookingIso, tz) : null,

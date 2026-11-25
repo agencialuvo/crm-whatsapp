@@ -7,7 +7,8 @@ import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-se
 import { apiFetch, describeError } from "@/components/negocio/api";
 import { Field } from "@/components/negocio/fields";
 import { Modal, ModalFooter } from "@/components/negocio/modal";
-import { BIRTHDAY_DEFAULT_HOUR, adScopeOf, parseAdReferralConfig, type AdReferralConfig } from "@/lib/automation";
+import { BIRTHDAY_DEFAULT_HOUR, adScopeOf, loyaltyHitoWarning, loyaltyMilestoneLabel, parseAdReferralConfig, type AdReferralConfig } from "@/lib/automation";
+import { useLoyaltyMilestones } from "@/components/automatizaciones/use-loyalty-milestones";
 import { AdTriggerPicker } from "@/components/automatizaciones/ad-trigger-picker";
 import {
   flowCreateSchema,
@@ -97,6 +98,17 @@ export function FlowDialog({
   );
 
   const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
+
+  // «Premio de fidelidad»: los hitos reales del programa (null = no se pudieron cargar: queda el campo numérico de siempre).
+  const milestones = useLoyaltyMilestones(triggerType === "loyalty_reward_unlocked");
+  const milestoneOptions = useMemo<SearchSelectOption[]>(() => {
+    if (!milestones) return [];
+    const opts = milestones.map((m) => ({ value: String(m.stamps), label: loyaltyMilestoneLabel(m) }));
+    // El hito ya guardado que el programa dejó de tener se conserva visible (con su aviso), no desaparece del selector.
+    if (stamps && !opts.some((o) => o.value === stamps)) opts.push({ value: stamps, label: `Sello ${stamps} · (ya no existe)` });
+    return opts;
+  }, [milestones, stamps]);
+  const hitoWarning = milestones ? loyaltyHitoWarning(stamps.trim() ? Number(stamps) : null, milestones) : null;
 
   /** Los ajustes del disparador tal como los espera la API (`null` si no hay ninguno). */
   function buildConfig(): Record<string, unknown> | null {
@@ -324,21 +336,46 @@ export function FlowDialog({
             label="Premio (sellos)"
             htmlFor="flow-stamps"
             error={errors.triggerConfig}
-            hint="Los sellos del premio que lo activa, por ejemplo 8. Vacío: se activa con cualquier premio."
+            hint={
+              milestones
+                ? "Elige uno de los premios de tu programa de fidelidad, o «Cualquier premio» para que se active con todos."
+                : "Los sellos del premio que lo activa, por ejemplo 8. Vacío: se activa con cualquier premio."
+            }
           >
-            <Input
-              id="flow-stamps"
-              inputMode="numeric"
-              value={stamps}
-              maxLength={4}
-              placeholder="Cualquier premio"
-              aria-invalid={!!errors.triggerConfig}
-              disabled={busy}
-              onChange={(e) => {
-                setStamps(e.target.value.replace(/\D/g, ""));
-                clear("triggerConfig");
-              }}
-            />
+            {milestones ? (
+              <SearchSelect
+                id="flow-stamps"
+                value={stamps}
+                onChange={(v) => {
+                  setStamps(v);
+                  clear("triggerConfig");
+                }}
+                options={milestoneOptions}
+                emptyLabel="Cualquier premio"
+                searchPlaceholder="Buscar premio…"
+                ariaLabel="Premio que activa el flujo"
+                disabled={busy}
+              />
+            ) : (
+              <Input
+                id="flow-stamps"
+                inputMode="numeric"
+                value={stamps}
+                maxLength={4}
+                placeholder="Cualquier premio"
+                aria-invalid={!!errors.triggerConfig}
+                disabled={busy}
+                onChange={(e) => {
+                  setStamps(e.target.value.replace(/\D/g, ""));
+                  clear("triggerConfig");
+                }}
+              />
+            )}
+            {hitoWarning && (
+              <p role="alert" className="mt-1.5 rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-xs text-warning-text">
+                {hitoWarning}
+              </p>
+            )}
           </Field>
         )}
 

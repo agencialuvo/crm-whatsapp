@@ -233,6 +233,9 @@ function setup(over: {
   media?: MediaFile;
   alreadySucceeded?: boolean;
   row?: Partial<Row>;
+  /** `automation_run.context` de la ejecución (con `row.runId`). */
+  context?: Record<string, unknown>;
+  facts?: Partial<import("@/lib/automation").ConditionFacts>;
 } = {}) {
   const logs: LogInput[] = [];
   const step: Step = {
@@ -257,7 +260,8 @@ function setup(over: {
     loadBooking: vi.fn(async () => null),
     flowTriggerType: vi.fn(async () => "manual"),
     timezone: vi.fn(async () => "UTC"),
-    contactFacts: vi.fn(async () => ({ tagIds: [] as string[], stageId: null as string | null })),
+    contactFacts: vi.fn(async () => ({ tagIds: [] as string[], stageId: null as string | null, ...over.facts })),
+    runContext: vi.fn(async () => over.context ?? {}),
     applyTag: vi.fn(async () => "added" as const),
     moveContactToStage: vi.fn(async (_o: string, _c: string, stageId: string) => ({
       status: "moved" as const,
@@ -383,6 +387,45 @@ describe("motor — límite de frecuencia (skipped_rate_limit)", () => {
     const t = setup();
     await t.run();
     expect(t.deps.recentAutomaticSends).toHaveBeenCalledWith("org_1", "ct_1", hoursAgo(24));
+  });
+});
+
+describe("motor — fidelización multi-hito (Paso 4)", () => {
+  const LOYALTY = { loyalty: { milestoneStamps: 8, title: "50% de descuento", rewardType: "percentage_discount", discountPercentage: 50, currentStamps: 8, transactionId: "ltr_1" } };
+  const premio = (content: string) => ({ stepType: "send_whatsapp", config: { content } });
+
+  it("{{premio}}, {{descuento}} y {{sellos}} salen del context.loyalty de la ejecución", async () => {
+    const t = setup({ step: premio("¡{{premio}}! {{descuento}}% con {{sellos}} sellos, {{name}}"), row: { runId: "run_1" }, context: LOYALTY });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.sendText).toHaveBeenCalledWith({ organizationId: "org_1", conversationId: "cv_1", text: "¡50% de descuento! 50% con 8 sellos, Ana" });
+  });
+
+  it("sin context.loyalty (otro disparador) las variables salen vacías y el mensaje igual se envía", async () => {
+    const t = setup({ step: premio("Premio:[{{premio}}][{{descuento}}][{{sellos}}]"), row: { runId: "run_1" }, context: { source: "manual" } });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "Premio:[][][]" }));
+  });
+
+  it("también en la leyenda de un archivo y en el valor de «Establecer variable»", async () => {
+    const m = setup({ step: { stepType: "send_media", config: { mediaId: "med_1", caption: "Tu {{premio}}" } }, row: { runId: "run_1" }, context: LOYALTY });
+    expect(await m.run()).toBe("completed");
+    expect(m.deps.sendMedia).toHaveBeenCalledWith(expect.objectContaining({ caption: "Tu 50% de descuento" }));
+
+    const v = setup({ step: { stepType: "set_var", config: { key: "oferta", value: "{{premio}} ({{sellos}})" } }, row: { runId: "run_1" }, context: LOYALTY });
+    expect(await v.run()).toBe("completed");
+    expect(v.deps.completeAndAdvance).toHaveBeenCalledWith(v.row, NOW, { vars: { oferta: "50% de descuento (8)" } });
+  });
+
+  it.each([
+    [{ type: "stamps_remaining_lte", stamps: 2 }, { stamps: 6, stampsToNextMilestone: 2 }, "true"],
+    [{ type: "stamps_remaining_lte", stamps: 2 }, { stamps: 5, stampsToNextMilestone: 3 }, "false"],
+    [{ type: "stamps_remaining_lte", stamps: 2 }, { stamps: 8, stampsToNextMilestone: null }, "false"],
+    [{ type: "stamps_between", min: 4, max: 7 }, { stamps: 5 }, "true"],
+    [{ type: "stamps_between", min: 4, max: 7 }, { stamps: 9 }, "false"],
+  ])("la condición %j con %j sale por «%s»", async (rule, facts, handle) => {
+    const t = setup({ step: { stepType: "condition", config: { rule } }, facts });
+    expect(await t.run()).toBe("completed");
+    expect(t.deps.completeAndAdvance).toHaveBeenCalledWith(t.row, NOW, { handle });
   });
 });
 

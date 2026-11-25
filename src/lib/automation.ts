@@ -236,6 +236,9 @@ export const CONDITION_RULE_TYPES = [
   "has_upcoming_booking",
   "visited_within_days",
   "stamps_gte",
+  // Fidelización multi-hito: cuánto falta para el próximo premio y un rango de sellos.
+  "stamps_remaining_lte",
+  "stamps_between",
   "birthday_today",
   "var_equals",
 ] as const;
@@ -344,11 +347,23 @@ export const conditionRuleSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("visited_within_days"), days: z.number().int().min(1).max(CONDITION_MAX_DAYS) }),
   /** Su tarjeta de fidelidad tiene al menos `stamps` sellos hoy. */
   z.object({ type: z.literal("stamps_gte"), stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS) }),
+  /** Le faltan como máximo `stamps` sellos para su próximo premio (sin próximo premio, no se cumple). */
+  z.object({ type: z.literal("stamps_remaining_lte"), stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS) }),
+  /** Sus sellos de hoy están entre `min` y `max` (ambos incluidos). */
+  z.object({
+    type: z.literal("stamps_between"),
+    min: z.number().int().min(0).max(CONDITION_MAX_STAMPS),
+    max: z.number().int().min(1).max(CONDITION_MAX_STAMPS),
+  }),
   /** Hoy es su cumpleaños (en la zona horaria del negocio). */
   z.object({ type: z.literal("birthday_today") }),
   /** Paso 3: una variable de la ejecución (`context.vars`, escrita por «Establecer variable» o «Código JS») vale `value`. */
   z.object({ type: z.literal("var_equals"), key: varKeySchema(), value: z.string().trim().max(500) }),
-]);
+]).superRefine((r, ctx) => {
+  if (r.type === "stamps_between" && r.min > r.max) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["max"], message: "El máximo debe ser igual o mayor que el mínimo" });
+  }
+});
 export type ConditionRule = z.infer<typeof conditionRuleSchema>;
 
 /* ─── Switch (Paso 3): varias salidas, un solo camino ─── */
@@ -442,6 +457,8 @@ export type ConditionFacts = {
   hasUpcomingBooking?: boolean;
   daysSinceLastVisit?: number | null;
   stamps?: number;
+  /** Sellos que le faltan para su próximo premio (`null` = ya los alcanzó todos o no hay programa). */
+  stampsToNextMilestone?: number | null;
   birthdayToday?: boolean;
   /** Paso 3: las variables de la ejecución (`context.vars`). */
   vars?: RunVars;
@@ -550,6 +567,12 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): C
       return { result: typeof facts.daysSinceLastVisit === "number" && facts.daysSinceLastVisit <= rule.days };
     case "stamps_gte":
       return { result: (facts.stamps ?? 0) >= rule.stamps };
+    case "stamps_remaining_lte":
+      return { result: typeof facts.stampsToNextMilestone === "number" && facts.stampsToNextMilestone <= rule.stamps };
+    case "stamps_between": {
+      const n = facts.stamps ?? 0;
+      return { result: n >= rule.min && n <= rule.max };
+    }
     case "birthday_today":
       return { result: !!facts.birthdayToday };
     case "var_equals": {
@@ -626,7 +649,15 @@ export function stepLabel(stepType: string, config: unknown): string {
  */
 export function renderVars(
   text: string,
-  vars: { name: string | null; fecha?: string | null; hora?: string | null; servicio?: string | null; vars?: RunVars | null }
+  vars: {
+    name: string | null;
+    fecha?: string | null;
+    hora?: string | null;
+    servicio?: string | null;
+    vars?: RunVars | null;
+    /** `context.loyalty` de un flujo `loyalty_reward_unlocked` (ver `readLoyaltyContext`); sin él, esas variables salen vacías. */
+    loyalty?: LoyaltyRunContext | null;
+  }
 ): string {
   return text
     .replace(/\{\{\s*([A-Za-z][A-Za-z0-9_.-]*)\s*\}\}/g, (match, raw: string) => {
@@ -635,6 +666,13 @@ export function renderVars(
       if (key === "fecha") return vars.fecha?.trim() || "";
       if (key === "hora") return vars.hora?.trim() || "";
       if (key === "servicio") return vars.servicio?.trim() || "";
+      // Fidelidad: el premio y el hito que activó el flujo. Fuera de un flujo de premio quedan vacías (nunca «undefined»).
+      if (key === "premio") return vars.loyalty?.title?.trim() || "";
+      if (key === "descuento") return vars.loyalty?.discountPercentage != null ? String(vars.loyalty.discountPercentage) : "";
+      if (key === "sellos") {
+        const n = vars.loyalty?.currentStamps ?? vars.loyalty?.milestoneStamps;
+        return n == null ? "" : String(n);
+      }
       if (key.startsWith("vars.")) {
         const name = key.slice(5);
         const v = VAR_KEY_PATTERN.test(name) ? vars.vars?.[name] : undefined;
@@ -644,6 +682,53 @@ export function renderVars(
     })
     .replace(/[ 	]{2,}/g, " ")
     .trim();
+}
+
+/* ─── Fidelidad en el contexto de la ejecución ─── */
+
+/** Lo que el disparador `loyalty_reward_unlocked` deja en `automation_run.context.loyalty` (leído con tolerancia). */
+export type LoyaltyRunContext = {
+  /** Sellos del hito que se cruzó. */
+  milestoneStamps: number | null;
+  /** Título del premio. */
+  title: string | null;
+  /** Porcentaje, si el premio es un descuento. */
+  discountPercentage: number | null;
+  /** Sellos de la tarjeta cuando se cruzó el hito. */
+  currentStamps: number | null;
+};
+
+/** `context.loyalty` de una ejecución, o `null` si no nació de un premio de fidelidad. Ignora lo que no tenga la forma esperada. */
+export function readLoyaltyContext(ctx: Record<string, unknown> | null | undefined): LoyaltyRunContext | null {
+  const raw = ctx?.loyalty;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const int = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const out: LoyaltyRunContext = {
+    milestoneStamps: int(o.milestoneStamps),
+    title: typeof o.title === "string" ? o.title : null,
+    discountPercentage: int(o.discountPercentage),
+    currentStamps: int(o.currentStamps),
+  };
+  return out.milestoneStamps === null && out.title === null && out.currentStamps === null ? null : out;
+}
+
+/** Un hito del programa de fidelidad tal como lo necesita el selector del disparador. */
+export type LoyaltyMilestoneOption = { stamps: number; title: string; rewardType?: string; discountPercentage?: number };
+
+/** «Sello 8 · 50% de descuento»: cómo se nombra un hito en el selector. */
+export function loyaltyMilestoneLabel(m: LoyaltyMilestoneOption): string {
+  return `Sello ${m.stamps} · ${m.title}`;
+}
+
+/**
+ * Si el flujo está atado a un hito (`stamps`) que el programa ya no tiene, el flujo NUNCA se activa (el filtro es por número
+ * de sellos): lo avisa en una frase. `null` si todo cuadra (sin filtro, o el hito existe).
+ */
+export function loyaltyHitoWarning(stamps: number | null | undefined, milestones: readonly { stamps: number }[]): string | null {
+  if (!stamps || milestones.some((m) => m.stamps === stamps)) return null;
+  const hoy = [...new Set(milestones.map((m) => m.stamps))].sort((a, b) => a - b).join(", ");
+  return `El premio de ${stamps} sellos ya no existe en tu programa de fidelidad${hoy ? ` (hoy: ${hoy})` : ""}. Este flujo no se activará hasta que elijas uno de los premios actuales.`;
 }
 
 /* ─── Ventana de 24 h de Meta ─── */

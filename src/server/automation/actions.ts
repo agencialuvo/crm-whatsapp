@@ -1,5 +1,6 @@
 import { desc, eq, gt, lte } from "drizzle-orm";
 import { birthdaysDueOn, wholeDaysSince, type ConditionFacts } from "@/lib/automation";
+import { stampsToNextMilestone as stampsToNext } from "@/lib/loyalty";
 import { todayInTz } from "@/lib/time/slots";
 import { businessTimezone } from "@/server/analytics/period";
 import { getDb, schema } from "@/lib/db";
@@ -79,7 +80,7 @@ export async function contactFacts(
   organizationId: string,
   contactId: string,
   now: Date = new Date()
-): Promise<Pick<ConditionFacts, "tagIds" | "stageId" | "hasUpcomingBooking" | "daysSinceLastVisit" | "stamps" | "birthdayToday">> {
+): Promise<Pick<ConditionFacts, "tagIds" | "stageId" | "hasUpcomingBooking" | "daysSinceLastVisit" | "stamps" | "stampsToNextMilestone" | "birthdayToday">> {
   const db = getDb();
   const l = schema.lead;
   const b = schema.booking;
@@ -89,7 +90,7 @@ export async function contactFacts(
   const real = (...extra: Parameters<typeof scoped>[2][]) =>
     scoped(b.organizationId, organizationId, eq(b.contactId, contactId), eq(b.kind, "session"), eq(b.isTest, false), ...extra);
 
-  const [lead, tagIds, upcoming, lastVisit, stampsRow, person, timezone] = await Promise.all([
+  const [lead, tagIds, upcoming, lastVisit, stampsRow, person, timezone, program] = await Promise.all([
     db.select({ stageId: l.stageId }).from(l).where(scoped(l.organizationId, organizationId, eq(l.contactId, contactId))).limit(1),
     tagIdsOfContact(organizationId, contactId),
     db.select({ id: b.id }).from(b).where(real(eq(b.status, "agendada"), gt(b.scheduledAt, now))).limit(1),
@@ -110,6 +111,12 @@ export async function contactFacts(
       .where(scoped(c.organizationId, organizationId, eq(c.id, contactId)))
       .limit(1),
     businessTimezone(organizationId),
+    // Solo lectura (no crea la configuración por defecto): los hitos del programa, para «cuánto falta para el siguiente».
+    db
+      .select({ milestones: schema.loyaltySettings.milestones })
+      .from(schema.loyaltySettings)
+      .where(scoped(schema.loyaltySettings.organizationId, organizationId))
+      .limit(1),
   ]);
 
   const born = person[0];
@@ -120,6 +127,7 @@ export async function contactFacts(
     hasUpcomingBooking: upcoming.length > 0,
     daysSinceLastVisit: lastVisit[0] ? wholeDaysSince(lastVisit[0].at, now) : null,
     stamps: stampsRow[0]?.stamps ?? 0,
+    stampsToNextMilestone: stampsToNext(program[0]?.milestones ?? [], stampsRow[0]?.stamps ?? 0),
     birthdayToday: !!born?.day && !!born?.month && birthdaysDueOn(today).some((d) => d.day === born.day && d.month === born.month),
   };
 }

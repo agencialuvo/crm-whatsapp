@@ -154,6 +154,9 @@ export function StepDialog({
   // Reglas con número: «vino en los últimos N días» y «tiene al menos N sellos».
   const [ruleDays, setRuleDays] = useState(typeof rule?.days === "number" ? String(rule.days) : "30");
   const [ruleStamps, setRuleStamps] = useState(typeof rule?.stamps === "number" ? String(rule.stamps) : "5");
+  // `stamps_between`: el rango de sellos (ambos incluidos).
+  const [ruleMin, setRuleMin] = useState(typeof rule?.min === "number" ? String(rule.min) : "1");
+  const [ruleMax, setRuleMax] = useState(typeof rule?.max === "number" ? String(rule.max) : "4");
   // Paso 3: variables, código y Switch.
   const [ruleVarKey, setRuleVarKey] = useState(typeof rule?.key === "string" ? rule.key : "");
   const [ruleVarValue, setRuleVarValue] = useState(typeof rule?.value === "string" ? rule.value : "");
@@ -310,9 +313,11 @@ export function StepDialog({
               ? { type: ruleType, stageId: ruleStageId }
               : ruleType === "visited_within_days"
                 ? { type: ruleType, days: toNumber(ruleDays) }
-                : ruleType === "stamps_gte"
+                : ruleType === "stamps_gte" || ruleType === "stamps_remaining_lte"
                   ? { type: ruleType, stamps: toNumber(ruleStamps) }
-                  : { type: ruleType, tagId: ruleTagId },
+                  : ruleType === "stamps_between"
+                    ? { type: ruleType, min: toNumber(ruleMin), max: toNumber(ruleMax) }
+                    : { type: ruleType, tagId: ruleTagId },
         ifTrue,
         ifFalse,
       };
@@ -566,7 +571,7 @@ export function StepDialog({
                 value={ruleType}
                 onChange={(v) => {
                   setRuleType(v);
-                  clear("tagId", "stageId", "days", "stamps");
+                  clear("tagId", "stageId", "days", "stamps", "min", "max");
                 }}
                 options={ruleOptions}
                 searchPlaceholder="Buscar regla…"
@@ -678,6 +683,60 @@ export function StepDialog({
                   }}
                 />
               </Field>
+            )}
+            {ruleType === "stamps_remaining_lte" && (
+              <Field
+                label="Le faltan como máximo (sellos)"
+                required
+                htmlFor="step-rule-remaining"
+                error={errors.stamps}
+                hint="Se cumple cuando para su próximo premio le faltan N sellos o menos. Si ya alcanzó todos los premios, no se cumple."
+              >
+                <Input
+                  id="step-rule-remaining"
+                  inputMode="numeric"
+                  value={ruleStamps}
+                  maxLength={4}
+                  aria-invalid={!!errors.stamps}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setRuleStamps(e.target.value.replace(/\D/g, ""));
+                    clear("stamps");
+                  }}
+                />
+              </Field>
+            )}
+            {ruleType === "stamps_between" && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Desde (sellos)" required htmlFor="step-rule-min" error={errors.min} hint="Incluido.">
+                  <Input
+                    id="step-rule-min"
+                    inputMode="numeric"
+                    value={ruleMin}
+                    maxLength={4}
+                    aria-invalid={!!errors.min}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setRuleMin(e.target.value.replace(/\D/g, ""));
+                      clear("min", "max");
+                    }}
+                  />
+                </Field>
+                <Field label="Hasta (sellos)" required htmlFor="step-rule-max" error={errors.max} hint="Incluido.">
+                  <Input
+                    id="step-rule-max"
+                    inputMode="numeric"
+                    value={ruleMax}
+                    maxLength={4}
+                    aria-invalid={!!errors.max}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setRuleMax(e.target.value.replace(/\D/g, ""));
+                      clear("min", "max");
+                    }}
+                  />
+                </Field>
+              </div>
             )}
             {ruleType === "birthday_today" && (
               <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
@@ -867,7 +926,7 @@ export function StepDialog({
                 )}
               </div>
             )}
-            <Field label="Leyenda (opcional)" htmlFor="step-caption" error={errors.caption} hint="Puedes usar {{name}}, {{fecha}}, {{hora}} y {{servicio}}.">
+            <Field label="Leyenda (opcional)" htmlFor="step-caption" error={errors.caption} hint="Puedes usar {{name}}, {{fecha}}, {{hora}}, {{servicio}} y, en un flujo de premio de fidelidad, {{premio}}, {{descuento}} y {{sellos}}.">
               <Textarea
                 id="step-caption"
                 rows={3}
@@ -924,7 +983,7 @@ export function StepDialog({
               label="Mensaje"
               htmlFor="step-content"
               error={errors.content}
-              hint="Escribe {{name}} para poner el nombre del cliente."
+              hint="Escribe {{name}} para poner el nombre del cliente. En un flujo de premio de fidelidad también {{premio}}, {{descuento}} (el número, sin %) y {{sellos}}."
             >
               <Textarea
                 id="step-content"

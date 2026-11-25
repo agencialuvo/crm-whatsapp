@@ -89,7 +89,7 @@ export function SetVarFields({
           onChange={(e) => onKey(e.target.value.toLowerCase())}
         />
       </Field>
-      <Field label="Valor" htmlFor="step-var-value" error={errors.value} hint="Admite {{name}}, {{fecha}}, {{hora}}, {{servicio}} y {{vars.otra}}. Vacío = borrar el valor.">
+      <Field label="Valor" htmlFor="step-var-value" error={errors.value} hint="Admite {{name}}, {{fecha}}, {{hora}}, {{servicio}}, {{vars.otra}} y, en un flujo de premio de fidelidad, {{premio}}, {{descuento}} y {{sellos}}. Vacío = borrar el valor.">
         <Input
           id="step-var-value"
           value={varValue}
@@ -169,6 +169,9 @@ export type CaseForm = {
   stageId: string;
   days: string;
   stamps: string;
+  /** `stamps_between`: el rango (ambos incluidos). */
+  min: string;
+  max: string;
   varKey: string;
   varValue: string;
 };
@@ -181,6 +184,8 @@ const emptyCase = (existing: readonly string[], n: number): CaseForm => ({
   stageId: "",
   days: "30",
   stamps: "5",
+  min: "1",
+  max: "4",
   varKey: "",
   varValue: "",
 });
@@ -202,6 +207,8 @@ export function casesFromConfig(raw: unknown): CaseForm[] {
       stageId: typeof rule.stageId === "string" ? rule.stageId : "",
       days: typeof rule.days === "number" ? String(rule.days) : "30",
       stamps: typeof rule.stamps === "number" ? String(rule.stamps) : "5",
+      min: typeof rule.min === "number" ? String(rule.min) : "1",
+      max: typeof rule.max === "number" ? String(rule.max) : "4",
       varKey: typeof rule.key === "string" ? rule.key : "",
       varValue: typeof rule.value === "string" ? rule.value : "",
     };
@@ -220,7 +227,10 @@ export function ruleFromCase(k: CaseForm): Record<string, unknown> {
     case "visited_within_days":
       return { type: k.type, days: toNumber(k.days) };
     case "stamps_gte":
+    case "stamps_remaining_lte":
       return { type: k.type, stamps: toNumber(k.stamps) };
+    case "stamps_between":
+      return { type: k.type, min: toNumber(k.min), max: toNumber(k.max) };
     case "var_equals":
       return { type: k.type, key: k.varKey.trim(), value: k.varValue };
     default:
@@ -238,6 +248,7 @@ export function caseErrors(cases: readonly CaseForm[]): Record<string, string> {
     if ((k.type === "tag_has" || k.type === "tag_missing") && !k.tagId) found[`case.${i}`] = "Elige una etiqueta";
     else if (k.type === "stage_is" && !k.stageId) found[`case.${i}`] = "Elige una etapa";
     else if (k.type === "var_equals" && !k.varKey.trim()) found[`case.${i}`] = "Escribe el nombre de la variable";
+    else if (k.type === "stamps_between" && toNumber(k.min) > toNumber(k.max)) found[`case.${i}.max`] = "El máximo debe ser igual o mayor que el mínimo";
   });
   return found;
 }
@@ -346,6 +357,21 @@ export function SwitchFields({
               <Field label="Sellos mínimos" required htmlFor={`case-${k.id}-stamps`} error={errors[`case.${i}.stamps`]}>
                 <Input id={`case-${k.id}-stamps`} inputMode="numeric" value={k.stamps} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { stamps: e.target.value.replace(/\D/g, "") })} />
               </Field>
+            )}
+            {k.type === "stamps_remaining_lte" && (
+              <Field label="Le faltan como máximo (sellos)" required htmlFor={`case-${k.id}-stamps`} error={errors[`case.${i}.stamps`]}>
+                <Input id={`case-${k.id}-stamps`} inputMode="numeric" value={k.stamps} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { stamps: e.target.value.replace(/\D/g, "") })} />
+              </Field>
+            )}
+            {k.type === "stamps_between" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Desde (sellos)" required htmlFor={`case-${k.id}-min`} error={errors[`case.${i}.min`]}>
+                  <Input id={`case-${k.id}-min`} inputMode="numeric" value={k.min} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { min: e.target.value.replace(/\D/g, "") })} />
+                </Field>
+                <Field label="Hasta (sellos)" required htmlFor={`case-${k.id}-max`} error={errors[`case.${i}.max`]}>
+                  <Input id={`case-${k.id}-max`} inputMode="numeric" value={k.max} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { max: e.target.value.replace(/\D/g, "") })} />
+                </Field>
+              </div>
             )}
             {k.type === "var_equals" && (
               <VarEqualsFields

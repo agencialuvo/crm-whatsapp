@@ -28,6 +28,8 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { FlowDialog } from "@/components/automatizaciones/flow-dialog";
+import { useLoyaltyMilestones } from "@/components/automatizaciones/use-loyalty-milestones";
+import { loyaltyHitoWarning } from "@/lib/automation";
 import { HistoryPanel } from "@/components/automatizaciones/history-panel";
 import { ManualRunDialog } from "@/components/automatizaciones/manual-run-dialog";
 import { RefreshButton, StatsPanel, useAutomationStats } from "@/components/automatizaciones/stats-panel";
@@ -78,6 +80,12 @@ const STEP_ICON: Record<string, typeof Clock> = {
 export function FlowDetailClient({ flowId }: { flowId: string }) {
   const router = useRouter();
   const [flow, setFlow] = useState<FlowDto | null>(null);
+  // Un flujo de «Premio de fidelidad» atado a un hito que el programa ya no tiene nunca se activa: se avisa.
+  const loyaltyMilestones = useLoyaltyMilestones(flow?.triggerType === "loyalty_reward_unlocked");
+  const hitoWarning =
+    loyaltyMilestones && flow
+      ? loyaltyHitoWarning(typeof flow.triggerConfig?.stamps === "number" ? flow.triggerConfig.stamps : null, loyaltyMilestones)
+      : null;
   const [steps, setSteps] = useState<StepDto[]>([]);
   const [templates, setTemplates] = useState<TemplateOption[]>([]);
   const [stages, setStages] = useState<StageOption[]>([]);
@@ -323,6 +331,11 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
               <Badge variant="secondary">{triggerLabel(flow.triggerType)}</Badge>
               <span className="text-sm text-text-2">{flow.triggerSummary ?? describeTrigger(flow.triggerType, flow.triggerConfig, stages, null, tags)}</span>
             </div>
+            {hitoWarning && (
+              <p role="alert" className="mt-2 max-w-prose rounded-md border border-warning-soft bg-warning-tint px-3 py-2 text-xs text-warning-text">
+                {hitoWarning}
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {flow.triggerType === "manual" && (
