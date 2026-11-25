@@ -19,7 +19,7 @@ import type { PickerNode } from "@/lib/ad-picker";
 import { CODE_JS_MAX_PER_FLOW, adScopeOf, parseAdReferralConfig } from "@/lib/automation";
 import { autoLayout } from "@/lib/automation-graph";
 import { codeJsEnabled } from "@/server/automation/flag";
-import { describeAdTrigger } from "@/lib/automation-dto";
+import { describeAdTrigger, nextCopyName } from "@/lib/automation-dto";
 import { resolveOption } from "@/server/automation/ad-options";
 import { AutomationError } from "@/server/automation/http";
 import { syncEdges } from "@/server/automation/graph";
@@ -358,6 +358,89 @@ export async function updateFlow(organizationId: string, id: string, patch: Flow
   return withSummary(organizationId, serializeFlow(row));
 }
 
+/**
+ * Duplica un flujo: la copia nace PAUSADA (nunca empieza a escribir a nadie sin que se revise), con el mismo disparador, modo
+ * de edición, pasos, conexiones y configuraciones, y un nombre único («Nombre (copia)», «Nombre (copia 2)»…). Lo que NO se
+ * copia es lo que pasó: ejecuciones, cola e historial. Todo en una transacción: o queda la copia entera o nada.
+ *
+ * El flujo de origen se bloquea (`FOR UPDATE`) mientras se copia: dos copias simultáneas del mismo flujo se serializan y la
+ * segunda ve el nombre de la primera. Un flujo de otra organización responde 404 como si no existiera.
+ */
+export async function cloneFlow(organizationId: string, sourceId: string) {
+  const f = schema.automationFlow;
+  const s = schema.automationStep;
+  const e = schema.automationEdge;
+  const createdId = await getDb().transaction(async (tx) => {
+    const [source] = await tx
+      .select()
+      .from(f)
+      .where(scoped(f.organizationId, organizationId, eq(f.id, sourceId)))
+      .for("update");
+    if (!source) throw notFound();
+
+    const [steps, edges, names] = await Promise.all([
+      tx.select().from(s).where(scoped(s.organizationId, organizationId, eq(s.flowId, sourceId))),
+      tx.select().from(e).where(scoped(e.organizationId, organizationId, eq(e.flowId, sourceId))),
+      tx.select({ name: f.name }).from(f).where(scoped(f.organizationId, organizationId)),
+    ]);
+
+    const flowId = newId("automationFlow");
+    const idMap = new Map(steps.map((st) => [st.id, newId("automationStep")]));
+    await tx.insert(f).values({
+      id: flowId,
+      organizationId,
+      name: nextCopyName(source.name, names.map((n) => n.name)),
+      triggerType: source.triggerType,
+      triggerConfig: source.triggerConfig,
+      // Pausada, siempre: encenderla es una decisión de quien revisa la copia.
+      active: false,
+      editorMode: source.editorMode,
+      // La entrada apunta a un paso (clave foránea): se fija DESPUÉS de insertar los pasos, abajo.
+      entryStepId: null,
+      viewport: source.viewport,
+    });
+    if (steps.length > 0) {
+      await tx.insert(s).values(
+        steps.map((st) => ({
+          id: idMap.get(st.id)!,
+          organizationId,
+          flowId,
+          stepType: st.stepType,
+          config: st.config,
+          positionX: st.positionX,
+          positionY: st.positionY,
+        }))
+      );
+    }
+    const entry = source.entryStepId ? idMap.get(source.entryStepId) : undefined;
+    if (entry) await tx.update(f).set({ entryStepId: entry }).where(scoped(f.organizationId, organizationId, eq(f.id, flowId)));
+    if (source.editorMode === "canvas") {
+      // Las conexiones dibujadas, con los ids nuevos. Una arista cuyo extremo no se copió (no debería existir) se omite.
+      const rows = edges
+        .filter((x) => idMap.has(x.sourceStepId) && idMap.has(x.targetStepId))
+        .map((x) => ({
+          id: newId("automationEdge"),
+          organizationId,
+          flowId,
+          sourceStepId: idMap.get(x.sourceStepId)!,
+          targetStepId: idMap.get(x.targetStepId)!,
+          sourceHandle: x.sourceHandle,
+        }));
+      if (rows.length > 0) await tx.insert(e).values(rows);
+    } else {
+      // En el Modo Simple las conexiones se derivan de la lista: se recompilan, como al crear cualquier paso.
+      await syncEdges(organizationId, flowId, tx);
+    }
+    return flowId;
+  });
+  const [row] = await getDb()
+    .select()
+    .from(f)
+    .where(scoped(f.organizationId, organizationId, eq(f.id, createdId)))
+    .limit(1);
+  return withSummary(organizationId, serializeFlow(row!));
+}
+
 /** Borra el flujo; sus pasos, su cola y su historial se van por la cascada de la base. */
 export async function deleteFlow(organizationId: string, id: string): Promise<void> {
   const f = schema.automationFlow;
@@ -377,6 +460,9 @@ export async function deleteFlow(organizationId: string, id: string): Promise<vo
 export function assertStepAllowed(stepType: string, opts: { canvas: boolean }) {
   if (stepType === "switch" && !opts.canvas) {
     throw new AutomationError("switch_requires_canvas", 422, "El Switch tiene varias salidas: solo se puede usar en el Modo Visual.");
+  }
+  if (stepType === "end_flow" && !opts.canvas) {
+    throw new AutomationError("end_flow_requires_canvas", 422, "«Terminar flujo» cierra una rama dibujada: solo se puede usar en el Modo Visual.");
   }
   if (stepType === "code_js" && !codeJsEnabled()) {
     throw new AutomationError("code_js_disabled", 422, "El bloque de código no está activado en esta instancia.");

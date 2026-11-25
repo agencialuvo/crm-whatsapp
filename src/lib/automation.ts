@@ -464,6 +464,17 @@ export const humanHandoffConfigSchema = z.object({
 });
 export type HumanHandoffConfig = z.infer<typeof humanHandoffConfigSchema>;
 
+/* ─── Terminar flujo ─── */
+
+/**
+ * `end_flow`: cierra una rama a propósito. No hace nada más que dejar constancia en el historial y terminar la ejecución; no tiene
+ * salidas (nada puede salir de él). Solo existe en el Modo Visual, donde las ramas se dibujan.
+ */
+export const endFlowConfigSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+});
+export type EndFlowConfig = z.infer<typeof endFlowConfigSchema>;
+
 /**
  * Qué hace el Modo Simple según la rama: `continue` sigue con el paso siguiente, `skip_next` lo omite y
  * sigue con el que viene después, `stop` termina el flujo. El motor no las lee: se compilan a aristas
@@ -573,6 +584,10 @@ export function compileLinearEdges(steps: readonly GraphStepInput[]): CompiledEd
     const after = steps[i + 2];
     const target = (action: unknown) => (action === "skip_next" ? after : action === "stop" ? undefined : next);
     const c = (step.config ?? {}) as { ifTrue?: unknown; ifFalse?: unknown; lateAction?: unknown };
+    if (step.stepType === "end_flow") {
+      // Terminal: ninguna arista sale de él (aunque en la lista tenga pasos detrás).
+      return;
+    }
     if (step.stepType === "condition") {
       edge(step, target(c.ifTrue ?? "continue"), "true");
       edge(step, target(c.ifFalse ?? "stop"), "false");

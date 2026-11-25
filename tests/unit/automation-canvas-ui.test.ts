@@ -54,6 +54,7 @@ describe("la paleta", () => {
       "Manual",
     ]);
     expect(labels("decide")).toEqual(["Condición (Sí / No)", "Switch (varias salidas)"]);
+    expect(labels("end")).toEqual(["Terminar flujo"]);
     expect(labels("wait")).toEqual(["Esperar tiempo", "Esperar hasta la cita", "Esperar respuesta"]);
     expect(labels("actions")).toEqual([
       "Enviar WhatsApp",
@@ -295,7 +296,7 @@ describe("metadatos de los bloques (una sola fuente)", () => {
       expect(i.tone, i.id).toBeTruthy();
       expect(i.icon, i.id).toBeTruthy();
     }
-    for (const cat of ["triggers", "decide", "wait", "actions"]) {
+    for (const cat of ["triggers", "decide", "wait", "actions", "end"]) {
       const groups = PALETTE.filter((i) => i.category === cat).map((i) => i.group);
       const seen = new Set<string>();
       groups.forEach((g, k) => {

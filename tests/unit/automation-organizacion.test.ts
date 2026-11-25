@@ -21,18 +21,18 @@ import { STEP_TYPES } from "@/lib/automation-schemas";
  * que se guarda.
  */
 
-const CATEGORIES: PaletteCategory[] = ["triggers", "decide", "wait", "actions"];
+const CATEGORIES: PaletteCategory[] = ["triggers", "decide", "wait", "actions", "end"];
 const inCat = (c: PaletteCategory) => PALETTE.filter((i) => i.category === c);
 
 describe("roles de la paleta", () => {
-  it("hay cuatro roles con nombre y una frase cada uno, y todo bloque pertenece a uno", () => {
+  it("hay cinco roles con nombre y una frase cada uno, y todo bloque pertenece a uno", () => {
     for (const c of CATEGORIES) {
       expect(PALETTE_CATEGORY_LABELS[c], c).toBeTruthy();
       expect(PALETTE_CATEGORY_HINTS[c], c).toBeTruthy();
       expect(inCat(c).length, c).toBeGreaterThan(0);
     }
     expect(PALETTE.every((i) => CATEGORIES.includes(i.category))).toBe(true);
-    expect(CATEGORIES.map((c) => PALETTE_CATEGORY_LABELS[c])).toEqual(["Inicia el flujo", "Consulta y decide", "Espera", "Actúa"]);
+    expect(CATEGORIES.map((c) => PALETTE_CATEGORY_LABELS[c])).toEqual(["Inicia el flujo", "Consulta y decide", "Espera", "Actúa", "Termina"]);
   });
 
   it("solo los disparadores inician; solo Condición y Switch deciden; solo las tres esperas esperan", () => {
@@ -41,6 +41,7 @@ describe("roles de la paleta", () => {
     expect(inCat("decide").map((i) => i.stepType)).toEqual(["condition", "switch"]);
     expect(inCat("wait").map((i) => i.stepType)).toEqual(["delay", "wait_until", "wait_reply"]);
     expect(inCat("actions").every((i) => i.kind === "step")).toBe(true);
+    expect(inCat("end").map((i) => i.stepType)).toEqual(["end_flow"]);
   });
 
   it("los bloques nuevos están donde corresponde: «Cita realizada» y «Venta cobrada» inician; «Pasar a una persona» actúa", () => {
@@ -96,10 +97,10 @@ describe("buscador de la paleta por rol", () => {
 
 describe("rol en la tarjeta", () => {
   it("cada tono tiene su palabra, y mensajes y CRM comparten «Actúa»", () => {
-    expect(ROLE_LABELS).toEqual({ trigger: "Inicia", condition: "Decide", wait: "Espera", message: "Actúa", crm: "Actúa" });
+    expect(ROLE_LABELS).toEqual({ trigger: "Inicia", condition: "Decide", wait: "Espera", message: "Actúa", crm: "Actúa", end: "Termina" });
   });
   it("el rol de una tarjeta coincide con el rol de la paleta para TODOS los bloques", () => {
-    const roleOfCategory: Record<PaletteCategory, string> = { triggers: "Inicia", decide: "Decide", wait: "Espera", actions: "Actúa" };
+    const roleOfCategory: Record<PaletteCategory, string> = { triggers: "Inicia", decide: "Decide", wait: "Espera", actions: "Actúa", end: "Termina" };
     for (const i of PALETTE) expect(ROLE_LABELS[i.tone], i.id).toBe(roleOfCategory[i.category]);
   });
   it("toneOfStepType lee los metadatos y un tipo desconocido se ve neutro", () => {
@@ -112,7 +113,7 @@ describe("rol en la tarjeta", () => {
 describe("tipo de paso en el Modo Simple", () => {
   it("se agrupa por rol, con lo más usado primero, y no pierde ningún paso", () => {
     const choices = stepTypeChoices();
-    expect([...new Set(choices.map((c) => c.group))]).toEqual(["Actúa", "Espera", "Consulta y decide"]);
+    expect([...new Set(choices.map((c) => c.group))]).toEqual(["Actúa", "Espera", "Consulta y decide", "Termina"]);
     expect(choices.map((c) => c.value).sort()).toEqual([...STEP_TYPES].sort());
     expect(choices[0]).toMatchObject({ value: "send_whatsapp", label: "Enviar mensaje de WhatsApp", group: "Actúa" });
     // Los de un grupo van seguidos (así lo exige el desplegable).

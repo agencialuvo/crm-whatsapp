@@ -82,6 +82,7 @@ export function LogDetailDialog({ log, onClose }: { log: LogDto; onClose: () => 
               <code className="break-all text-xs">{d.messageId}</code>
             </Row>
           )}
+          {d.outcome && <Row label="Resultado">{d.outcome}</Row>}
           {d.nextAt && <Row label="Siguiente paso">{formatWhen(d.nextAt)}</Row>}
         </dl>
 

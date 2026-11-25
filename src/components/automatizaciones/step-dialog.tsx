@@ -17,6 +17,7 @@ import {
   WAIT_LATE_LABELS,
   conditionRuleOptions,
   nextPositionY,
+  stepNamePlaceholder,
   offsetMinutesOf,
   offsetParts,
   stepLabel,
@@ -235,7 +236,7 @@ export function StepDialog({
   // Los pasos de cita (esperar hasta la cita) solo se ofrecen en flujos de cita; el que ya existe se conserva.
   // El Switch (varias salidas) y el código viven en el Modo Visual: la lista no los ofrece al crear (uno que ya existe se conserva).
   const stepTypeOptions = useMemo<SearchSelectOption[]>(
-    () => STEP_TYPE_OPTIONS.filter((o) => (isBookingFlow || o.value !== "wait_until") && o.value !== "switch" && o.value !== "code_js"),
+    () => STEP_TYPE_OPTIONS.filter((o) => (isBookingFlow || o.value !== "wait_until") && o.value !== "switch" && o.value !== "code_js" && o.value !== "end_flow"),
     [isBookingFlow]
   );
   const mediaOptions = useMemo<SearchSelectOption[]>(
@@ -454,9 +455,7 @@ export function StepDialog({
             id="step-name"
             value={name}
             maxLength={120}
-            placeholder={
-              stepType === "delay" ? "Esperar un día" : stepType === "wait_until" ? "Un día antes de la cita" : "Saludo de cumpleaños"
-            }
+            placeholder={stepNamePlaceholder(stepType)}
             autoComplete="off"
             disabled={busy}
             onChange={(e) => setName(e.target.value)}

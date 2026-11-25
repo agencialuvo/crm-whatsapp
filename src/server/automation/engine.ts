@@ -18,6 +18,7 @@ import {
   mergeVars,
   readVars,
   removeTagConfigSchema,
+  endFlowConfigSchema,
   humanHandoffConfigSchema,
   readLoyaltyContext,
   readSaleContext,
@@ -430,6 +431,24 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         queueId: row.id,
         status: "success",
         metadata: { ...snapshot, tagId: cfg.data.tagId, result },
+      });
+      await deps.completeAndAdvance(row, now);
+      return "completed";
+    }
+
+    // Terminar flujo: cierra la rama a propósito. No envía nada ni consulta nada: deja una línea clara en el historial y la ejecución
+    // se completa porque este nodo no tiene salidas (`completeAndAdvance` sin arista termina el `run`).
+    if (step.stepType === "end_flow") {
+      const cfg = endFlowConfigSchema.safeParse(step.config);
+      if (!cfg.success) return await fail("invalid_step_config", { detail: cfg.error.issues[0]?.message });
+      await deps.writeLog({
+        organizationId: row.organizationId,
+        flowId: row.flowId,
+        stepId: step.id,
+        contactId: row.contactId,
+        queueId: row.id,
+        status: "success",
+        metadata: { ...snapshot, result: "ended", reason: "end_flow" },
       });
       await deps.completeAndAdvance(row, now);
       return "completed";

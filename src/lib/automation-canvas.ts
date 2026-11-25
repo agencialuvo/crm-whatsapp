@@ -30,7 +30,7 @@ export type CanvasNodeLite = { id: string; type: string; position: Pos; data: Ca
 export type CanvasEdgeLite = { id: string; source: string; target: string; sourceHandle?: string | null };
 
 /** Cómo se dibuja cada tipo de paso: la clave de `nodeTypes` del lienzo. */
-export type NodeKind = "trigger" | "message" | "media" | "wait" | "condition" | "switch" | "waitReply" | "action";
+export type NodeKind = "trigger" | "message" | "media" | "wait" | "condition" | "switch" | "waitReply" | "action" | "end";
 
 export function nodeKindOf(type: string): NodeKind {
   switch (type) {
@@ -49,6 +49,8 @@ export function nodeKindOf(type: string): NodeKind {
       return "switch";
     case "wait_reply":
       return "waitReply";
+    case "end_flow":
+      return "end";
     default:
       return "action"; // add_tag · remove_tag · set_stage · set_var · code_js · human_handoff
   }
@@ -57,7 +59,7 @@ export function nodeKindOf(type: string): NodeKind {
 /* ─── Metadatos de los bloques: UNA sola fuente (paleta, nodos y minimapa) ─── */
 
 /** El rol visual de un bloque: decide el color de su encabezado y de su borde izquierdo. */
-export type NodeTone = "trigger" | "condition" | "wait" | "message" | "crm";
+export type NodeTone = "trigger" | "condition" | "wait" | "message" | "crm" | "end";
 
 /** Nombres de icono (de `lucide-react`); la correspondencia con el componente vive en la capa de React. */
 export type IconName =
@@ -73,6 +75,7 @@ export type IconName =
   | "Cake"
   | "Gift"
   | "Headset"
+  | "CircleStop"
   | "Stamp"
   | "Play"
   | "GitBranch"
@@ -122,6 +125,7 @@ export const STEP_META: Record<StepType, BlockMeta> = {
   set_var: { group: "Datos", tone: "crm", icon: "Variable" },
   code_js: { group: "Datos", tone: "crm", icon: "Braces" },
   human_handoff: { group: "CRM", tone: "crm", icon: "Headset" },
+  end_flow: { group: "Fin", tone: "end", icon: "CircleStop" },
 };
 
 const FALLBACK_META: BlockMeta = { group: "Otros", tone: "crm", icon: "Zap" };
@@ -140,6 +144,8 @@ export function toneOfNodeKind(kind: string): NodeTone {
     case "condition":
     case "switch":
       return "condition";
+    case "end":
+      return "end";
     case "wait":
     case "waitReply":
       return "wait";
@@ -176,6 +182,8 @@ export function outputsOf(type: string, config?: unknown): { id: EdgeHandle; lab
       return (["confirmed", "declined", "reschedule", "other", "timeout"] as const).map((x) => h(x));
     case "wait_until":
       return [h("default", "Siguiente"), h("late", "Si ya pasó")];
+    case "end_flow":
+      return []; // terminal: no tiene salidas
     default:
       return [h("default", "Siguiente")];
   }
@@ -253,7 +261,7 @@ export function defaultTriggerConfig(triggerType: string): Record<string, unknow
 /* ─── La paleta ─── */
 
 /** Cuatro roles, en el orden en que se piensa un flujo: qué lo inicia, qué consulta y decide, qué espera, qué hace. */
-export type PaletteCategory = "triggers" | "decide" | "wait" | "actions";
+export type PaletteCategory = "triggers" | "decide" | "wait" | "actions" | "end";
 export type PaletteItem = {
   /** Estable: sirve de llave y viaja en el arrastre. */
   id: string;
@@ -278,6 +286,7 @@ export const PALETTE_CATEGORY_LABELS: Record<PaletteCategory, string> = {
   decide: "Consulta y decide",
   wait: "Espera",
   actions: "Actúa",
+  end: "Termina",
 };
 
 /** Una frase por categoría, bajo su encabezado en la paleta: qué hace ese tipo de bloque. */
@@ -286,6 +295,7 @@ export const PALETTE_CATEGORY_HINTS: Record<PaletteCategory, string> = {
   decide: "Mira al contacto o sus datos y elige el camino.",
   wait: "Pausa hasta un momento o una respuesta.",
   actions: "Hace algo: manda un mensaje, etiqueta, mueve, avisa.",
+  end: "Cierra una rama a propósito, para que no quede suelta.",
 };
 
 /**
@@ -298,6 +308,7 @@ export const ROLE_LABELS: Record<NodeTone, string> = {
   wait: "Espera",
   message: "Actúa",
   crm: "Actúa",
+  end: "Termina",
 };
 
 /** El tono de un tipo de paso (`crm` si no se conoce: un paso que el catálogo no tiene se ve neutro). */
@@ -369,6 +380,7 @@ export const PALETTE: PaletteItem[] = [
   stepItem("human_handoff", "actions", "Pasar a una persona", "Apaga la IA y avisa al equipo en la bandeja"),
   stepItem("set_var", "actions", "Establecer variable", "Guarda un dato para que lo lean los pasos siguientes"),
   stepItem("code_js", "actions", "Código JavaScript", "Transforma datos con un script aislado (sin red ni acceso a datos)"),
+  stepItem("end_flow", "end", "Terminar flujo", "Cierra esta rama a propósito: el flujo termina aquí"),
 ];
 
 /**
@@ -384,7 +396,7 @@ export function paletteMatches(item: Pick<PaletteItem, "label" | "hint" | "group
 }
 
 /** El orden en que el selector «Tipo de paso» del Modo Simple ofrece los roles: primero lo que más se usa (mensajes y acciones). */
-const STEP_CHOICE_ORDER: PaletteCategory[] = ["actions", "wait", "decide"];
+const STEP_CHOICE_ORDER: PaletteCategory[] = ["actions", "wait", "decide", "end"];
 
 /**
  * Los tipos de paso agrupados por rol, para el desplegable del Modo Simple: `{ value, label, group }` con los de un mismo grupo

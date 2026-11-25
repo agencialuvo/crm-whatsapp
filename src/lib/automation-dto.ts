@@ -238,9 +238,53 @@ export const STEP_LABELS: Record<string, string> = {
   switch: "Switch (varias salidas)",
   code_js: "Código JavaScript",
   human_handoff: "Pasar a una persona",
+  end_flow: "Terminar flujo",
 };
 
 export const stepLabel = (type: string): string => STEP_LABELS[type] ?? type;
+
+/**
+ * El ejemplo que se ve en «Nombre (opcional)» de un paso. Neutral: nunca sugiere un tema concreto (cumpleaños, fidelidad) que no
+ * tenga que ver con el flujo. Cada tipo de paso muestra algo que tiene sentido para él; el resto, el texto general.
+ */
+export const GENERIC_STEP_NAME_PLACEHOLDER = "Nombre del paso (opcional)";
+const STEP_NAME_PLACEHOLDERS: Record<string, string> = {
+  condition: "Ej.: Validar si ya agendó",
+  switch: "Ej.: Según el tipo de cliente",
+  delay: "Ej.: Esperar un día",
+  wait_until: "Ej.: Un día antes de la cita",
+  wait_reply: "Ej.: Esperar su confirmación",
+  send_whatsapp: "Ej.: Mensaje de seguimiento",
+  send_media: "Ej.: Enviar la promoción",
+  add_tag: "Ej.: Marcar como interesado",
+  remove_tag: "Ej.: Quitar la marca",
+  set_stage: "Ej.: Pasar a «Cliente»",
+  set_var: "Ej.: Guardar el origen",
+  human_handoff: "Ej.: Avisar al equipo",
+  end_flow: "Ej.: Ya tiene cita",
+};
+export const stepNamePlaceholder = (stepType: string): string => STEP_NAME_PLACEHOLDERS[stepType] ?? GENERIC_STEP_NAME_PLACEHOLDER;
+
+/* ─── Duplicar un flujo ─── */
+
+const FLOW_NAME_MAX = 120;
+const COPY_SUFFIX = /\s*\(copia(?: (\d+))?\)\s*$/i;
+const foldName = (n: string) => n.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+
+/**
+ * El nombre de la copia de un flujo: «Nombre (copia)», y si ya existe, «Nombre (copia 2)», «Nombre (copia 3)»… Copiar una copia
+ * no encadena sufijos: «Nombre (copia)» → «Nombre (copia 2)». Compara sin mayúsculas ni acentos contra los nombres que ya hay y
+ * respeta el tope de 120 caracteres recortando el nombre de origen (nunca el sufijo).
+ */
+export function nextCopyName(original: string, existing: readonly string[]): string {
+  const root = original.replace(COPY_SUFFIX, "").trim() || "Flujo";
+  const taken = new Set(existing.map(foldName));
+  for (let n = 1; ; n++) {
+    const suffix = n === 1 ? " (copia)" : ` (copia ${n})`;
+    const name = `${root.length + suffix.length > FLOW_NAME_MAX ? root.slice(0, FLOW_NAME_MAX - suffix.length).trimEnd() : root}${suffix}`;
+    if (!taken.has(foldName(name))) return name;
+  }
+}
 
 export const DELAY_UNIT_LABELS = {
   seconds: { one: "segundo", other: "segundos" },
@@ -497,6 +541,9 @@ export function describeStep(
         `Sin respuesta → ${action("onTimeout", "stop")}`,
       ].join(" · "),
     };
+  }
+  if (step.stepType === "end_flow") {
+    return { title: "Terminar flujo", detail: "Cierra esta rama a propósito: el flujo termina aquí y queda en el historial." };
   }
   if (step.stepType === "human_handoff") {
     const note = typeof c.note === "string" && c.note.trim() ? ` Nota: «${clip(c.note, 100)}».` : "";

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, Plus, Search, Trash2, Zap } from "lucide-react";
+import { ChevronRight, Copy, Plus, Search, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
@@ -36,6 +36,8 @@ export function AutomationsClient() {
   const [query, setQuery] = useState("");
   const [toggling, setToggling] = useState<string | null>(null);
   const [removing, setRemoving] = useState<FlowListItem | null>(null);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   // Buscador: filtra por nombre, disparador y su resumen; al escribir, la tabla vuelve a la página 1 (`resetKey`).
   const visible = useMemo(() => (flows ?? NONE).filter((f) => flowMatchesQuery(f, query)), [flows, query]);
   const table = useDataTable(visible, { view: "automatizaciones", resetKey: query.trim() });
@@ -78,6 +80,22 @@ export function AutomationsClient() {
   async function removeFlow(flow: FlowListItem) {
     await apiFetch(`/api/automations/${flow.id}`, { method: "DELETE" });
     setFlows((prev) => prev?.filter((f) => f.id !== flow.id) ?? prev);
+  }
+
+  // Duplicar: la copia nace PAUSADA y con un nombre único; se queda en la lista (arriba, es la más reciente) y se avisa.
+  async function duplicateFlow(flow: FlowListItem) {
+    setActionError(null);
+    setNotice(null);
+    setDuplicating(flow.id);
+    try {
+      const { flow: copy } = await apiFetch<{ flow: FlowDto }>(`/api/automations/${flow.id}/duplicate`, { method: "POST" });
+      await load();
+      setNotice(`Se creó «${copy.name}». Está pausada: revísala y enciéndela cuando quieras.`);
+    } catch (err) {
+      setActionError(describeError(err));
+    } finally {
+      setDuplicating(null);
+    }
   }
 
   // Crea el flujo ya en el lienzo (apagado, vacío, disparador manual) y entra: el nombre y el disparador se ajustan allí.
@@ -131,6 +149,12 @@ export function AutomationsClient() {
             scope="de tus flujos"
           />
         </div>
+      )}
+
+      {notice && (
+        <p role="status" className="rounded-md border border-success-soft bg-success-tint px-3 py-2 text-sm text-success-text">
+          {notice}
+        </p>
       )}
 
       {actionError && (
@@ -253,6 +277,16 @@ export function AutomationsClient() {
                         {block && <p className="mt-1 text-[11px] text-text-3">Sin pasos: agrégalos para encenderlo.</p>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Duplicar «${f.name}»`}
+                          title="Duplicar (la copia nace pausada)"
+                          disabled={duplicating === f.id}
+                          onClick={() => void duplicateFlow(f)}
+                        >
+                          <Copy className="h-4 w-4" aria-hidden />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

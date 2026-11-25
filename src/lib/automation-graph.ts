@@ -90,6 +90,9 @@ export function handlesOf(type: string, config?: unknown): EdgeHandle[] {
       return REPLY_HANDLES;
     case "wait_until":
       return ["default", "late"];
+    case "end_flow":
+      // Terminal: sin salidas.
+      return [];
     default:
       return ["default"];
   }
@@ -367,6 +370,14 @@ export function toLinear(input: LinearInput): LinearResult {
     return {
       ok: false,
       reasons: [`${switches.length === 1 ? "Hay un bloque Switch" : `Hay ${switches.length} bloques Switch`}: tienen varias salidas y la lista no las puede mostrar.`],
+    };
+  }
+  // «Terminar flujo» cierra ramas dibujadas: en una lista cada rama termina con la acción «Terminar el flujo».
+  const ends = input.nodes.filter((n) => n.type === "end_flow");
+  if (ends.length > 0) {
+    return {
+      ok: false,
+      reasons: [`${ends.length === 1 ? "Hay un bloque «Terminar flujo»" : `Hay ${ends.length} bloques «Terminar flujo»`}: cierran ramas dibujadas y la lista no las puede mostrar.`],
     };
   }
   if (!input.entryStepId || !byId.has(input.entryStepId)) {

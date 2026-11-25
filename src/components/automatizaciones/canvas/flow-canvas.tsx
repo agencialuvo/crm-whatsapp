@@ -20,6 +20,7 @@ import { InspectorPanel } from "./inspector/inspector-panel";
 import { NodePalette } from "./node-palette";
 import { FlowNameEditor } from "./flow-name-editor";
 import { ActionNode } from "./nodes/action-node";
+import { EndNode } from "./nodes/end-node";
 import { ConditionNode } from "./nodes/condition-node";
 import { SwitchNode } from "./nodes/switch-node";
 import { MediaNode } from "./nodes/media-node";
@@ -39,6 +40,7 @@ const NODE_TYPES = {
   switch: SwitchNode,
   waitReply: WaitReplyNode,
   action: ActionNode,
+  end: EndNode,
 } as const;
 
 /** Estable por la misma razón que `NODE_TYPES`: un objeto nuevo en cada render remontaría todas las conexiones. */

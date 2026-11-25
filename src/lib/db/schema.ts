@@ -2421,6 +2421,8 @@ export const automationStep = pgTable(
         "code_js",
         // Paso 5: pasa la conversación a una persona (apaga la IA y avisa en la bandeja).
         "human_handoff",
+        // Cierra una rama a propósito (solo lienzo).
+        "end_flow",
       ],
     }).notNull(),
     /** 

@@ -158,6 +158,8 @@ export type LogDetail = {
   messageId: string | null;
   windowOpen: boolean | null;
   nextAt: string | null;
+  /** Cómo terminó un paso que no envía nada y cierra algo (hoy: «Terminar flujo»); `null` en el resto. */
+  outcome: string | null;
   payload: unknown;
   stepConfig: Record<string, unknown> | null;
   /** Lo que sobra de `metadata` y no tiene su propio campo: se muestra completo en «Datos técnicos». */
@@ -182,6 +184,7 @@ export function describeLog(log: Pick<LogDto, "status" | "step" | "error" | "met
     messageId: asText(md?.messageId),
     windowOpen: typeof md?.windowOpen === "boolean" ? md.windowOpen : null,
     nextAt: asText(md?.nextAt),
+    outcome: md?.result === "ended" ? "Esta rama terminó aquí, a propósito (bloque «Terminar flujo»)." : null,
     payload: md && "payload" in md ? md.payload : null,
     stepConfig: asRecord(snap?.config),
     raw: md,

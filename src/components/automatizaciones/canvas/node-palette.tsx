@@ -6,7 +6,7 @@ import { PALETTE, PALETTE_CATEGORY_HINTS, PALETTE_CATEGORY_LABELS, PALETTE_DRAG_
 import { cn } from "@/lib/utils";
 import { ICONS, TONE_STYLES } from "./node-icons";
 
-const CATEGORIES: PaletteCategory[] = ["triggers", "decide", "wait", "actions"];
+const CATEGORIES: PaletteCategory[] = ["triggers", "decide", "wait", "actions", "end"];
 
 /** Agrupa (en orden) los bloques de una categoría por su subgrupo. */
 function byGroup(items: PaletteItem[]): { group: string; items: PaletteItem[] }[] {

@@ -182,7 +182,7 @@ export function FlowDialog({
             id="flow-name"
             value={name}
             maxLength={120}
-            placeholder="Saludo de cumpleaños"
+            placeholder="Ej.: Seguimiento a clientes nuevos"
             autoComplete="off"
             aria-invalid={!!errors.name}
             disabled={busy}

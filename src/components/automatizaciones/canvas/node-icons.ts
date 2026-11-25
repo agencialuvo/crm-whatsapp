@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CalendarPlus,
   CalendarX,
+  CircleStop,
   Gift,
   Headset,
   Play,
@@ -43,6 +44,7 @@ export const ICONS: Record<IconName, LucideIcon> = {
   Cake,
   Gift,
   Headset,
+  CircleStop,
   Stamp,
   Play,
   GitBranch,
@@ -69,4 +71,6 @@ export const TONE_STYLES: Record<NodeTone, { head: string; bar: string; chip: st
   wait: { head: "bg-info-tint text-info-text", bar: "border-l-info", chip: "bg-info-tint text-info-text", mini: "var(--info)" },
   message: { head: "bg-success-tint text-success-text", bar: "border-l-success", chip: "bg-success-tint text-success-text", mini: "var(--success)" },
   crm: { head: "bg-subtle text-text-2", bar: "border-l-text-3", chip: "bg-subtle text-text-2", mini: "var(--text-3)" },
+  // El cierre de una rama: gris oscuro, para que se lea como un punto final y no como una acción más.
+  end: { head: "bg-subtle text-foreground", bar: "border-l-text-2", chip: "bg-subtle text-foreground", mini: "var(--text-2)" },
 };

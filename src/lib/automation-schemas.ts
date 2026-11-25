@@ -3,6 +3,7 @@ import {
   CONDITION_MAX_STAMPS,
   addTagConfigSchema,
   codeJsConfigSchema,
+  endFlowConfigSchema,
   humanHandoffConfigSchema,
   conditionConfigSchema,
   daysOffsetSchema,
@@ -61,6 +62,8 @@ export const STEP_TYPES = [
   "code_js",
   // Paso 5: escala la conversación a una persona del equipo (apaga la IA y avisa en la bandeja).
   "human_handoff",
+  // Cierra una rama a propósito (solo en el Modo Visual): deja constancia en el historial y termina la ejecución.
+  "end_flow",
 ] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
@@ -179,6 +182,7 @@ export const stepCreateSchema = z
       z.object({ stepType: z.literal("switch"), config: switchConfigSchema }),
       z.object({ stepType: z.literal("code_js"), config: codeJsConfigSchema }),
       z.object({ stepType: z.literal("human_handoff"), config: humanHandoffConfigSchema }),
+      z.object({ stepType: z.literal("end_flow"), config: endFlowConfigSchema }),
     ],
     {
       errorMap: (issue, ctx) =>
@@ -220,6 +224,7 @@ const STEP_CONFIG_SCHEMAS = {
   switch: switchConfigSchema,
   code_js: codeJsConfigSchema,
   human_handoff: humanHandoffConfigSchema,
+  end_flow: endFlowConfigSchema,
 } as const satisfies Record<StepType, z.ZodTypeAny>;
 
 /** Valida `config` de un paso contra su tipo. */

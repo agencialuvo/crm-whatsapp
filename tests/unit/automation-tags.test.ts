@@ -103,9 +103,10 @@ describe("esquemas de los pasos nuevos", () => {
     expect(ok.success).toBe(true);
     // Todos exigen algo, salvo «Esperar respuesta»: todo en ella tiene valor por defecto (7 días, solo «confirmó» sigue).
     // «Pasar a una persona» tampoco exige nada: la nota es opcional.
-    for (const t of STEP_TYPES.filter((x) => x !== "wait_reply" && x !== "human_handoff")) expect(parseStepConfig(t, {}).ok).toBe(false);
+    for (const t of STEP_TYPES.filter((x) => x !== "wait_reply" && x !== "human_handoff" && x !== "end_flow")) expect(parseStepConfig(t, {}).ok).toBe(false);
     expect(parseStepConfig("wait_reply", {}).ok).toBe(true);
     expect(parseStepConfig("human_handoff", {}).ok).toBe(true);
+    expect(parseStepConfig("end_flow", {}).ok).toBe(true);
     expect(parseStepConfig("add_tag", { tagId: "tag_1" })).toEqual({ ok: true, value: { tagId: "tag_1" } });
     const bad = parseStepConfig("condition", { rule: { type: "tag_has" } });
     expect(bad.ok).toBe(false);

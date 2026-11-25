@@ -11,6 +11,8 @@ import {
   Clock,
   Braces,
   Headset,
+  CircleStop,
+  Copy,
   GitBranch,
   Flag,
   ImageIcon,
@@ -72,6 +74,7 @@ const STEP_ICON: Record<string, typeof Clock> = {
   set_var: Variable,
   code_js: Braces,
   human_handoff: Headset,
+  end_flow: CircleStop,
 };
 
 /**
@@ -113,6 +116,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
   const [modeBusy, setModeBusy] = useState(false);
   // El motivo por el que no se pudo cambiar de modo: se muestra junto al lienzo/lista, no arriba de la página.
   const [modeError, setModeError] = useState<string | null>(null);
+  const [duplicatingFlow, setDuplicatingFlow] = useState(false);
   const [tab, setTab] = useState<"pasos" | "historial">("pasos");
   const [historyKey, setHistoryKey] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -178,6 +182,20 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
       setModeError(describeError(err));
     } finally {
       setModeBusy(false);
+    }
+  }
+
+  // Duplicar: la copia nace pausada y con nombre único; se abre para revisarla.
+  async function duplicateThisFlow() {
+    setActionError(null);
+    setDuplicatingFlow(true);
+    try {
+      const { flow: copy } = await apiFetch<{ flow: FlowDto }>(`/api/automations/${flowId}/duplicate`, { method: "POST" });
+      router.push(`/automatizaciones/${copy.id}`);
+    } catch (err) {
+      setActionError(describeError(err));
+    } finally {
+      setDuplicatingFlow(false);
     }
   }
 
@@ -357,6 +375,10 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
             <Button variant="outline" size="sm" onClick={() => setEditingFlow(true)}>
               <Pencil className="h-4 w-4" aria-hidden />
               Editar
+            </Button>
+            <Button variant="outline" size="sm" disabled={duplicatingFlow} onClick={() => void duplicateThisFlow()}>
+              <Copy className="h-4 w-4" aria-hidden />
+              {duplicatingFlow ? "Duplicando…" : "Duplicar"}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setRemoveFlow(true)}>
               <Trash2 className="h-4 w-4 text-danger-text" aria-hidden />
