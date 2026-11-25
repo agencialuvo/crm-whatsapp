@@ -12,10 +12,10 @@ import { Modal, ModalFooter } from "@/components/negocio/modal";
 import { stepCreateSchema, STEP_TYPES } from "@/lib/automation-schemas";
 import {
   BRANCH_ACTION_LABELS,
-  CONDITION_RULE_LABELS,
   DELAY_UNIT_LABELS,
   REPLY_BRANCHES,
   WAIT_LATE_LABELS,
+  conditionRuleOptions,
   nextPositionY,
   offsetMinutesOf,
   offsetParts,
@@ -28,19 +28,22 @@ import {
 } from "@/lib/automation-dto";
 import {
   BRANCH_ACTIONS,
-  CONDITION_RULE_TYPES,
   REPLY_TIMEOUT_DEFAULT_MINUTES,
   WAIT_LATE_ACTIONS,
 } from "@/lib/automation";
 import { Switch } from "@/components/ui/switch";
 import { CodeJsFields, SetVarFields, SwitchFields, VarEqualsFields, casesFromConfig, casesToConfig, caseErrors, type CaseForm } from "@/components/automatizaciones/step-extras";
-import { DEFAULT_CODE_JS } from "@/lib/automation-canvas";
+import { DEFAULT_CODE_JS, stepTypeChoices } from "@/lib/automation-canvas";
 import { tagColorClass } from "@/lib/tags";
 import { avisoDeMedioEnPaso, etiquetaDeOpcion, seOfreceEnPaso } from "@/lib/medios-estado";
 import { countVariables } from "@/lib/templates";
 
 const NO_MEDIA: MediaOption[] = [];
-const STEP_TYPE_OPTIONS: SearchSelectOption[] = STEP_TYPES.map((t) => ({ value: t, label: stepLabel(t) }));
+// El tipo de paso, agrupado por rol (Actúa, Espera, Consulta y decide). Un paso que no esté en la paleta se ofrece al final, sin grupo.
+const STEP_TYPE_OPTIONS: SearchSelectOption[] = [
+  ...stepTypeChoices(),
+  ...STEP_TYPES.filter((t) => !stepTypeChoices().some((c) => c.value === t)).map((t) => ({ value: t, label: stepLabel(t) })),
+];
 
 const BRANCH_OPTIONS: SearchSelectOption[] = BRANCH_ACTIONS.map((a) => ({ value: a, label: BRANCH_ACTION_LABELS[a] }));
 
@@ -154,6 +157,8 @@ export function StepDialog({
   // Reglas con número: «vino en los últimos N días» y «tiene al menos N sellos».
   const [ruleDays, setRuleDays] = useState(typeof rule?.days === "number" ? String(rule.days) : "30");
   const [ruleStamps, setRuleStamps] = useState(typeof rule?.stamps === "number" ? String(rule.stamps) : "5");
+  // `visits_gte`: visitas acumuladas.
+  const [ruleVisits, setRuleVisits] = useState(typeof rule?.visits === "number" ? String(rule.visits) : "5");
   // `stamps_between`: el rango de sellos (ambos incluidos).
   const [ruleMin, setRuleMin] = useState(typeof rule?.min === "number" ? String(rule.min) : "1");
   const [ruleMax, setRuleMax] = useState(typeof rule?.max === "number" ? String(rule.max) : "4");
@@ -245,14 +250,8 @@ export function StepDialog({
   const avisoMedio = avisoDeMedioEnPaso(chosenMedia);
   const tagOptions = useMemo<SearchSelectOption[]>(() => tags.map((t) => ({ value: t.id, label: t.name })), [tags]);
   const stageOptions = useMemo<SearchSelectOption[]>(() => stages.map((s) => ({ value: s.id, label: s.name })), [stages]);
-  const ruleOptions = useMemo<SearchSelectOption[]>(
-    () =>
-      CONDITION_RULE_TYPES.filter((r) => isBookingFlow || r !== "booking_confirmed" || ruleType === r).map((r) => ({
-        value: r,
-        label: CONDITION_RULE_LABELS[r],
-      })),
-    [isBookingFlow, ruleType]
-  );
+  // Las reglas, agrupadas por tema (Citas, Fidelización, Contacto, Datos del flujo).
+  const ruleOptions = useMemo<SearchSelectOption[]>(() => conditionRuleOptions(isBookingFlow, ruleType), [isBookingFlow, ruleType]);
 
   /** Crea una etiqueta nueva sin salir del diálogo y la deja elegida en el campo `onPick`. */
   async function createTagInline(onPick: (id: string) => void, errorKey: string) {
@@ -312,13 +311,18 @@ export function StepDialog({
         rule:
           ruleType === "var_equals"
             ? { type: ruleType, key: ruleVarKey.trim(), value: ruleVarValue }
-            : ruleType === "booking_confirmed" || ruleType === "has_upcoming_booking" || ruleType === "birthday_today"
+            : ruleType === "booking_confirmed" ||
+                ruleType === "has_upcoming_booking" ||
+                ruleType === "has_confirmed_upcoming_booking" ||
+                ruleType === "birthday_today"
             ? { type: ruleType }
             : ruleType === "stage_is"
               ? { type: ruleType, stageId: ruleStageId }
-              : ruleType === "visited_within_days"
+              : ruleType === "visited_within_days" || ruleType === "upcoming_booking_days_lte" || ruleType === "inactive_for_days_gte"
                 ? { type: ruleType, days: toNumber(ruleDays) }
-                : ruleType === "stamps_gte" || ruleType === "stamps_remaining_lte" || ruleType === "loyalty_milestone_is"
+                : ruleType === "visits_gte"
+                  ? { type: ruleType, visits: toNumber(ruleVisits) }
+                  : ruleType === "stamps_gte" || ruleType === "stamps_remaining_lte" || ruleType === "loyalty_milestone_is"
                   ? { type: ruleType, stamps: toNumber(ruleStamps) }
                   : ruleType === "stamps_between"
                     ? { type: ruleType, min: toNumber(ruleMin), max: toNumber(ruleMax) }
@@ -576,7 +580,7 @@ export function StepDialog({
                 value={ruleType}
                 onChange={(v) => {
                   setRuleType(v);
-                  clear("tagId", "stageId", "days", "stamps", "min", "max");
+                  clear("tagId", "stageId", "days", "visits", "stamps", "min", "max");
                 }}
                 options={ruleOptions}
                 searchPlaceholder="Buscar regla…"
@@ -645,13 +649,53 @@ export function StepDialog({
                 «no tiene cita».
               </p>
             )}
-            {ruleType === "visited_within_days" && (
+            {ruleType === "has_confirmed_upcoming_booking" && (
+              <p className="rounded-md border bg-subtle px-3 py-2 text-xs text-text-2">
+                Se mira al llegar a este paso y sirve en cualquier flujo: se cumple si el contacto tiene una cita agendada, futura y ya
+                confirmada. No cuenta las canceladas ni las pasadas.
+              </p>
+            )}
+            {ruleType === "visits_gte" && (
               <Field
-                label="En los últimos (días)"
+                label="Visitas mínimas"
+                required
+                htmlFor="step-rule-visits"
+                error={errors.visits}
+                hint="Cuenta las citas marcadas como realizadas (o cobradas en Caja) de ese contacto, desde siempre."
+              >
+                <Input
+                  id="step-rule-visits"
+                  inputMode="numeric"
+                  value={ruleVisits}
+                  maxLength={5}
+                  aria-invalid={!!errors.visits}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setRuleVisits(e.target.value.replace(/\D/g, ""));
+                    clear("visits");
+                  }}
+                />
+              </Field>
+            )}
+            {(ruleType === "visited_within_days" || ruleType === "upcoming_booking_days_lte" || ruleType === "inactive_for_days_gte") && (
+              <Field
+                label={
+                  ruleType === "visited_within_days"
+                    ? "En los últimos (días)"
+                    : ruleType === "upcoming_booking_days_lte"
+                      ? "Dentro de (días) o menos"
+                      : "Sin venir desde hace (días) o más"
+                }
                 required
                 htmlFor="step-rule-days"
                 error={errors.days}
-                hint="Cuenta citas marcadas como realizadas. Con la rama «No»: no vino en ese tiempo, o nunca vino."
+                hint={
+                  ruleType === "visited_within_days"
+                    ? "Cuenta citas marcadas como realizadas. Con la rama «No»: no vino en ese tiempo, o nunca vino."
+                    : ruleType === "upcoming_booking_days_lte"
+                      ? "Días de calendario de tu negocio: 0 es hoy, 1 es mañana. Mira su próxima cita agendada; sin ninguna, no se cumple."
+                      : "Cuenta desde su última cita realizada. Quien nunca vino NO se cumple: para «nunca vino» usa «Vino a una cita…» con la rama «No»."
+                }
               >
                 <Input
                   id="step-rule-days"

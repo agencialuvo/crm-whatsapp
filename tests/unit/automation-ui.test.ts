@@ -43,6 +43,8 @@ describe("disparadores", () => {
       "booking_created",
       "booking_confirmed",
       "booking_no_show",
+      "booking_completed",
+      "sale_completed",
       "ad_referral",
       // Paso 2: ya tienen quién los dispare.
       "tag_added",

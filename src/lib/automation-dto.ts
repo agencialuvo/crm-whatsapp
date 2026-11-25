@@ -70,6 +70,8 @@ export const TRIGGER_LABELS: Record<string, string> = {
   booking_created: "Cita agendada",
   booking_confirmed: "Cita confirmada",
   booking_no_show: "Cliente no asistió",
+  booking_completed: "Cita realizada",
+  sale_completed: "Venta cobrada",
   ad_referral: "Llegó de un anuncio",
   loyalty_reward_unlocked: "Premio de fidelidad",
   loyalty_stamp_earned: "Sello ganado",
@@ -90,6 +92,10 @@ export const TRIGGER_HINTS: Record<(typeof CREATABLE_TRIGGERS)[number], string> 
     "Se activa al agendar una cita (y de nuevo si se reprograma). Ideal para recordatorios: usa «Esperar hasta la cita».",
   booking_confirmed: "Se activa cuando se confirma la asistencia a una cita.",
   booking_no_show: "Se activa cuando una cita se marca como «No asistió».",
+  booking_completed:
+    "Se activa cuando una cita se cierra como realizada: al marcarla en la Agenda o al cobrarla en Caja. Una vez por cita. Ideal para pedir una reseña o agendar la próxima visita («Esperar» + «Condición»).",
+  sale_completed:
+    "Se activa con cada venta cobrada en Caja a un cliente identificado, tenga o no tarjeta de fidelidad. Una vez por venta. Usa {{monto}} y {{servicio}} en los mensajes; con «Esperar» (hasta 366 días) sirve para recordatorios a los N días.",
   ad_referral:
     "Se activa cuando un cliente escribe desde un anuncio de Facebook o Instagram. Puedes acotarlo a un anuncio y usar {{servicio}} en los mensajes.",
   manual:
@@ -185,6 +191,10 @@ export function describeTrigger(
       return "Cuando se confirma la asistencia a una cita";
     case "booking_no_show":
       return "Cuando una cita se marca como «No asistió»";
+    case "booking_completed":
+      return "Cuando una cita se cierra como realizada (en la Agenda o al cobrarla)";
+    case "sale_completed":
+      return "Cada vez que se cobra una venta a un cliente";
     case "ad_referral":
       return describeAdTrigger(parseAdReferralConfig(config), adNode);
     case "manual":
@@ -308,6 +318,10 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   stage_is: "El lead está en la etapa",
   has_upcoming_booking: "El contacto tiene una cita próxima",
   visited_within_days: "Vino a una cita en los últimos días",
+  has_confirmed_upcoming_booking: "Tiene una cita próxima confirmada",
+  upcoming_booking_days_lte: "Su próxima cita es dentro de N días o menos",
+  inactive_for_days_gte: "Lleva N días o más sin venir",
+  visits_gte: "Tiene al menos N visitas",
   stamps_gte: "Su tarjeta de fidelidad tiene al menos X sellos",
   stamps_remaining_lte: "Le faltan pocos sellos para su próximo premio",
   stamps_between: "Sus sellos están entre X y Y",
@@ -315,6 +329,41 @@ export const CONDITION_RULE_LABELS: Record<ConditionRuleType, string> = {
   birthday_today: "Hoy es su cumpleaños",
   var_equals: "Una variable del flujo vale…",
 };
+
+/**
+ * Las reglas de «Condición» y «Switch» agrupadas por tema, en el orden en que se ofrecen. Cada regla está en UN solo grupo
+ * (una prueba lo exige: una regla nueva no puede quedar fuera del selector).
+ */
+export const CONDITION_RULE_GROUPS: { label: string; rules: readonly ConditionRuleType[] }[] = [
+  {
+    label: "Citas",
+    rules: [
+      "has_upcoming_booking",
+      "has_confirmed_upcoming_booking",
+      "upcoming_booking_days_lte",
+      "visited_within_days",
+      "inactive_for_days_gte",
+      "visits_gte",
+      // La cita del disparo (solo en flujos que empiezan con una cita).
+      "booking_confirmed",
+    ],
+  },
+  { label: "Fidelización", rules: ["stamps_gte", "stamps_between", "stamps_remaining_lte", "loyalty_milestone_is"] },
+  { label: "Contacto", rules: ["tag_has", "tag_missing", "stage_is", "birthday_today"] },
+  { label: "Datos del flujo", rules: ["var_equals"] },
+];
+
+/**
+ * Las opciones del selector de regla, agrupadas. `booking_confirmed` solo se ofrece en un flujo que empieza con una cita
+ * (`isBookingFlow`), salvo que sea la regla que ya tiene el bloque (`keep`): una configuración existente se conserva.
+ */
+export function conditionRuleOptions(isBookingFlow: boolean, keep?: string): { value: ConditionRuleType; label: string; group: string }[] {
+  return CONDITION_RULE_GROUPS.flatMap((g) =>
+    g.rules
+      .filter((r) => isBookingFlow || r !== "booking_confirmed" || r === keep)
+      .map((r) => ({ value: r, label: CONDITION_RULE_LABELS[r], group: g.label }))
+  );
+}
 
 /** Las ramas de «Esperar respuesta» en el orden del formulario: campo de la configuración → etiqueta. */
 export const REPLY_BRANCHES = [
@@ -358,7 +407,8 @@ export type StepRefs = { tags?: readonly TagOption[]; stages?: readonly StageOpt
 
 /** La regla en una frase: «El contacto tiene la etiqueta «VIP»». */
 export function describeRule(rule: ConditionRule | Record<string, unknown> | null | undefined, refs: StepRefs = {}): string {
-  const r = (rule ?? {}) as { type?: string; tagId?: string; stageId?: string; days?: number; stamps?: number };
+  const r = (rule ?? {}) as { type?: string; tagId?: string; stageId?: string; days?: number; stamps?: number; visits?: number };
+  const dias = (n: number) => `${n} ${n === 1 ? "día" : "días"}`;
   const tag = (id?: string) => {
     const n = refs.tags?.find((t) => t.id === id)?.name;
     return n ? `«${n}»` : "una etiqueta que ya no existe";
@@ -380,6 +430,18 @@ export function describeRule(rule: ConditionRule | Record<string, unknown> | nul
       return "El contacto tiene una cita próxima";
     case "visited_within_days":
       return typeof r.days === "number" ? `Vino a una cita en los últimos ${r.days} ${r.days === 1 ? "día" : "días"}` : "Vino a una cita (sin configurar los días)";
+    case "has_confirmed_upcoming_booking":
+      return "El contacto tiene una cita próxima confirmada";
+    case "upcoming_booking_days_lte":
+      return typeof r.days === "number"
+        ? r.days === 0
+          ? "Su próxima cita es hoy"
+          : `Su próxima cita es dentro de ${dias(r.days)} o menos`
+        : "Días hasta su próxima cita (sin configurar)";
+    case "inactive_for_days_gte":
+      return typeof r.days === "number" ? `Lleva ${dias(r.days)} o más sin venir` : "Días sin venir (sin configurar)";
+    case "visits_gte":
+      return typeof r.visits === "number" ? `Tiene al menos ${r.visits} ${r.visits === 1 ? "visita" : "visitas"}` : "Visitas acumuladas (sin configurar)";
     case "stamps_gte":
       return typeof r.stamps === "number" ? `Su tarjeta tiene al menos ${r.stamps} ${r.stamps === 1 ? "sello" : "sellos"}` : "Sellos de la tarjeta (sin configurar)";
     case "stamps_remaining_lte":

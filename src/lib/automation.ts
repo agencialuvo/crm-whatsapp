@@ -203,6 +203,10 @@ export function bookingGuard(triggerType: string, booking: { status: string } | 
   if (triggerType === "booking_no_show") {
     return booking.status === "no_show" ? null : "booking_no_longer_no_show";
   }
+  // «Cita realizada»: la cita acaba de cerrarse como realizada. Si se reabrió o se canceló después, ya no aplica.
+  if (triggerType === "booking_completed") {
+    return booking.status === "realizada" ? null : "booking_no_longer_completed";
+  }
   return booking.status === "agendada" ? null : "booking_not_active";
 }
 
@@ -235,6 +239,11 @@ export const CONDITION_RULE_TYPES = [
   // Paso 2: cumpleaños, asistencia y fidelización.
   "has_upcoming_booking",
   "visited_within_days",
+  // Citas, más completas: confirmada y futura (en cualquier flujo), días hasta la próxima, tiempo sin venir y visitas.
+  "has_confirmed_upcoming_booking",
+  "upcoming_booking_days_lte",
+  "inactive_for_days_gte",
+  "visits_gte",
   "stamps_gte",
   // Fidelización multi-hito: cuánto falta para el próximo premio y un rango de sellos.
   "stamps_remaining_lte",
@@ -337,6 +346,8 @@ export type SetVarConfig = z.infer<typeof setVarConfigSchema>;
 /** Topes de las reglas con número: 10 años de historia; 1000 sellos (más de lo que cualquier tarjeta pide). */
 export const CONDITION_MAX_DAYS = 3650;
 export const CONDITION_MAX_STAMPS = 1000;
+/** Tope de visitas acumuladas que una regla puede pedir. */
+export const CONDITION_MAX_VISITS = 10_000;
 
 export const conditionRuleSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("tag_has"), tagId: entityId }),
@@ -347,6 +358,14 @@ export const conditionRuleSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("has_upcoming_booking") }),
   /** Tuvo una cita REALIZADA en los últimos `days` días (con el «No»: no vino o hace mucho que no viene). */
   z.object({ type: z.literal("visited_within_days"), days: z.number().int().min(1).max(CONDITION_MAX_DAYS) }),
+  /** Tiene una cita agendada, futura y CONFIRMADA (a diferencia de `booking_confirmed`, vale en cualquier flujo). */
+  z.object({ type: z.literal("has_confirmed_upcoming_booking") }),
+  /** Su próxima cita agendada es dentro de `days` días o menos (0 = hoy; días de calendario del negocio). Sin próxima cita, no se cumple. */
+  z.object({ type: z.literal("upcoming_booking_days_lte"), days: z.number().int().min(0).max(CONDITION_MAX_DAYS) }),
+  /** Su última cita REALIZADA fue hace `days` días o más. Quien nunca vino NO cumple (con `visited_within_days` + «No» se cubre). */
+  z.object({ type: z.literal("inactive_for_days_gte"), days: z.number().int().min(1).max(CONDITION_MAX_DAYS) }),
+  /** Tiene al menos `visits` citas realizadas acumuladas. */
+  z.object({ type: z.literal("visits_gte"), visits: z.number().int().min(1).max(CONDITION_MAX_VISITS) }),
   /** Su tarjeta de fidelidad tiene al menos `stamps` sellos hoy. */
   z.object({ type: z.literal("stamps_gte"), stamps: z.number().int().min(1).max(CONDITION_MAX_STAMPS) }),
   /** Le faltan como máximo `stamps` sellos para su próximo premio (sin próximo premio, no se cumple). */
@@ -474,6 +493,12 @@ export type ConditionFacts = {
    * su última cita realizada (`null` = nunca vino); sellos actuales de su tarjeta; y si hoy es su cumpleaños.
    */
   hasUpcomingBooking?: boolean;
+  /** Tiene una cita agendada, futura y confirmada. */
+  hasConfirmedUpcomingBooking?: boolean;
+  /** Días de calendario (zona del negocio) hasta su próxima cita agendada; `null`/ausente = no tiene. */
+  daysToNextBooking?: number | null;
+  /** Citas realizadas acumuladas. */
+  visitCount?: number;
   daysSinceLastVisit?: number | null;
   stamps?: number;
   /** Sellos que le faltan para su próximo premio (`null` = ya los alcanzó todos o no hay programa). */
@@ -586,6 +611,15 @@ export function evaluateCondition(rule: ConditionRule, facts: ConditionFacts): C
     case "visited_within_days":
       // `null`/ausente: nunca vino, así que no vino «en los últimos N días».
       return { result: typeof facts.daysSinceLastVisit === "number" && facts.daysSinceLastVisit <= rule.days };
+    case "has_confirmed_upcoming_booking":
+      return { result: !!facts.hasConfirmedUpcomingBooking };
+    case "upcoming_booking_days_lte":
+      return { result: typeof facts.daysToNextBooking === "number" && facts.daysToNextBooking <= rule.days };
+    case "inactive_for_days_gte":
+      // Sin visitas previas (`null`/ausente) no hay «tiempo sin venir» que medir: no se cumple.
+      return { result: typeof facts.daysSinceLastVisit === "number" && facts.daysSinceLastVisit >= rule.days };
+    case "visits_gte":
+      return { result: (facts.visitCount ?? 0) >= rule.visits };
     case "stamps_gte":
       return { result: (facts.stamps ?? 0) >= rule.stamps };
     case "stamps_remaining_lte":
@@ -615,6 +649,13 @@ export function evaluateSwitch(cases: readonly SwitchCase[], facts: ConditionFac
 }
 
 /** Los días enteros entre una fecha pasada y ahora (nunca negativo): el «hace cuántos días» de `visited_within_days`. */
+/** Los días de calendario entre dos fechas `AAAA-MM-DD` (`to` − `from`): 0 = el mismo día; negativo si `to` es anterior. */
+export function calendarDaysBetween(fromISO: string, toISO: string): number {
+  const a = splitISODate(fromISO);
+  const b = splitISODate(toISO);
+  return Math.round((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86_400_000);
+}
+
 export function wholeDaysSince(past: Date, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - past.getTime()) / 86_400_000));
 }
@@ -680,6 +721,8 @@ export function renderVars(
     vars?: RunVars | null;
     /** `context.loyalty` de un flujo `loyalty_reward_unlocked` (ver `readLoyaltyContext`); sin él, esas variables salen vacías. */
     loyalty?: LoyaltyRunContext | null;
+    /** `context.sale` de un flujo `sale_completed` (ver `readSaleContext`); sin él, `{{monto}}` sale vacío. */
+    sale?: SaleRunContext | null;
   }
 ): string {
   return text
@@ -690,6 +733,8 @@ export function renderVars(
       if (key === "hora") return vars.hora?.trim() || "";
       if (key === "servicio") return vars.servicio?.trim() || "";
       // Fidelidad: el premio y el hito que activó el flujo. Fuera de un flujo de premio quedan vacías (nunca «undefined»).
+      // Venta cobrada: el monto, sin símbolo de moneda («1250» o «1250.50»); quien escribe el mensaje pone el suyo.
+      if (key === "monto") return vars.sale ? formatSaleAmount(vars.sale.amountCents) : "";
       if (key === "premio") return vars.loyalty?.title?.trim() || "";
       if (key === "descuento") return vars.loyalty?.discountPercentage != null ? String(vars.loyalty.discountPercentage) : "";
       // Disparador de cada sello: cuánto falta y cuál es el próximo premio (vacías en un flujo de premio o de otro tipo).
@@ -708,6 +753,40 @@ export function renderVars(
     })
     .replace(/[ 	]{2,}/g, " ")
     .trim();
+}
+
+/* ─── Venta cobrada en el contexto de la ejecución ─── */
+
+/** Lo que el disparador `sale_completed` deja en `automation_run.context.sale`. */
+export type SaleRunContext = {
+  saleId: string;
+  amountCents: number;
+  paymentMethod: string | null;
+  /** Lo vendido, en una frase («Corte + Barba»). */
+  itemName: string | null;
+  /** La cita que se cobró, si la venta nació de una. */
+  bookingId: string | null;
+};
+
+/** `context.sale` de una ejecución, o `null` si no nació de una venta. Ignora lo que no tenga la forma esperada. */
+export function readSaleContext(ctx: Record<string, unknown> | null | undefined): SaleRunContext | null {
+  const raw = ctx?.sale;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.saleId !== "string" || typeof o.amountCents !== "number" || !Number.isFinite(o.amountCents)) return null;
+  return {
+    saleId: o.saleId,
+    amountCents: o.amountCents,
+    paymentMethod: typeof o.paymentMethod === "string" ? o.paymentMethod : null,
+    itemName: typeof o.itemName === "string" ? o.itemName : null,
+    bookingId: typeof o.bookingId === "string" ? o.bookingId : null,
+  };
+}
+
+/** Centavos como número legible: 125000 → «1250», 125050 → «1250.50». */
+export function formatSaleAmount(amountCents: number): string {
+  const units = amountCents / 100;
+  return Number.isInteger(units) ? String(units) : units.toFixed(2);
 }
 
 /* ─── Fidelidad en el contexto de la ejecución ─── */
@@ -944,6 +1023,10 @@ export const bookingConfirmedDedupeKey = (bookingId: string, scheduledAt: Date) 
   `booking_confirmed:${bookingId}:${scheduledAt.getTime()}`;
 /** Una vez por cita. */
 export const bookingNoShowDedupeKey = (bookingId: string) => `booking_no_show:${bookingId}`;
+/** Una vez por cita: marcarla «realizada» dos veces (o cobrarla después de marcarla) no repite el flujo. */
+export const bookingCompletedDedupeKey = (bookingId: string) => `booking_completed:${bookingId}`;
+/** Una vez por venta (`service_sale.id`). */
+export const saleCompletedDedupeKey = (saleId: string) => `sale_completed:${saleId}`;
 
 /**
  * `trigger_config` de un flujo `ad_referral` (047): a qué reacciona. Exactamente uno de `sourceId` (un anuncio),

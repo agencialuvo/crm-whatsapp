@@ -1,5 +1,5 @@
-import { desc, eq, gt, lte } from "drizzle-orm";
-import { birthdaysDueOn, wholeDaysSince, type ConditionFacts } from "@/lib/automation";
+import { asc, count, desc, eq, gt, isNotNull, lte } from "drizzle-orm";
+import { birthdaysDueOn, calendarDaysBetween, wholeDaysSince, type ConditionFacts } from "@/lib/automation";
 import { stampsToNextMilestone as stampsToNext } from "@/lib/loyalty";
 import { todayInTz } from "@/lib/time/slots";
 import { businessTimezone } from "@/server/analytics/period";
@@ -80,7 +80,21 @@ export async function contactFacts(
   organizationId: string,
   contactId: string,
   now: Date = new Date()
-): Promise<Pick<ConditionFacts, "tagIds" | "stageId" | "hasUpcomingBooking" | "daysSinceLastVisit" | "stamps" | "stampsToNextMilestone" | "birthdayToday">> {
+): Promise<
+  Pick<
+    ConditionFacts,
+    | "tagIds"
+    | "stageId"
+    | "hasUpcomingBooking"
+    | "hasConfirmedUpcomingBooking"
+    | "daysToNextBooking"
+    | "visitCount"
+    | "daysSinceLastVisit"
+    | "stamps"
+    | "stampsToNextMilestone"
+    | "birthdayToday"
+  >
+> {
   const db = getDb();
   const l = schema.lead;
   const b = schema.booking;
@@ -90,10 +104,15 @@ export async function contactFacts(
   const real = (...extra: Parameters<typeof scoped>[2][]) =>
     scoped(b.organizationId, organizationId, eq(b.contactId, contactId), eq(b.kind, "session"), eq(b.isTest, false), ...extra);
 
-  const [lead, tagIds, upcoming, lastVisit, stampsRow, person, timezone, program] = await Promise.all([
+  const [lead, tagIds, upcoming, confirmedUpcoming, visits, lastVisit, stampsRow, person, timezone, program] = await Promise.all([
     db.select({ stageId: l.stageId }).from(l).where(scoped(l.organizationId, organizationId, eq(l.contactId, contactId))).limit(1),
     tagIdsOfContact(organizationId, contactId),
-    db.select({ id: b.id }).from(b).where(real(eq(b.status, "agendada"), gt(b.scheduledAt, now))).limit(1),
+    // La próxima cita agendada (la más cercana): de ella salen «tiene cita próxima» y «en cuántos días».
+    db.select({ at: b.scheduledAt }).from(b).where(real(eq(b.status, "agendada"), gt(b.scheduledAt, now))).orderBy(asc(b.scheduledAt)).limit(1),
+    // Alguna cita futura ya confirmada (no tiene por qué ser la más cercana).
+    db.select({ id: b.id }).from(b).where(real(eq(b.status, "agendada"), gt(b.scheduledAt, now), isNotNull(b.confirmedAt))).limit(1),
+    // Visitas acumuladas: las mismas citas que cuenta `visited_within_days` (realizadas, ya pasadas).
+    db.select({ n: count() }).from(b).where(real(eq(b.status, "realizada"), lte(b.scheduledAt, now))),
     db
       .select({ at: b.scheduledAt })
       .from(b)
@@ -125,6 +144,10 @@ export async function contactFacts(
     tagIds,
     stageId: lead[0]?.stageId ?? null,
     hasUpcomingBooking: upcoming.length > 0,
+    hasConfirmedUpcomingBooking: confirmedUpcoming.length > 0,
+    // Días de calendario del NEGOCIO (hoy = 0): una cita de mañana a las 00:30 es «1» aunque falten menos de 24 h.
+    daysToNextBooking: upcoming[0] ? Math.max(0, calendarDaysBetween(today, todayInTz(upcoming[0].at, timezone))) : null,
+    visitCount: Number(visits[0]?.n ?? 0),
     daysSinceLastVisit: lastVisit[0] ? wholeDaysSince(lastVisit[0].at, now) : null,
     stamps: stampsRow[0]?.stamps ?? 0,
     stampsToNextMilestone: stampsToNext(program[0]?.milestones ?? [], stampsRow[0]?.stamps ?? 0),

@@ -25,6 +25,8 @@ import {
   Variable,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { RoleChip } from "@/components/automatizaciones/canvas/role-chip";
+import { toneOfStepType } from "@/lib/automation-canvas";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
@@ -330,6 +332,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
           <div className="min-w-0">
             <h3 className="break-words text-lg font-bold tracking-tight">{flow.name}</h3>
             <div className="mt-2 flex flex-wrap items-center gap-2">
+              <RoleChip tone="trigger" />
               <Badge variant="secondary">{triggerLabel(flow.triggerType)}</Badge>
               <span className="text-sm text-text-2">{flow.triggerSummary ?? describeTrigger(flow.triggerType, flow.triggerConfig, stages, null, tags)}</span>
             </div>
@@ -528,6 +531,7 @@ export function FlowDetailClient({ flowId }: { flowId: string }) {
                       <p className="flex items-center gap-2 font-medium">
                         <Icon className="h-4 w-4 shrink-0 text-text-3" aria-hidden />
                         <span className="break-words">{title}</span>
+                        {!unsupported && <RoleChip tone={toneOfStepType(step.stepType)} />}
                       </p>
                       {detail && <p className="mt-1 break-words text-sm text-text-2">{detail}</p>}
                     </div>

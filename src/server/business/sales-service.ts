@@ -30,6 +30,7 @@ import { dayIsoInTz, zonedWallClockToUtc } from "@/lib/time/slots";
 import { businessTimezone, type ResolvedPeriod } from "@/server/analytics/period";
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
 import { catalogStaffMaps, staffGivesItem } from "@/server/business/catalog-staff";
+import { onBookingCompleted, onSaleCompleted } from "@/server/automation/triggers";
 import { publish } from "@/server/events/bus";
 import { advanceLeadForContact } from "@/server/leads/auto-stage";
 import {
@@ -318,6 +319,8 @@ export async function registerServiceSale(
 
   // Premios que el sello de esta venta desbloquea: se avisan a las automatizaciones DESPUÉS del commit.
   let unlockedByStamp: RegisterLoyaltyTransactionResult | null = null;
+  // La cita que ESTE cobro pasó a «realizada» (null si no había cita o ya no estaba agendada): se avisa tras el commit.
+  let completedBooking: { id: string; contactId: string | null; scheduledAt: Date } | null = null;
   const result = await db.transaction(async (tx) => {
     // Sin `staffId` la venta es del negocio (sin comisión). Con `staffId`, el profesional debe existir y estar activo.
     let member: StaffRow | null = null;
@@ -363,6 +366,7 @@ export async function registerServiceSale(
     // Laboratorio), una sesión y no cancelada. Si trae contacto y no se pasó
     // otro, el cliente es el de la cita.
     let contactId = input.contactId ?? null;
+    let bookingRow: { id: string; contactId: string | null; scheduledAt: Date } | null = null;
     if (input.bookingId) {
       const [bk] = await tx
         .select()
@@ -383,6 +387,7 @@ export async function registerServiceSale(
         throw new SalonError("booking_not_chargeable", 409, "Esa cita no se puede cobrar.");
       }
       contactId = contactId ?? bk.contactId;
+      bookingRow = { id: bk.id, contactId: bk.contactId, scheduledAt: bk.scheduledAt };
     }
 
     let customerName = input.customerName?.trim() || "";
@@ -597,7 +602,7 @@ export async function registerServiceSale(
     }
 
     if (input.bookingId) {
-      await tx
+      const closed = await tx
         .update(schema.booking)
         .set({ status: "realizada", updatedAt: new Date() })
         .where(
@@ -607,7 +612,10 @@ export async function registerServiceSale(
             eq(schema.booking.id, input.bookingId),
             eq(schema.booking.status, "agendada")
           )
-        );
+        )
+        .returning({ id: schema.booking.id });
+      // Solo si ESTE cobro la cerró (una cita ya «realizada» no vuelve a disparar nada).
+      if (closed.length > 0 && bookingRow) completedBooking = bookingRow;
     }
 
     const sale: SaleRowDto = {
@@ -635,6 +643,27 @@ export async function registerServiceSale(
 
   // Ya con la venta confirmada: un premio desbloqueado por su sello puede arrancar un flujo (`loyalty_reward_unlocked`).
   if (unlockedByStamp) await announceLoyaltyUnlock(unlockedByStamp);
+
+  // Automatizaciones (nunca lanzan, todas tras el commit): la cita que este cobro cerró arranca «Cita realizada» y la venta
+  // arranca «Venta cobrada», con o sin tarjeta de fidelidad. Cada una tiene su llave de idempotencia (por cita / por venta).
+  const closedBooking = completedBooking as { id: string; contactId: string | null; scheduledAt: Date } | null;
+  if (closedBooking) {
+    await onBookingCompleted({
+      organizationId,
+      bookingId: closedBooking.id,
+      contactId: closedBooking.contactId,
+      scheduledAt: closedBooking.scheduledAt,
+    });
+  }
+  await onSaleCompleted({
+    organizationId,
+    saleId: result.sale.id,
+    contactId: result.sale.contactId,
+    amountCents: result.sale.amountCents,
+    paymentMethod: result.sale.paymentMethod,
+    itemName: result.sale.itemName,
+    bookingId: result.sale.bookingId,
+  });
 
   // 044: una venta vinculada al contacto lo lleva a «Cliente» (incluso un salto directo desde «Nuevo» si el
   // pago es inmediato). Si el contacto no tiene lead, no se crea uno. Si el lead no tenía monto, toma el de la venta.

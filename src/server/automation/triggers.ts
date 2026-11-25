@@ -1,4 +1,6 @@
 import {
+  bookingCompletedDedupeKey,
+  saleCompletedDedupeKey,
   bookingConfirmedDedupeKey,
   bookingCreatedDedupeKey,
   bookingNoShowDedupeKey,
@@ -316,7 +318,7 @@ export type BookingEvent = {
 /** Emite el evento de cita: arranca cada flujo de ese disparador, anclado a la cita. */
 async function enqueueBookingFlows(
   input: BookingEvent,
-  triggerType: "booking_created" | "booking_confirmed" | "booking_no_show",
+  triggerType: "booking_created" | "booking_confirmed" | "booking_no_show" | "booking_completed",
   dedupeKey: string,
   store: TriggerStore,
   now: () => Date
@@ -391,6 +393,83 @@ export async function onBookingNoShow(
     return await enqueueBookingFlows(input, "booking_no_show", bookingNoShowDedupeKey(input.bookingId), store, now);
   } catch (err) {
     console.error("[automatizaciones] el disparador de no-show falló:", err);
+    return 0;
+  }
+}
+
+/**
+ * La cita se cerró como REALIZADA (marcada en la Agenda o cobrada en Caja): lo que quedaba pendiente de esa cita (los
+ * recordatorios) ya no tiene sentido y se cancela —menos las tareas de los propios flujos `booking_completed`—, y arranca cada
+ * flujo `booking_completed` activo, una sola vez por cita. DEBE llamarse DESPUÉS del commit. Nunca lanza.
+ */
+export async function onBookingCompleted(
+  input: BookingEvent,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled()) return 0;
+  try {
+    await store.cancelPendingForBooking(input.organizationId, input.bookingId, "booking_completed", {
+      exceptTrigger: "booking_completed",
+    });
+    return await enqueueBookingFlows(input, "booking_completed", bookingCompletedDedupeKey(input.bookingId), store, now);
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de cita realizada falló:", err);
+    return 0;
+  }
+}
+
+/** Una venta cobrada: lo que se sabe de ella (viaja en `context.sale` de la ejecución). */
+export type SaleCompletedInput = {
+  organizationId: string;
+  saleId: string;
+  /** Sin cliente identificado («Cliente de mostrador») no hay a quién escribirle: no dispara nada. */
+  contactId: string | null;
+  amountCents: number;
+  paymentMethod: string | null;
+  /** Lo vendido, en una frase. */
+  itemName: string | null;
+  /** La cita que se cobró, si la venta nació de una. */
+  bookingId: string | null;
+};
+
+/**
+ * Se cobró una venta en Caja (con o sin tarjeta de fidelidad, cruce o no un premio). DEBE llamarse DESPUÉS del commit de la
+ * venta (el mensaje no puede salir por un cobro que luego se deshace). Arranca cada flujo `sale_completed` activo, una sola vez
+ * por venta. A propósito NO lleva `bookingId` en la ejecución: la cita ya está «realizada» y la guardia de citas la descartaría;
+ * el id viaja en `context.sale`. `serviceName` alimenta `{{servicio}}`. Nunca lanza.
+ */
+export async function onSaleCompleted(
+  input: SaleCompletedInput,
+  store: TriggerStore = dbTriggerStore,
+  enabled: () => boolean = automationsEnabled,
+  now: () => Date = () => new Date()
+): Promise<number> {
+  if (!enabled() || !input.contactId) return 0;
+  try {
+    return await emitAutomationEvent(
+      {
+        organizationId: input.organizationId,
+        trigger: "sale_completed",
+        contactId: input.contactId,
+        dedupeKey: saleCompletedDedupeKey(input.saleId),
+        context: {
+          ...(input.itemName ? { serviceName: input.itemName } : {}),
+          sale: {
+            saleId: input.saleId,
+            amountCents: input.amountCents,
+            paymentMethod: input.paymentMethod,
+            itemName: input.itemName,
+            bookingId: input.bookingId,
+          },
+        },
+      },
+      store,
+      now
+    );
+  } catch (err) {
+    console.error("[automatizaciones] el disparador de venta cobrada falló:", err);
     return 0;
   }
 }

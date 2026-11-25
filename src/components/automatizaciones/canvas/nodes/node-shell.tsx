@@ -5,6 +5,7 @@ import { Handle, Position } from "@xyflow/react";
 import { AlertTriangle, type LucideIcon } from "lucide-react";
 import type { NodeIssues, NodeTone } from "@/lib/automation-canvas";
 import { TONE_STYLES } from "../node-icons";
+import { RoleChip } from "../role-chip";
 import { cn } from "@/lib/utils";
 import type { EdgeHandle } from "@/lib/automation";
 
@@ -60,6 +61,7 @@ export function NodeShell({
       <div className={cn("flex items-center gap-2 rounded-t-md px-3 py-2", TONE_STYLES[tone].head)}>
         <Icon className="h-4 w-4 shrink-0" strokeWidth={1.8} aria-hidden />
         <p className="min-w-0 flex-1 truncate text-[13px] font-semibold">{title}</p>
+        <RoleChip tone={tone} plain />
         {(errors > 0 || warnings > 0) && (
           <span
             title={[...(issues?.errors ?? []), ...(issues?.warnings ?? [])].join("\n")}

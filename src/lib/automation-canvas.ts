@@ -7,7 +7,7 @@ import {
   type GraphViewport,
   type Pos,
 } from "@/lib/automation-graph";
-import { CREATABLE_TRIGGERS } from "@/lib/automation-dto";
+import { CREATABLE_TRIGGERS, stepLabel } from "@/lib/automation-dto";
 import { STEP_TYPES, parseStepConfig, type FlowTriggerType, type StepType } from "@/lib/automation-schemas";
 
 /**
@@ -67,6 +67,8 @@ export type IconName =
   | "Megaphone"
   | "CalendarPlus"
   | "CalendarCheck"
+  | "CalendarCheck2"
+  | "Receipt"
   | "CalendarX"
   | "Cake"
   | "Gift"
@@ -96,6 +98,8 @@ export const TRIGGER_META: Record<(typeof CREATABLE_TRIGGERS)[number], BlockMeta
   booking_created: { group: "Citas", tone: "trigger", icon: "CalendarPlus" },
   booking_confirmed: { group: "Citas", tone: "trigger", icon: "CalendarCheck" },
   booking_no_show: { group: "Citas", tone: "trigger", icon: "CalendarX" },
+  booking_completed: { group: "Citas", tone: "trigger", icon: "CalendarCheck2" },
+  sale_completed: { group: "Ventas", tone: "trigger", icon: "Receipt" },
   birthday: { group: "Fechas", tone: "trigger", icon: "Cake" },
   tag_added: { group: "Contactos y pipeline", tone: "trigger", icon: "Tag" },
   loyalty_reward_unlocked: { group: "Fidelización", tone: "trigger", icon: "Gift" },
@@ -248,7 +252,8 @@ export function defaultTriggerConfig(triggerType: string): Record<string, unknow
 
 /* ─── La paleta ─── */
 
-export type PaletteCategory = "triggers" | "logic" | "actions";
+/** Cuatro roles, en el orden en que se piensa un flujo: qué lo inicia, qué consulta y decide, qué espera, qué hace. */
+export type PaletteCategory = "triggers" | "decide" | "wait" | "actions";
 export type PaletteItem = {
   /** Estable: sirve de llave y viaja en el arrastre. */
   id: string;
@@ -269,10 +274,34 @@ export type PaletteItem = {
 };
 
 export const PALETTE_CATEGORY_LABELS: Record<PaletteCategory, string> = {
-  triggers: "Disparadores",
-  logic: "Lógica y esperas",
-  actions: "Acciones",
+  triggers: "Inicia el flujo",
+  decide: "Consulta y decide",
+  wait: "Espera",
+  actions: "Actúa",
 };
+
+/** Una frase por categoría, bajo su encabezado en la paleta: qué hace ese tipo de bloque. */
+export const PALETTE_CATEGORY_HINTS: Record<PaletteCategory, string> = {
+  triggers: "Lo que activa el flujo. Cada flujo tiene uno solo.",
+  decide: "Mira al contacto o sus datos y elige el camino.",
+  wait: "Pausa hasta un momento o una respuesta.",
+  actions: "Hace algo: manda un mensaje, etiqueta, mueve, avisa.",
+};
+
+/**
+ * El rol de un bloque en una palabra, para su tarjeta (lienzo y lista). Sale del tono —ya único por rol—: los mensajes y las
+ * acciones de CRM son los dos «Actúa».
+ */
+export const ROLE_LABELS: Record<NodeTone, string> = {
+  trigger: "Inicia",
+  condition: "Decide",
+  wait: "Espera",
+  message: "Actúa",
+  crm: "Actúa",
+};
+
+/** El tono de un tipo de paso (`crm` si no se conoce: un paso que el catálogo no tiene se ve neutro). */
+export const toneOfStepType = (stepType: string): NodeTone => (STEP_META as Record<string, BlockMeta>)[stepType]?.tone ?? "crm";
 
 const TRIGGER_ITEMS: Record<(typeof CREATABLE_TRIGGERS)[number], { label: string; hint: string }> = {
   lead_created: { label: "Lead nuevo", hint: "Cuando entra un lead nuevo" },
@@ -281,6 +310,8 @@ const TRIGGER_ITEMS: Record<(typeof CREATABLE_TRIGGERS)[number], { label: string
   booking_created: { label: "Cita agendada", hint: "Al agendar (o reprogramar) una cita" },
   booking_confirmed: { label: "Cita confirmada", hint: "Al confirmar la asistencia" },
   booking_no_show: { label: "No asistió", hint: "Cuando se marca «No asistió»" },
+  booking_completed: { label: "Cita realizada", hint: "Cuando la cita se marca como realizada o se cobra en Caja" },
+  sale_completed: { label: "Venta cobrada", hint: "Cuando se cobra una venta en Caja" },
   birthday: { label: "Cumpleaños", hint: "El día del cumpleaños del cliente" },
   tag_added: { label: "Etiqueta asignada", hint: "Cuando se le asigna una etiqueta a un contacto" },
   loyalty_reward_unlocked: { label: "Premio de fidelidad", hint: "Cuando un cliente completa los sellos de un premio" },
@@ -288,7 +319,10 @@ const TRIGGER_ITEMS: Record<(typeof CREATABLE_TRIGGERS)[number], { label: string
   manual: { label: "Manual", hint: "Lo inicias tú, para un contacto" },
 };
 
-/** El orden en que se ofrecen los disparadores. */
+/**
+ * El orden en que se ofrecen los disparadores: por subgrupo (cada uno junto) y, dentro de él, en el orden en que ocurren las
+ * cosas: se agenda, se confirma, se realiza (o no asiste); se cobra; gana un sello, llega al premio.
+ */
 const TRIGGER_ORDER: (keyof typeof TRIGGER_ITEMS)[] = [
   "lead_created",
   "stage_changed",
@@ -296,10 +330,12 @@ const TRIGGER_ORDER: (keyof typeof TRIGGER_ITEMS)[] = [
   "ad_referral",
   "booking_created",
   "booking_confirmed",
+  "booking_completed",
   "booking_no_show",
-  "birthday",
-  "loyalty_reward_unlocked",
+  "sale_completed",
   "loyalty_stamp_earned",
+  "loyalty_reward_unlocked",
+  "birthday",
   "manual",
 ];
 
@@ -320,28 +356,45 @@ export const PALETTE: PaletteItem[] = [
     ...TRIGGER_ITEMS[t],
     ...TRIGGER_META[t],
   })),
-  stepItem("condition", "logic", "Condición (Sí / No)", "Decide por qué camino sigue el flujo"),
-  stepItem("switch", "logic", "Switch (varias salidas)", "Elige entre varios caminos según el contacto o una variable"),
-  stepItem("delay", "logic", "Esperar tiempo", "Una pausa de segundos a días, con hora de envío opcional"),
-  stepItem("wait_until", "logic", "Esperar hasta la cita", "Antes o después de la hora de la cita", { needsBooking: true }),
-  stepItem("wait_reply", "logic", "Esperar respuesta", "Pausa hasta que el cliente conteste"),
-  stepItem("set_var", "logic", "Establecer variable", "Guarda un dato para que lo lean los pasos siguientes"),
-  stepItem("code_js", "logic", "Código JavaScript", "Transforma datos con un script aislado (sin red ni acceso a datos)"),
+  stepItem("condition", "decide", "Condición (Sí / No)", "Mira al contacto y decide: sigue por «Sí» o por «No»"),
+  stepItem("switch", "decide", "Switch (varias salidas)", "Elige entre varios caminos según el contacto o una variable"),
+  stepItem("delay", "wait", "Esperar tiempo", "Una pausa de segundos a días, con hora de envío opcional"),
+  stepItem("wait_until", "wait", "Esperar hasta la cita", "Antes o después de la hora de la cita", { needsBooking: true }),
+  stepItem("wait_reply", "wait", "Esperar respuesta", "Pausa hasta que el cliente conteste"),
   stepItem("send_whatsapp", "actions", "Enviar WhatsApp", "Texto libre o plantilla aprobada"),
   stepItem("send_media", "actions", "Enviar multimedia", "Imagen o video de tu biblioteca"),
   stepItem("add_tag", "actions", "Asignar etiqueta", "Marca al contacto"),
   stepItem("remove_tag", "actions", "Quitar etiqueta", "Desmarca al contacto"),
   stepItem("set_stage", "actions", "Cambiar etapa", "Mueve al lead en el pipeline"),
   stepItem("human_handoff", "actions", "Pasar a una persona", "Apaga la IA y avisa al equipo en la bandeja"),
+  stepItem("set_var", "actions", "Establecer variable", "Guarda un dato para que lo lean los pasos siguientes"),
+  stepItem("code_js", "actions", "Código JavaScript", "Transforma datos con un script aislado (sin red ni acceso a datos)"),
 ];
 
-/** ¿Un texto de búsqueda encaja con el bloque? Sin acentos ni mayúsculas, contra nombre, ayuda y subgrupo. */
-export function paletteMatches(item: Pick<PaletteItem, "label" | "hint" | "group">, query: string): boolean {
+/**
+ * ¿Un texto de búsqueda encaja con el bloque? Sin acentos ni mayúsculas, contra nombre, ayuda, subgrupo y —si se da— su rol
+ * («espera», «decide», «actúa», «inicia»), así que escribir el rol enseña todos los bloques de ese rol.
+ */
+export function paletteMatches(item: Pick<PaletteItem, "label" | "hint" | "group"> & { category?: PaletteCategory }, query: string): boolean {
   const norm = (t: string) => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const q = norm(query).trim();
   if (!q) return true;
-  const hay = norm(`${item.label} ${item.hint} ${item.group}`);
+  const hay = norm(`${item.label} ${item.hint} ${item.group} ${item.category ? PALETTE_CATEGORY_LABELS[item.category] : ""}`);
   return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+/** El orden en que el selector «Tipo de paso» del Modo Simple ofrece los roles: primero lo que más se usa (mensajes y acciones). */
+const STEP_CHOICE_ORDER: PaletteCategory[] = ["actions", "wait", "decide"];
+
+/**
+ * Los tipos de paso agrupados por rol, para el desplegable del Modo Simple: `{ value, label, group }` con los de un mismo grupo
+ * juntos. Sale de la paleta, así que un paso nuevo aparece aquí sin tocar nada más.
+ */
+export function stepTypeChoices(): { value: StepType; label: string; group: string }[] {
+  const steps = PALETTE.filter((i) => i.kind === "step" && i.stepType && !i.soon);
+  return STEP_CHOICE_ORDER.flatMap((cat) =>
+    steps.filter((i) => i.category === cat).map((i) => ({ value: i.stepType!, label: stepLabel(i.stepType!), group: PALETTE_CATEGORY_LABELS[cat] }))
+  );
 }
 
 

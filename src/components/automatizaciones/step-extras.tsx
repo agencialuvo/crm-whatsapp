@@ -6,8 +6,8 @@ import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/negocio/fields";
-import { CONDITION_RULE_LABELS } from "@/lib/automation-dto";
-import { CODE_JS_MAX_CHARS, CONDITION_RULE_TYPES, SWITCH_MAX_CASES } from "@/lib/automation";
+import { conditionRuleOptions } from "@/lib/automation-dto";
+import { CODE_JS_MAX_CHARS, SWITCH_MAX_CASES } from "@/lib/automation";
 import { newCaseId } from "@/lib/automation-canvas";
 
 /**
@@ -168,6 +168,8 @@ export type CaseForm = {
   tagId: string;
   stageId: string;
   days: string;
+  /** `visits_gte`: visitas acumuladas. */
+  visits: string;
   stamps: string;
   /** `stamps_between`: el rango (ambos incluidos). */
   min: string;
@@ -183,6 +185,7 @@ const emptyCase = (existing: readonly string[], n: number): CaseForm => ({
   tagId: "",
   stageId: "",
   days: "30",
+  visits: "5",
   stamps: "5",
   min: "1",
   max: "4",
@@ -206,6 +209,7 @@ export function casesFromConfig(raw: unknown): CaseForm[] {
       tagId: typeof rule.tagId === "string" ? rule.tagId : "",
       stageId: typeof rule.stageId === "string" ? rule.stageId : "",
       days: typeof rule.days === "number" ? String(rule.days) : "30",
+      visits: typeof rule.visits === "number" ? String(rule.visits) : "5",
       stamps: typeof rule.stamps === "number" ? String(rule.stamps) : "5",
       min: typeof rule.min === "number" ? String(rule.min) : "1",
       max: typeof rule.max === "number" ? String(rule.max) : "4",
@@ -220,12 +224,17 @@ export function ruleFromCase(k: CaseForm): Record<string, unknown> {
   switch (k.type) {
     case "booking_confirmed":
     case "has_upcoming_booking":
+    case "has_confirmed_upcoming_booking":
     case "birthday_today":
       return { type: k.type };
     case "stage_is":
       return { type: k.type, stageId: k.stageId };
     case "visited_within_days":
+    case "upcoming_booking_days_lte":
+    case "inactive_for_days_gte":
       return { type: k.type, days: toNumber(k.days) };
+    case "visits_gte":
+      return { type: k.type, visits: toNumber(k.visits) };
     case "stamps_gte":
     case "stamps_remaining_lte":
     case "loyalty_milestone_is":
@@ -272,10 +281,6 @@ export function SwitchFields({
   disabled?: boolean;
 }) {
   const patch = (i: number, p: Partial<CaseForm>) => onChange(cases.map((k, j) => (j === i ? { ...k, ...p } : k)));
-  const rules: SearchSelectOption[] = CONDITION_RULE_TYPES.filter((r) => isBookingFlow || r !== "booking_confirmed").map((r) => ({
-    value: r,
-    label: CONDITION_RULE_LABELS[r],
-  }));
 
   return (
     <>
@@ -313,7 +318,7 @@ export function SwitchFields({
                 id={`case-${k.id}-rule`}
                 value={k.type}
                 onChange={(v) => patch(i, { type: v })}
-                options={rules}
+                options={conditionRuleOptions(isBookingFlow, k.type)}
                 searchPlaceholder="Buscar regla…"
                 ariaLabel={`Regla del caso ${i + 1}`}
                 disabled={disabled}
@@ -349,9 +354,19 @@ export function SwitchFields({
                 />
               </Field>
             )}
-            {k.type === "visited_within_days" && (
-              <Field label="En los últimos (días)" required htmlFor={`case-${k.id}-days`} error={errors[`case.${i}.days`]}>
+            {(k.type === "visited_within_days" || k.type === "upcoming_booking_days_lte" || k.type === "inactive_for_days_gte") && (
+              <Field
+                label={k.type === "visited_within_days" ? "En los últimos (días)" : k.type === "upcoming_booking_days_lte" ? "Dentro de (días) o menos" : "Sin venir desde hace (días) o más"}
+                required
+                htmlFor={`case-${k.id}-days`}
+                error={errors[`case.${i}.days`]}
+              >
                 <Input id={`case-${k.id}-days`} inputMode="numeric" value={k.days} maxLength={4} disabled={disabled} onChange={(e) => patch(i, { days: e.target.value.replace(/\D/g, "") })} />
+              </Field>
+            )}
+            {k.type === "visits_gte" && (
+              <Field label="Visitas mínimas" required htmlFor={`case-${k.id}-visits`} error={errors[`case.${i}.visits`]}>
+                <Input id={`case-${k.id}-visits`} inputMode="numeric" value={k.visits} maxLength={5} disabled={disabled} onChange={(e) => patch(i, { visits: e.target.value.replace(/\D/g, "") })} />
               </Field>
             )}
             {k.type === "stamps_gte" && (

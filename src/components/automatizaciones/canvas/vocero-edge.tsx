@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 import { Plus, X } from "lucide-react";
-import { PALETTE, canInsertOnEdge } from "@/lib/automation-canvas";
+import { PALETTE, PALETTE_CATEGORY_LABELS, canInsertOnEdge } from "@/lib/automation-canvas";
 import { cn } from "@/lib/utils";
 import { useCanvasEdgeActions } from "./canvas-context";
 import { ICONS, TONE_STYLES } from "./node-icons";
@@ -94,12 +94,15 @@ export function VoceroEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosit
                 onKeyDown={(e) => e.key === "Escape" && setMenu(false)}
                 className="max-h-56 w-52 overflow-y-auto rounded-lg border border-border-strong bg-popover p-1 shadow-pop"
               >
-                {INSERTABLE.map((item) => {
+                {INSERTABLE.map((item, idx) => {
                   const noCode = item.stepType === "code_js" && !codeJsEnabled;
                   const blocked = (!!item.needsBooking && !isBooking) || noCode;
                   const Icon = ICONS[item.icon];
+                  // Un encabezado cuando cambia de rol («Espera», «Actúa»…): el menú se lee por tipo de bloque.
+                  const heading = idx === 0 || INSERTABLE[idx - 1]!.category !== item.category ? PALETTE_CATEGORY_LABELS[item.category] : null;
                   return (
                     <li key={item.id}>
+                      {heading && <p className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-4">{heading}</p>}
                       <button
                         type="button"
                         disabled={blocked}

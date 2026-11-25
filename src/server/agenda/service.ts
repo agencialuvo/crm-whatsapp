@@ -25,6 +25,7 @@ import { ConnectorError } from "@/server/agenda/connectors/types";
 import { advanceLeadForContact } from "@/server/leads/auto-stage";
 import {
   onBookingClosed,
+  onBookingCompleted,
   onBookingConfirmed,
   onBookingCreated,
   onBookingNoShow,
@@ -537,7 +538,14 @@ export async function markBookingStatus(input: {
         isTest: booking.isTest,
       });
     } else {
-      await onBookingClosed({ organizationId: input.organizationId, bookingId: booking.id }, "booking_completed");
+      // «Realizada»: cancela los recordatorios que quedaban y arranca los flujos de «Cita realizada» (una vez por cita).
+      await onBookingCompleted({
+        organizationId: input.organizationId,
+        bookingId: booking.id,
+        contactId: booking.contactId,
+        scheduledAt: booking.scheduledAt,
+        isTest: booking.isTest,
+      });
     }
   }
 }

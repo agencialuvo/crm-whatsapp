@@ -2,11 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import { PALETTE, PALETTE_CATEGORY_LABELS, PALETTE_DRAG_TYPE, paletteMatches, type PaletteCategory, type PaletteItem } from "@/lib/automation-canvas";
+import { PALETTE, PALETTE_CATEGORY_HINTS, PALETTE_CATEGORY_LABELS, PALETTE_DRAG_TYPE, paletteMatches, type PaletteCategory, type PaletteItem } from "@/lib/automation-canvas";
 import { cn } from "@/lib/utils";
 import { ICONS, TONE_STYLES } from "./node-icons";
 
-const CATEGORIES: PaletteCategory[] = ["triggers", "logic", "actions"];
+const CATEGORIES: PaletteCategory[] = ["triggers", "decide", "wait", "actions"];
 
 /** Agrupa (en orden) los bloques de una categoría por su subgrupo. */
 function byGroup(items: PaletteItem[]): { group: string; items: PaletteItem[] }[] {
@@ -72,7 +72,8 @@ export function NodePalette({
         if (items.length === 0) return null;
         return (
           <section key={cat} aria-label={PALETTE_CATEGORY_LABELS[cat]}>
-            <h4 className="kicker mb-1.5 text-text-3">{PALETTE_CATEGORY_LABELS[cat]}</h4>
+            <h4 className="kicker text-text-3">{PALETTE_CATEGORY_LABELS[cat]}</h4>
+            <p className="mb-1.5 text-[10px] text-text-4">{PALETTE_CATEGORY_HINTS[cat]}</p>
             <div className="space-y-2">
               {byGroup(items).map(({ group, items: groupItems }) => (
                 <div key={group}>

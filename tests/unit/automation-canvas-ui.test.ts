@@ -45,22 +45,26 @@ describe("la paleta", () => {
       "Anuncio",
       "Cita agendada",
       "Cita confirmada",
+      "Cita realizada",
       "No asistió",
-      "Cumpleaños",
-      "Premio de fidelidad",
+      "Venta cobrada",
       "Sello ganado",
+      "Premio de fidelidad",
+      "Cumpleaños",
       "Manual",
     ]);
-    expect(labels("logic")).toEqual([
-      "Condición (Sí / No)",
-      "Switch (varias salidas)",
-      "Esperar tiempo",
-      "Esperar hasta la cita",
-      "Esperar respuesta",
+    expect(labels("decide")).toEqual(["Condición (Sí / No)", "Switch (varias salidas)"]);
+    expect(labels("wait")).toEqual(["Esperar tiempo", "Esperar hasta la cita", "Esperar respuesta"]);
+    expect(labels("actions")).toEqual([
+      "Enviar WhatsApp",
+      "Enviar multimedia",
+      "Asignar etiqueta",
+      "Quitar etiqueta",
+      "Cambiar etapa",
+      "Pasar a una persona",
       "Establecer variable",
       "Código JavaScript",
     ]);
-    expect(labels("actions")).toEqual(["Enviar WhatsApp", "Enviar multimedia", "Asignar etiqueta", "Quitar etiqueta", "Cambiar etapa", "Pasar a una persona"]);
   });
 
   it("los disparadores de la paleta son EXACTAMENTE los que la pantalla deja crear", () => {
@@ -291,7 +295,7 @@ describe("metadatos de los bloques (una sola fuente)", () => {
       expect(i.tone, i.id).toBeTruthy();
       expect(i.icon, i.id).toBeTruthy();
     }
-    for (const cat of ["triggers", "logic", "actions"]) {
+    for (const cat of ["triggers", "decide", "wait", "actions"]) {
       const groups = PALETTE.filter((i) => i.category === cat).map((i) => i.group);
       const seen = new Set<string>();
       groups.forEach((g, k) => {
@@ -324,7 +328,7 @@ describe("metadatos de los bloques (una sola fuente)", () => {
     expect(find("")).toHaveLength(PALETTE.length);
     expect(find("ESPERAR")).toEqual(expect.arrayContaining(["step:delay", "step:wait_until", "step:wait_reply"]));
     expect(find("no asistio")).toContain("trigger:booking_no_show");
-    expect(find("citas")).toEqual(["trigger:booking_created", "trigger:booking_confirmed", "trigger:booking_no_show"]);
+    expect(find("citas")).toEqual(["trigger:booking_created", "trigger:booking_confirmed", "trigger:booking_completed", "trigger:booking_no_show"]);
     expect(find("cita")).toEqual(expect.arrayContaining(["trigger:booking_created", "step:wait_until"]));
     expect(find("etiqueta")).toEqual(["trigger:tag_added", "step:add_tag", "step:remove_tag"]);
     expect(find("zzzz")).toEqual([]);

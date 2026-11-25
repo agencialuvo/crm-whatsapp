@@ -33,6 +33,10 @@ export const FLOW_TRIGGER_TYPES = [
   "booking_created",
   "booking_confirmed",
   "booking_no_show",
+  // La cita se cerró como realizada (marcada en la Agenda o cobrada en Caja).
+  "booking_completed",
+  // Una venta cobrada en Caja (con o sin cita, con o sin tarjeta de fidelidad).
+  "sale_completed",
   "ad_referral",
   "tag_added",
   "loyalty_reward_unlocked",
@@ -94,6 +98,8 @@ export const TRIGGER_CONFIG_SCHEMAS = {
   booking_created: z.object({}).strict(),
   booking_confirmed: z.object({}).strict(),
   booking_no_show: z.object({}).strict(),
+  booking_completed: z.object({}).strict(),
+  sale_completed: z.object({}).strict(),
   // Sin nada, cualquier anuncio; con `sourceId`, solo ese (el `source_id` del referral de Meta); con `adsetId` o
   // `campaignId` (047), todo un conjunto o una campaña. Exactamente uno: solo IDs, nunca nombres.
   ad_referral: z

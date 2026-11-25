@@ -2358,6 +2358,9 @@ export const automationFlow = pgTable(
         "booking_created",
         "booking_confirmed",
         "booking_no_show",
+        // La cita se cerró como realizada / una venta se cobró en Caja.
+        "booking_completed",
+        "sale_completed",
         // Una conversación registra su anuncio de origen (Click-to-WhatsApp; `trigger_config.sourceId` lo acota).
         "ad_referral",
         // Un cliente desbloquea un premio de la tarjeta de fidelidad (`trigger_config.stamps` acota el hito).
