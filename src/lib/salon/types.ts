@@ -54,6 +54,8 @@ export type StaffDto = {
   name: string;
   phone: string | null;
   active: boolean;
+  /** ¿Cuenta para los cupos de la agenda? (la IA y el bot solo eligen a quien sí). */
+  acceptsBookings: boolean;
   globalCommissionPercentage: number | null;
   /** Solo los días con horario propio o libres; los demás siguen al negocio. */
   schedule: ScheduleDay[];
@@ -198,13 +200,13 @@ export type BoardSlot = {
   /** Profesionales que atienden en esta franja (activos, de turno). */
   workingStaffIds: string[];
   /**
-   * Cupos de la franja: los profesionales de turno. Sin ningún profesional
-   * dado de alta vale 1, igual que el motor de disponibilidad.
+   * Cupos de la franja: los profesionales de turno que reciben citas. Sin ningún
+   * profesional dado de alta vale 1, igual que el motor de disponibilidad.
    */
   capacity: number;
   /** Citas (no bloqueos) que ocupan la franja, asignadas o no. */
   booked: number;
-  /** Cupos libres = capacity − booked. 0 si hay un bloqueo. */
+  /** Cupos libres = capacity − citas que gastan un cupo (sin asignar o de quien suma). 0 si hay un bloqueo. */
   free: number;
   blocked: boolean;
   past: boolean;
@@ -216,7 +218,8 @@ export type BoardDto = {
   slotMinutes: number;
   /** El negocio abre este día. */
   open: boolean;
-  chairs: { id: string; name: string }[];
+  /** Profesionales activos; `acceptsBookings` apagado = no suma cupos (se le puede asignar a mano). */
+  chairs: { id: string; name: string; acceptsBookings: boolean }[];
   slots: BoardSlot[];
   bookings: BoardBooking[];
   /** Hora local actual `HH:mm` si el día mostrado es hoy; si no, null. */

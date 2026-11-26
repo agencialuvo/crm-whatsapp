@@ -26,8 +26,20 @@ export type BookingListItem = {
   linkPending: boolean;
   isTest: boolean;
   notes: string | null;
+  /** Paso 4: `google` = bloqueo traído de Google Calendar (se cambia allí, no aquí); null = propio. */
+  busySource: "google" | null;
   /** Cuándo se confirmó la asistencia; null = sin confirmar. */
   confirmedAt: string | null;
+  /**
+   * Paso 3 — Su publicación en Google Calendar: null si no aplica (sincronización apagada, prueba o
+   * bloqueo). `error` con su motivo y si se volverá a intentar sola.
+   */
+  calendarSync: {
+    status: "pending" | "synced" | "error";
+    error: string | null;
+    willRetry: boolean;
+    syncedAt: string | null;
+  } | null;
 };
 
 /** Tope del listado sin rango: el de siempre, que leen los guiones E2E. */
@@ -140,6 +152,15 @@ function toListItem(r: Row, timezone: string): BookingListItem {
     linkPending: r.booking.linkPending,
     isTest: r.booking.isTest,
     notes: r.booking.notes,
+    busySource: r.booking.busySource ?? null,
     confirmedAt: r.booking.confirmedAt ? r.booking.confirmedAt.toISOString() : null,
+    calendarSync: r.booking.calendarSyncStatus
+      ? {
+          status: r.booking.calendarSyncStatus,
+          error: r.booking.calendarSyncError,
+          willRetry: r.booking.calendarSyncNextAt !== null,
+          syncedAt: r.booking.calendarSyncedAt ? r.booking.calendarSyncedAt.toISOString() : null,
+        }
+      : null,
   };
 }

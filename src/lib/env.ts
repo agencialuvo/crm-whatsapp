@@ -122,6 +122,13 @@ export const envSchema = z.object({
     .url()
     .default("https://www.googleapis.com/calendar/v3"),
   GOOGLE_OAUTH_BASE_URL: z.string().url().default("https://oauth2.googleapis.com"),
+  // Paso 3: la pantalla de permisos de Google (solo se sobreescribe para el mock del self-test).
+  GOOGLE_ACCOUNTS_BASE_URL: z.string().url().default("https://accounts.google.com"),
+  // Paso 3: la app OAuth de la INSTANCIA para «Conectar con Google» con un clic. Opcionales: sin ellas,
+  // Ajustes → Agenda solo ofrece el modo Avanzado (pegar las credenciales de la app propia del negocio).
+  // URI de redirección a registrar en Google Cloud: ${APP_BASE_URL}/api/settings/google/oauth/callback
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   ALLOW_SIGNUP: z.string().optional(),
   AGENT_COALESCE_MS: z.coerce.number().int().min(0).default(6000),
   WA_MOCK_ENABLED: z.string().optional(),

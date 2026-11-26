@@ -652,6 +652,27 @@
       "when": 1795557950699,
       "tag": "0092_medios_variante_cola",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1795701436838,
+      "tag": "0093_staff_accepts_bookings",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1795703334119,
+      "tag": "0094_google_calendar_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1795705738184,
+      "tag": "0095_google_calendar_busy",
+      "breakpoints": true
     }
   ]
 }

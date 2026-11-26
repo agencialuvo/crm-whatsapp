@@ -93,12 +93,27 @@ vi.mock("@/server/whatsapp/connect", () => ({
 
 vi.mock("@/server/agenda/connectors/google", () => ({
   googleConnector: { testConnection: vi.fn(async () => ({ ok: true })) },
+  GOOGLE_SCOPE: "https://www.googleapis.com/auth/calendar.events",
+  GOOGLE_TIMEOUT_MS: 10_000,
 }));
 vi.mock("@/server/agenda/connectors/google-credentials", () => ({
   getGoogleCredentials: vi.fn(async () => null),
+  getGoogleConnectionInfo: vi.fn(async () => null),
   saveGoogleCredentials: vi.fn(async () => {}),
+  saveGoogleOAuthConnection: vi.fn(async () => {}),
   deleteGoogleCredentials: vi.fn(async () => {}),
+  // Paso 3: con la app OAuth de la instancia configurada, para que «Conectar con Google» llegue a redirigir.
+  instanceOAuthApp: () => ({ clientId: "cid.apps.googleusercontent.com", clientSecret: "sec" }),
   secretLast4: (s: string) => s.slice(-4),
+}));
+// Paso 3: resincronizar al conectar no toca la base en esta prueba.
+vi.mock("@/server/agenda/calendar-sync/sync", () => ({ resyncUpcomingBookings: vi.fn(async () => 0) }));
+// Paso 4: la lectura de lo ocupado (nunca se llega a ella sin permiso).
+vi.mock("@/server/agenda/calendar-busy/sync", () => ({
+  requestBusySync: vi.fn(async () => {}),
+  clearGoogleBusyBlocks: vi.fn(async () => 0),
+  getBusyState: vi.fn(async () => null),
+  syncGoogleBusy: vi.fn(async () => ({ outcome: "synced", blocks: 0, inserted: 0, deleted: 0 })),
 }));
 
 vi.mock("@/server/agenda/connectors/zoom", () => ({
@@ -174,6 +189,9 @@ async function cases(): Promise<Case[]> {
   const whatsappTest = await import("@/app/api/settings/whatsapp/test/route");
   const googleTest = await import("@/app/api/settings/google/test/route");
   const zoomTest = await import("@/app/api/settings/zoom/test/route");
+  const oauthStart = await import("@/app/api/settings/google/oauth/start/route");
+  const oauthCallback = await import("@/app/api/settings/google/oauth/callback/route");
+  const googleBusy = await import("@/app/api/settings/google/busy/route");
 
   const req = (url: string, body: unknown, method = "PUT") =>
     new Request(url, {
@@ -204,6 +222,14 @@ async function cases(): Promise<Case[]> {
         ),
     },
     { label: "DELETE /api/settings/google", run: () => google.DELETE() },
+    // Paso 3: el flujo de «Conectar con Google» también es solo de quien configura.
+    { label: "GET /api/settings/google/oauth/start", run: () => oauthStart.GET() },
+    {
+      label: "GET /api/settings/google/oauth/callback",
+      run: () => oauthCallback.GET(new Request("https://x/api/settings/google/oauth/callback?code=c&state=s")),
+    },
+    // Paso 4: «Leer ahora» lo ocupado en Google Calendar.
+    { label: "POST /api/settings/google/busy", run: () => googleBusy.POST() },
     {
       label: "PUT /api/settings/zoom",
       run: () =>

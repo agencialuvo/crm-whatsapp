@@ -27,6 +27,11 @@ export const dynamic = "force-dynamic";
 const createSchema = z.object({
   conversationId: z.string().min(1),
   startUtc: z.string().min(1),
+  /**
+   * Con quién, si el cliente pidió a alguien («con Ana»). Ausente = cualquiera disponible: el CRM asigna a
+   * un profesional libre. Una persona que no recibe citas o no está libre responde `slot_taken`.
+   */
+  staffId: z.string().min(1).nullish(),
   notes: z.string().nullish(),
 });
 
@@ -47,6 +52,7 @@ export async function POST(req: Request) {
       organizationId: gate.organizationId,
       conversationId: body.data.conversationId,
       startUtc: body.data.startUtc,
+      staffId: body.data.staffId ?? null,
       notes: body.data.notes ?? null,
       source: "ai",
       // La regla innegociable: el agente solo reserva lo que ya ofreció.

@@ -14,12 +14,14 @@ import {
   zonedWallClockToUtc,
   type WeekdayKey,
 } from "@/lib/time/slots";
+import { shiftCovers, type StaffShift } from "@/lib/agenda/capacity";
 import { buildCandidateSlots } from "@/server/agenda/availability";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { getSettings } from "@/server/agenda/settings";
 import { catalogStaffMaps } from "@/server/business/catalog-staff";
 import { SalonError, isPgError, UNIQUE_VIOLATION } from "@/server/business/http";
 import { publish } from "@/server/events/bus";
+import { requestCalendarSync } from "@/server/agenda/calendar-sync/sync";
 
 /**
  * Módulo SALON — el tablero de la agenda por sillas.
@@ -50,32 +52,31 @@ const DAY_INDEX: Record<WeekdayKey, number> = {
 /** Un bloqueo de hasta 600 min que empezó ayer sigue ocupando la madrugada de hoy. */
 const LOOKBACK_MS = 24 * 3_600_000;
 
-const minutesOf = (hhmmText: string): number => {
-  const [h, m] = hhmmText.split(":").map(Number) as [number, number];
-  return h * 60 + m;
-};
-
 const validDate = (d: string): boolean =>
   /^\d{4}-\d{2}-\d{2}$/.test(d) &&
   new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d;
 
 /** El turno de un profesional un día de la semana (una fila de `staff_schedule`). */
-export type StaffShift = { isOff: boolean; startTime: string; endTime: string };
+export type { StaffShift };
 
 /**
  * PURA: pone cupos a las franjas de un día.
  *
  *  - Trabaja en la franja quien no tiene fila ese día (sigue al negocio) o
  *    tiene una con horas que la contienen; un día libre no trabaja.
- *  - `booked` cuenta las citas que ocupan la franja, estén asignadas o no.
+ *  - Los cupos son los de turno que RECIBEN CITAS (`acceptsBookings`, por defecto sí): quien lo tiene apagado
+ *    sigue en el tablero (el operador puede asignarle a mano) pero no suma capacidad.
+ *  - `booked` cuenta las citas que ocupan la franja, estén asignadas o no; los cupos libres solo descuentan
+ *    las que gastan un cupo: las sin asignar y las de quien suma capacidad. Es la regla del motor
+ *    (`evaluateSlot`, `src/lib/agenda/capacity.ts`).
  *  - Un bloqueo apaga la franja entera.
  *  - Sin ningún profesional dado de alta hay una silla (como el motor).
  */
 export function buildBoardSlots(input: {
   candidates: { startUtc: string; endUtc: string }[];
-  members: { id: string }[];
+  members: { id: string; acceptsBookings?: boolean }[];
   shifts: Map<string, StaffShift>;
-  sessions: Pick<BoardBooking, "startUtc" | "endUtc">[];
+  sessions: (Pick<BoardBooking, "startUtc" | "endUtc"> & { staffId?: string | null })[];
   blocks: Pick<BoardBooking, "startUtc" | "endUtc">[];
   date: string;
   timezone: string;
@@ -87,22 +88,21 @@ export function buildBoardSlots(input: {
     const endClock = wallClock(c.endUtc, tz);
     const endMin = endClock.day === date ? endClock.minutes : 1440;
 
-    const working = members
-      .filter((m) => {
-        const row = shifts.get(m.id);
-        if (!row) return true; // sin fila: sigue el horario del negocio
-        if (row.isOff) return false;
-        return startMin >= minutesOf(row.startTime) && endMin <= minutesOf(row.endTime);
-      })
-      .map((m) => m.id);
+    // Sin fila ese día: sigue el horario del negocio; día libre: no trabaja.
+    const workingMembers = members.filter((m) => shiftCovers(shifts.get(m.id), startMin, endMin));
+    const working = workingMembers.map((m) => m.id);
+    const seats = new Set(workingMembers.filter((m) => m.acceptsBookings !== false).map((m) => m.id));
 
-    const booked = input.sessions.filter((b) =>
+    const crossing = input.sessions.filter((b) =>
       overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc)
-    ).length;
+    );
+    const booked = crossing.length;
+    const consumed =
+      members.length === 0 ? booked : crossing.filter((b) => !b.staffId || seats.has(b.staffId)).length;
     const blocked = input.blocks.some((b) =>
       overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc)
     );
-    const capacity = members.length === 0 ? 1 : working.length;
+    const capacity = members.length === 0 ? 1 : seats.size;
 
     return {
       startUtc: c.startUtc,
@@ -111,7 +111,7 @@ export function buildBoardSlots(input: {
       workingStaffIds: working,
       capacity,
       booked,
-      free: blocked ? 0 : Math.max(0, capacity - booked),
+      free: blocked ? 0 : Math.max(0, capacity - consumed),
       blocked,
       past: Date.parse(c.endUtc) <= now.getTime(),
     };
@@ -142,7 +142,7 @@ export async function getBoard(
 
   const [members, schedules, rows] = await Promise.all([
     db
-      .select({ id: schema.staff.id, name: schema.staff.name })
+      .select({ id: schema.staff.id, name: schema.staff.name, acceptsBookings: schema.staff.acceptsBookings })
       .from(schema.staff)
       .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.active, true)))
       .orderBy(asc(schema.staff.createdAt), asc(schema.staff.name)),
@@ -312,6 +312,8 @@ export async function assignBookingStaff(
     throw err;
   }
 
+  // El evento de Google Calendar muestra quién atiende.
+  await requestCalendarSync(organizationId, bookingId);
   publish(organizationId, { type: "booking.updated", data: { bookingId } });
 }
 
@@ -324,9 +326,10 @@ export async function assignBookingStaff(
  * enlace de reunión, lead y evento en vivo). La cita dura lo que dura el
  * servicio u oferta: puede abarcar varias franjas, y TODAS deben estar libres
  * (sin bloqueo, con cupo y, si hay profesional, que atienda toda la duración y no
- * tenga otra cita encima). Si dos personas agendan a la vez el mismo hueco, el
- * índice único por instante y silla cierra la carrera: la perdedora recibe
- * `slot_taken`/`staff_busy`.
+ * tenga otra cita encima). Sin profesional («Cualquiera disponible») el motor
+ * asigna a quien esté libre (`createSessionBooking`). Si dos personas agendan a
+ * la vez el mismo hueco, el candado de la agenda y el índice único cierran la
+ * carrera: la perdedora recibe `slot_taken`/`staff_busy`.
  */
 export async function createBoardBooking(
   organizationId: string,
@@ -421,33 +424,50 @@ export async function createBoardBooking(
   if (span.some((s) => s.blocked)) {
     throw new SalonError("slot_blocked", 409, "Parte de ese horario está bloqueada.");
   }
-  if (span.some((s) => s.free <= 0)) {
+  // Quien no recibe citas no gasta un cupo del equipo: asignárselo a mano no depende de que queden cupos.
+  const chosen = staffId ? board.chairs.find((c) => c.id === staffId) : undefined;
+  if (!(chosen && !chosen.acceptsBookings) && span.some((s) => s.free <= 0)) {
     throw new SalonError("slot_full", 409, "Ya no quedan cupos para toda la duración del servicio.");
   }
 
+  const startIso = new Date(startMs).toISOString();
+  const endIso = new Date(endMs).toISOString();
+  const busyIn = (chairId: string) =>
+    board.bookings.some(
+      (b) => b.kind === "session" && b.staffId === chairId && overlaps(startIso, endIso, b.startUtc, b.endUtc)
+    );
+  // Quién da cada servicio u oferta (sin filas = todos).
+  const staffBy = await catalogStaffMaps(organizationId);
+  const providerItem = {
+    kind: input.serviceId ? ("service" as const) : ("combo" as const),
+    id: item.id,
+    staffIds: (input.serviceId ? staffBy.services : staffBy.combos).get(item.id) ?? [],
+  };
+  const worksAll = (chairId: string) => span.every((s) => s.workingStaffIds.includes(chairId));
+
   if (staffId) {
-    const chair = board.chairs.find((c) => c.id === staffId);
+    const chair = chosen;
     if (!chair) {
       throw new SalonError("staff_not_found", 404, "El profesional no existe o está inactivo.");
     }
-    if (span.some((s) => !s.workingStaffIds.includes(chair.id))) {
+    if (!worksAll(chair.id)) {
       throw new SalonError("staff_off_shift", 409, `${chair.name} no atiende durante todo ese servicio.`);
     }
-    const startIso = new Date(startMs).toISOString();
-    const endIso = new Date(endMs).toISOString();
-    const busy = board.bookings.some(
-      (b) =>
-        b.kind === "session" &&
-        b.staffId === chair.id &&
-        overlaps(startIso, endIso, b.startUtc, b.endUtc)
-    );
-    if (busy) throw new SalonError("staff_busy", 409, `${chair.name} ya tiene una cita en ese tramo.`);
-
-    // Quién da cada servicio u oferta (sin filas = todos).
-    const staffBy = await catalogStaffMaps(organizationId);
-    const providers = (input.serviceId ? staffBy.services : staffBy.combos).get(item.id) ?? [];
-    if (!staffCanGive({ kind: input.serviceId ? "service" : "combo", id: item.id, staffIds: providers }, { id: chair.id, active: true })) {
+    if (busyIn(chair.id)) throw new SalonError("staff_busy", 409, `${chair.name} ya tiene una cita en ese tramo.`);
+    if (!staffCanGive(providerItem, { id: chair.id, active: true })) {
       throw new SalonError("staff_not_assigned", 409, `${chair.name} no da ${item.name}.`);
+    }
+  } else if (board.chairs.length > 0) {
+    // «Cualquiera disponible»: el motor elige; aquí solo se explica con claridad si no hay nadie.
+    const someone = board.chairs.some(
+      (c) => c.acceptsBookings && worksAll(c.id) && !busyIn(c.id) && staffCanGive(providerItem, { id: c.id, active: true })
+    );
+    if (!someone) {
+      throw new SalonError(
+        "no_staff_free",
+        409,
+        `Nadie que dé ${item.name} está libre durante todo ese horario. Elige otra hora o asigna a alguien a mano.`
+      );
     }
   }
 

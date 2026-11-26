@@ -82,12 +82,24 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   }, []);
 
   async function toggleActive(member: StaffDto, active: boolean): Promise<boolean> {
+    return patchMember(member, { active });
+  }
+
+  /** «Recibe citas»: si cuenta para los cupos de la agenda (la IA y el bot solo eligen a quien sí). */
+  async function toggleBookings(member: StaffDto, acceptsBookings: boolean): Promise<boolean> {
+    return patchMember(member, { acceptsBookings });
+  }
+
+  async function patchMember(
+    member: StaffDto,
+    json: { active: boolean } | { acceptsBookings: boolean }
+  ): Promise<boolean> {
     setToggling(member.id);
     setActionError(null);
     try {
       const { staff: saved } = await apiFetch<{ staff: StaffDto }>(
         `/api/negocio/equipo/${member.id}`,
-        { method: "PATCH", json: { active } }
+        { method: "PATCH", json }
       );
       upsert(saved);
       return true;
@@ -196,6 +208,13 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
                 <th scope="col" className="px-4 py-2.5">
                   Activo
                 </th>
+                <th
+                  scope="col"
+                  className="px-4 py-2.5"
+                  title="Si cuenta para los cupos de la agenda. Apagado, la IA y el bot no le asignan citas; tú sí puedes, a mano."
+                >
+                  Recibe citas
+                </th>
                 <th scope="col" className="px-4 py-2.5">
                   <span className="sr-only">Acciones</span>
                 </th>
@@ -235,6 +254,15 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
                       disabled={toggling === m.id}
                       label={`${m.active ? "Desactivar" : "Activar"} a ${m.name}`}
                       onCheckedChange={(v) => void toggleActive(m, v)}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <Switch
+                      size="sm"
+                      checked={m.active && m.acceptsBookings}
+                      disabled={toggling === m.id || !m.active}
+                      label={`${m.acceptsBookings ? "Quitar de" : "Incluir en"} los cupos de la agenda a ${m.name}`}
+                      onCheckedChange={(v) => void toggleBookings(m, v)}
                     />
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right">

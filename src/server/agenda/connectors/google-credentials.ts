@@ -1,13 +1,20 @@
+import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
+import { getEnv } from "@/lib/env";
 import { scoped } from "@/lib/db/tenant";
 
 /**
- * 015 — Credenciales de la app de Google Cloud del propio negocio.
+ * 015 — Las credenciales de Google Calendar de un negocio (una cuenta y un calendario por organización).
  *
- * DOS secretos cifrados: el client secret y el refresh token que el dueño pega
- * una sola vez. Mismo mecanismo AES-256-GCM que el resto.
+ * Paso 3 — Dos orígenes:
+ *  - `oauth`: el botón «Conectar con Google», con la app OAuth de la INSTANCIA. Aquí solo se guarda el
+ *    refresh token (cifrado) y la cuenta; el client secret vive en `GOOGLE_OAUTH_CLIENT_SECRET` y no se
+ *    copia a la base. Si quien opera el servidor quita esa app, la conexión deja de servir (se informa).
+ *  - `manual` (Avanzado): el negocio pega Client ID, Client Secret y refresh token de su propia app.
+ *
+ * Secretos con AES-256-GCM, como el resto. Hacia fuera nunca sale un secreto.
  */
 
 export type GoogleCreds = {
@@ -18,34 +25,87 @@ export type GoogleCreds = {
   status: "connected" | "error";
 };
 
-export async function getGoogleCredentials(
-  organizationId: string
-): Promise<GoogleCreds | null> {
-  const db = getDb();
-  const rows = await db
+export type GoogleConnectionInfo = {
+  source: "oauth" | "manual";
+  status: "connected" | "error";
+  calendarId: string;
+  clientId: string;
+  accountEmail: string | null;
+  connectedAt: Date | null;
+  lastError: string | null;
+  lastOkAt: Date | null;
+  /** Últimos 4 del secreto (solo `manual`). */
+  secretLast4: string | null;
+  /** `oauth` sin la app de la instancia configurada: no hay con qué renovar el token. */
+  appMissing: boolean;
+};
+
+/** La app OAuth de la instancia, si quien opera el servidor la configuró. */
+export function instanceOAuthApp(): { clientId: string; clientSecret: string } | null {
+  const env = getEnv();
+  const clientId = env.GOOGLE_OAUTH_CLIENT_ID?.trim();
+  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+type Row = typeof schema.googleCredentials.$inferSelect;
+
+async function readRow(organizationId: string): Promise<Row | null> {
+  const rows = await getDb()
     .select()
     .from(schema.googleCredentials)
     .where(scoped(schema.googleCredentials.organizationId, organizationId))
     .limit(1);
-  const row = rows[0];
+  return rows[0] ?? null;
+}
+
+function storedSecret(row: Row): string | null {
+  if (!row.clientSecretCipher || !row.clientSecretIv || !row.clientSecretTag) return null;
+  return decryptSecret({ cipher: row.clientSecretCipher, iv: row.clientSecretIv, tag: row.clientSecretTag });
+}
+
+/**
+ * Las credenciales listas para llamar a Google, o `null` si no hay conexión utilizable (sin fila, o una
+ * conexión OAuth cuya app de instancia ya no está configurada).
+ */
+export async function getGoogleCredentials(organizationId: string): Promise<GoogleCreds | null> {
+  const row = await readRow(organizationId);
   if (!row) return null;
+  const refreshToken = decryptSecret({
+    cipher: row.refreshTokenCipher,
+    iv: row.refreshTokenIv,
+    tag: row.refreshTokenTag,
+  });
+  if (row.source === "oauth") {
+    const app = instanceOAuthApp();
+    if (!app) return null;
+    return { clientId: app.clientId, clientSecret: app.clientSecret, refreshToken, calendarId: row.calendarId, status: row.status };
+  }
+  const clientSecret = storedSecret(row);
+  if (!clientSecret) return null;
+  return { clientId: row.clientId, clientSecret, refreshToken, calendarId: row.calendarId, status: row.status };
+}
+
+/** Lo que Ajustes puede mostrar (sin secretos). */
+export async function getGoogleConnectionInfo(organizationId: string): Promise<GoogleConnectionInfo | null> {
+  const row = await readRow(organizationId);
+  if (!row) return null;
+  const secret = row.source === "manual" ? storedSecret(row) : null;
   return {
-    clientId: row.clientId,
-    clientSecret: decryptSecret({
-      cipher: row.clientSecretCipher,
-      iv: row.clientSecretIv,
-      tag: row.clientSecretTag,
-    }),
-    refreshToken: decryptSecret({
-      cipher: row.refreshTokenCipher,
-      iv: row.refreshTokenIv,
-      tag: row.refreshTokenTag,
-    }),
-    calendarId: row.calendarId,
+    source: row.source,
     status: row.status,
+    calendarId: row.calendarId,
+    clientId: row.source === "manual" ? row.clientId : "",
+    accountEmail: row.accountEmail,
+    connectedAt: row.connectedAt,
+    lastError: row.lastError,
+    lastOkAt: row.lastOkAt,
+    secretLast4: secret ? secretLast4(secret) : null,
+    appMissing: row.source === "oauth" && !instanceOAuthApp(),
   };
 }
 
+/** Modo Avanzado: el negocio pega las credenciales de su propia app. */
 export async function saveGoogleCredentials(input: {
   organizationId: string;
   clientId: string;
@@ -53,50 +113,130 @@ export async function saveGoogleCredentials(input: {
   refreshToken: string;
   calendarId?: string | null;
 }): Promise<void> {
-  const db = getDb();
   const secret = encryptSecret(input.clientSecret);
-  const refresh = encryptSecret(input.refreshToken);
-  const values = {
+  await upsertRow(input.organizationId, {
+    source: "manual",
     clientId: input.clientId,
     clientSecretCipher: secret.cipher,
     clientSecretIv: secret.iv,
     clientSecretTag: secret.tag,
+    refreshToken: input.refreshToken,
+    calendarId: input.calendarId,
+    accountEmail: null,
+  });
+}
+
+/** «Conectar con Google»: el refresh token que devolvió el flujo OAuth de la app de la instancia. */
+export async function saveGoogleOAuthConnection(input: {
+  organizationId: string;
+  clientId: string;
+  refreshToken: string;
+  accountEmail: string | null;
+  calendarId?: string | null;
+}): Promise<void> {
+  await upsertRow(input.organizationId, {
+    source: "oauth",
+    clientId: input.clientId,
+    clientSecretCipher: null,
+    clientSecretIv: null,
+    clientSecretTag: null,
+    refreshToken: input.refreshToken,
+    calendarId: input.calendarId,
+    accountEmail: input.accountEmail,
+  });
+}
+
+async function upsertRow(
+  organizationId: string,
+  input: {
+    source: "oauth" | "manual";
+    clientId: string;
+    clientSecretCipher: string | null;
+    clientSecretIv: string | null;
+    clientSecretTag: string | null;
+    refreshToken: string;
+    calendarId?: string | null;
+    accountEmail: string | null;
+  }
+): Promise<void> {
+  const refresh = encryptSecret(input.refreshToken);
+  const now = new Date();
+  const values = {
+    source: input.source,
+    clientId: input.clientId,
+    clientSecretCipher: input.clientSecretCipher,
+    clientSecretIv: input.clientSecretIv,
+    clientSecretTag: input.clientSecretTag,
     refreshTokenCipher: refresh.cipher,
     refreshTokenIv: refresh.iv,
     refreshTokenTag: refresh.tag,
     calendarId: input.calendarId?.trim() || "primary",
     status: "connected" as const,
+    accountEmail: input.accountEmail,
+    connectedAt: now,
+    lastError: null,
+    lastOkAt: now,
+    // Paso 4: una conexión nueva (o reconectar tras un permiso que faltaba) vuelve a leer lo ocupado ya.
+    busyStatus: null,
+    busyError: null,
+    busyAttempts: 0,
+    busyNextAt: null,
   };
-  await db
+  await getDb()
     .insert(schema.googleCredentials)
-    .values({
-      id: newId("googleCredentials"),
-      organizationId: input.organizationId,
-      ...values,
-    })
+    .values({ id: newId("googleCredentials"), organizationId, ...values })
     .onConflictDoUpdate({
       target: [schema.googleCredentials.organizationId],
-      set: { ...values, updatedAt: new Date() },
+      set: { ...values, updatedAt: now },
     });
   clearGoogleTokenCache();
 }
 
-export async function deleteGoogleCredentials(
-  organizationId: string
-): Promise<void> {
-  const db = getDb();
-  await db
+export async function deleteGoogleCredentials(organizationId: string): Promise<void> {
+  await getDb()
     .delete(schema.googleCredentials)
     .where(scoped(schema.googleCredentials.organizationId, organizationId));
   clearGoogleTokenCache();
 }
 
-/** El estado `error` se escribe de verdad (ver zoom-credentials). */
-export async function markGoogleError(organizationId: string): Promise<void> {
-  const db = getDb();
-  await db
+/**
+ * El estado `error` se escribe de verdad (ver zoom-credentials). Devuelve `true` si la conexión ACABA de
+ * romperse (estaba `connected`): así el aviso al equipo sale una sola vez, no en cada reintento.
+ */
+export async function markGoogleError(organizationId: string, message?: string): Promise<boolean> {
+  const rows = await getDb()
     .update(schema.googleCredentials)
-    .set({ status: "error", updatedAt: new Date() })
+    .set({ status: "error", lastError: message?.slice(0, 500) ?? "Google rechazó las credenciales", updatedAt: new Date() })
+    .where(
+      scoped(
+        schema.googleCredentials.organizationId,
+        organizationId,
+        eq(schema.googleCredentials.status, "connected")
+      )
+    )
+    .returning({ id: schema.googleCredentials.id });
+  return rows.length > 0;
+}
+
+/** Una llamada a Google salió bien: queda registrado para Ajustes y se limpia el último error transitorio. */
+export async function markGoogleOk(organizationId: string): Promise<void> {
+  await getDb()
+    .update(schema.googleCredentials)
+    .set({ lastOkAt: new Date(), lastError: null })
+    .where(
+      scoped(
+        schema.googleCredentials.organizationId,
+        organizationId,
+        eq(schema.googleCredentials.status, "connected")
+      )
+    );
+}
+
+/** Un fallo que NO rompe la conexión (Google caído, 429…): se anota para Ajustes, sin cambiar el estado. */
+export async function noteGoogleError(organizationId: string, message: string): Promise<void> {
+  await getDb()
+    .update(schema.googleCredentials)
+    .set({ lastError: message.slice(0, 500) })
     .where(scoped(schema.googleCredentials.organizationId, organizationId));
 }
 

@@ -6,6 +6,7 @@ import { googleConnector } from "@/server/agenda/connectors/google";
 import { ConnectorError } from "@/server/agenda/connectors/types";
 import { clearZoomTokenCache } from "@/server/agenda/connectors/zoom-credentials";
 import { clearGoogleTokenCache } from "@/server/agenda/connectors/google-credentials";
+import { calendarEventIdFor } from "@/server/agenda/calendar-sync/event";
 
 /**
  * 015 — La suite de contrato de conectores.
@@ -312,6 +313,86 @@ describe("google", () => {
     await expect(
       googleConnector.deleteMeeting(creds, "evt_borrado")
     ).resolves.toBeUndefined();
+  });
+
+  describe("Paso 3 — idempotencia por cita", () => {
+    const bodies: Record<string, unknown>[] = [];
+    const urls: { url: string; method: string }[] = [];
+    /** Estado del evento en el «Google» de esta prueba. */
+    let existing: Record<string, unknown> | null = null;
+
+    beforeEach(() => {
+      bodies.length = 0;
+      urls.length = 0;
+      existing = null;
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        urls.push({ url, method });
+        if (url.endsWith("/token")) return Response.json({ access_token: "tk", expires_in: 3600 });
+        if (init?.body && method !== "GET") bodies.push(JSON.parse(String(init.body)));
+        if (method === "POST") {
+          if (existing) return Response.json({ error: { code: 409 } }, { status: 409 });
+          const body = JSON.parse(String(init!.body)) as { id?: string };
+          return Response.json({
+            id: body.id ?? "evt_x",
+            conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.test/n" }] },
+          });
+        }
+        if (method === "PATCH") {
+          return Response.json({ ...existing, conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.test/p" }] } });
+        }
+        if (method === "GET") return existing ? Response.json(existing) : new Response(null, { status: 404 });
+        if (method === "DELETE") return new Response(null, { status: 410 });
+        return new Response(null, { status: 204 });
+      });
+    });
+
+    it("con la cita: id de evento propio, requestId por cita, marca de Vocero y sin avisos de Google", async () => {
+      const out = await googleConnector.createMeeting(creds, { ...REQ, bookingId: "bk_1", organizationId: "org_1" });
+      expect(out.externalId).toBe(calendarEventIdFor("bk_1"));
+      const body = bodies[0] as {
+        id: string;
+        conferenceData: { createRequest: { requestId: string } };
+        extendedProperties: { private: Record<string, string> };
+      };
+      expect(body.id).toBe(calendarEventIdFor("bk_1"));
+      expect(body.conferenceData.createRequest.requestId).toBe("vocero-bk_1");
+      expect(body.extendedProperties.private).toEqual({ voceroBookingId: "bk_1", voceroOrg: "org_1" });
+      expect(urls.find((u) => u.method === "POST" && u.url.includes("/events"))!.url).toContain("sendUpdates=none");
+    });
+
+    it("dos citas a la MISMA hora piden su conferencia con requestId distinto (multicupo)", async () => {
+      await googleConnector.createMeeting(creds, { ...REQ, bookingId: "bk_a" });
+      await googleConnector.createMeeting(creds, { ...REQ, bookingId: "bk_b" });
+      const ids = bodies.map((b) => (b as { conferenceData: { createRequest: { requestId: string } } }).conferenceData.createRequest.requestId);
+      expect(ids).toEqual(["vocero-bk_a", "vocero-bk_b"]);
+    });
+
+    it("respuesta perdida: el reintento recibe 409 y reutiliza el MISMO evento (con su Meet), sin crear otro", async () => {
+      existing = {
+        id: calendarEventIdFor("bk_1"),
+        conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.test/ya" }] },
+      };
+      const out = await googleConnector.createMeeting(creds, { ...REQ, bookingId: "bk_1" });
+      expect(out).toEqual({ externalId: calendarEventIdFor("bk_1"), joinUrl: "https://meet.google.test/ya" });
+      expect(urls.filter((u) => u.method === "POST" && u.url.includes("/events"))).toHaveLength(1);
+      expect(urls.some((u) => u.method === "PATCH")).toBe(false);
+    });
+
+    it("409 de un evento SIN Meet (lo publicó la sincronización): se le añade la conferencia, sin duplicar", async () => {
+      existing = { id: calendarEventIdFor("bk_1"), summary: "Corte — Ana P." };
+      const out = await googleConnector.createMeeting(creds, { ...REQ, bookingId: "bk_1" });
+      expect(out.externalId).toBe(calendarEventIdFor("bk_1"));
+      expect(out.joinUrl).toBe("https://meet.google.test/p");
+      const patch = bodies.find((b) => "status" in b) as { status: string; conferenceData: { createRequest: { requestId: string } } };
+      expect(patch.status).toBe("confirmed");
+      expect(patch.conferenceData.createRequest.requestId).toBe("vocero-bk_1");
+      expect(urls.find((u) => u.method === "PATCH")!.url).toContain("conferenceDataVersion=1");
+    });
+
+    it("borrar un evento ya borrado (410) también es éxito", async () => {
+      await expect(googleConnector.deleteMeeting(creds, "evt_borrado")).resolves.toBeUndefined();
+    });
   });
 
   it("un refresh token revocado es error de AUTENTICACIÓN y lo explica", async () => {

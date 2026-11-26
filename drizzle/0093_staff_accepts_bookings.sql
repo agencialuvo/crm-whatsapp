@@ -1,0 +1,1 @@
+ALTER TABLE "staff" ADD COLUMN "accepts_bookings" boolean DEFAULT true NOT NULL;

@@ -51,6 +51,55 @@ user:read:user            leer tu usuario
 Cada cita crea un evento en tu calendario con su enlace de Meet. Su
 diferencial: la cita aparece donde ya miras tu día.
 
+#### Conectar Google (una cuenta y un calendario por negocio)
+
+En **Ajustes → Agenda → Google Calendar**:
+
+- **«Conectar con Google»** (un clic): te lleva a la pantalla de permisos de Google y vuelve con
+  «Conectado como tu@correo». Requiere que quien opera el servidor haya configurado la app OAuth de la
+  instancia (`GOOGLE_OAUTH_CLIENT_ID` y `GOOGLE_OAUTH_CLIENT_SECRET`, con la URI de redirección
+  `${APP_BASE_URL}/api/settings/google/oauth/callback`; ver `.env.example`). De tu negocio solo se guarda el
+  permiso (refresh token) cifrado. **Desconectar** lo revoca en Google y no toca tus citas.
+- **Avanzado**: si la instancia no tiene app, pegas Client ID, Client Secret y refresh token de **tu** app
+  (lo de abajo).
+
+#### Publicar las citas en tu calendario (con o sin Meet)
+
+El interruptor **«Publicar las citas en Google Calendar»** (apagado por defecto) crea, mueve y borra el
+evento de cada cita **aunque el conector de entrega no sea Google**: con el enlace fijo o Zoom, el enlace va
+en el lugar y la descripción del evento, y no se genera Meet. Con el conector `google`, es el mismo evento
+que lleva el Meet (nunca dos).
+
+- **Qué muestra**: «Servicio — Ana P.» (el nombre con la **inicial** del apellido), y en la descripción el
+  servicio y su duración, quién atiende, las notas, el enlace de la reunión y un enlace a la cita en Vocero.
+  El título se marca «✓» al confirmarse y «[Realizada]» o «[No asistió]» al cerrarla. **Sin teléfono**,
+  salvo que actives «Incluir el teléfono del cliente».
+- **Sin invitados**: Google nunca le escribe al cliente.
+- **Solo de ida**: lo que cambies en Google en el evento de una cita no vuelve a Vocero. Las citas del
+  Laboratorio nunca se publican.
+- **Si Google falla**: la cita se agenda igual. Se reintenta sola (1 min, 5 min, 30 min, 2 h, 6 h) y, si se
+  rinde, la cita lo dice con un botón «Reintentar en Google Calendar». Si Google revoca el permiso, la
+  conexión pasa a «se perdió», recibes un aviso y al reconectar se publican las pendientes.
+
+#### Tener en cuenta lo ocupado en tu calendario (Google → Vocero)
+
+El interruptor **«Tener en cuenta lo ocupado en Google Calendar»** (apagado por defecto) hace que tus
+eventos «Ocupado» bloqueen esos horarios: ni la IA ni el equipo los ofrecen, y reservar encima se rechaza.
+
+- **Cómo**: cada 5 minutos (o al pulsar **«Leer ahora»**) se leen los eventos de los días que ofreces y se
+  guardan como bloqueos «Ocupado en Google Calendar». Ofrecer horarios nunca espera a Google.
+- **Qué cuenta**: eventos con hora o de día completo marcados «Ocupado», incluidos «Fuera de la oficina» y
+  las invitaciones aceptadas o pendientes. **No cuentan**: lo marcado «Disponible», lo cancelado, las
+  invitaciones que rechazaste, la «Ubicación de trabajo» y los eventos que publica Vocero (no hay bucle).
+- **Tus citas y bloqueos no se tocan**. Un bloqueo de Google no se quita desde Vocero: muévelo o bórralo en
+  Google y se actualiza solo.
+- **Sin permiso extra**: usa el mismo permiso de «Conectar con Google». Si Google dice que falta permiso,
+  Ajustes muestra «Falta permiso para leer tu calendario» con «Reconectar con Google».
+- **Si Google falla**: la agenda sigue con lo último que se leyó, Ajustes lo avisa con la hora de la última
+  lectura y se reintenta sola. Apagar la opción o desconectar quita lo traído de Google.
+- **Límites**: solo el calendario conectado (el principal) y lo ocupa para TODO el negocio (no por
+  profesional).
+
 **Qué necesitas**: un proyecto en Google Cloud **del propio negocio** con la
 API de Calendar activada, y de ahí *Client ID*, *Client Secret* y un *refresh
 token* con el permiso `calendar.events`. El calendario destino es `primary`

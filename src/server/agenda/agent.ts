@@ -32,12 +32,22 @@ export async function offerSlots(input: {
   organizationId: string;
   conversationId: string;
   intro?: string;
+  /** El servicio u oferta (del anuncio): se ofrece solo lo que cabe entero y con quien lo da. */
+  serviceId?: string;
+  comboId?: string;
+  durationMinutes?: number;
+  /** Persona específica: solo sus huecos. */
+  staffId?: string;
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
   const now = new Date();
   const all = await computeAvailability(input.organizationId, {
     settings,
     now,
+    serviceId: input.serviceId ?? null,
+    comboId: input.comboId ?? null,
+    durationMinutes: input.durationMinutes,
+    staffId: input.staffId ?? null,
   });
   const spread = spreadByDay(all, {
     timezone: settings.timezone,
@@ -79,6 +89,8 @@ export async function bookSlot(input: {
   serviceId?: string;
   comboId?: string;
   durationMinutes?: number;
+  /** Persona específica; sin ella se asigna a quien esté libre. */
+  staffId?: string;
 }): Promise<AgendaTurn> {
   try {
     const result = await createSessionBooking({
@@ -91,6 +103,7 @@ export async function bookSlot(input: {
       comboId: input.comboId ?? null,
       // Sin duración definida en el servicio, `createSessionBooking` usa la franja estándar.
       durationMinutes: input.durationMinutes,
+      staffId: input.staffId ?? null,
     });
 
     const base =

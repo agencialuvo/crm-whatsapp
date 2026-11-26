@@ -47,7 +47,8 @@ const bindConnector = vi.fn(async () => ({
 
 vi.mock("@/server/agenda/settings", () => ({ getSettings: async () => settings }));
 vi.mock("@/server/agenda/availability", () => ({
-  findSlot: async () => ({ startUtc: SLOT, endUtc: "…", label: "mié 5 ago, 09:00" }),
+  // Sin equipo: `staffIds` vacío, la cita queda sin profesional (como siempre).
+  findSlot: async () => ({ startUtc: SLOT, endUtc: "…", label: "mié 5 ago, 09:00", staffIds: [] }),
   computeAvailability: async () => [],
 }));
 vi.mock("@/server/agenda/offers", async (importOriginal) => {
@@ -80,8 +81,19 @@ function chain(rows: unknown[]) {
   return c;
 }
 
+/**
+ * La reserva corre dentro de una transacción con el candado de la agenda (`pg_advisory_xact_lock`) y cada
+ * intento de INSERT en un savepoint: aquí la transacción es la misma base simulada y el candado no hace nada.
+ */
+function withTx<T extends object>(db: T): T {
+  const o = db as Record<string, unknown>;
+  o.transaction = async (fn: (tx: unknown) => unknown) => fn(o);
+  o.execute = async () => ({ rows: [] });
+  return db;
+}
+
 vi.mock("@/lib/db", () => ({
-  getDb: () => ({
+  getDb: () => withTx({
     select: () => chain(selectRows.shift() ?? []),
     insert: () => ({
       values: (v: Record<string, unknown>) => ({

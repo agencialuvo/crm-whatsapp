@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, max } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import {
@@ -13,10 +13,21 @@ import {
   type SlotUtc,
 } from "@/lib/time/slots";
 import { getSettings, type CalendarSettings } from "@/server/agenda/settings";
+import {
+  dayLoadMinutes,
+  evaluateSlot,
+  orderStaffForAssignment,
+  type CapacityMember,
+  type CapacitySession,
+  type StaffShift,
+} from "@/lib/agenda/capacity";
 
 /**
  * 015 — Motor de disponibilidad:
- *   horario semanal del negocio − citas activas − bloqueos manuales.
+ *   horario semanal del negocio − bloqueos manuales − tramos sin nadie libre.
+ *
+ * Cupos (`src/lib/agenda/capacity.ts`): una hora tiene tantos cupos como profesionales que reciben citas,
+ * dan ese servicio, trabajan TODA la duración de la cita y no tienen otra encima. Sin equipo, una silla.
  *
  * Limitación v1 documentada (Constitución VII): NO lee calendarios externos.
  * Es una decisión, no un olvido: meter al proveedor en este camino acoplaría su
@@ -75,16 +86,227 @@ export function filterFreeSlots(
     .map((c) => ({ ...c, label: labelInTz(c.startUtc, opts.timezone) }));
 }
 
+/**
+ * Qué cita se quiere poner: cuánto dura, de qué servicio u oferta (para saber quién lo da) y, si se pidió,
+ * con qué profesional. Todo opcional: sin nada es una franja estándar con cualquiera del equipo.
+ */
+export type SlotTarget = {
+  /** Duración real de la cita; sin ella, una franja (`slotMinutes`). */
+  durationMinutes?: number;
+  serviceId?: string | null;
+  comboId?: string | null;
+  /** Persona específica («con Ana»). */
+  staffId?: string | null;
+  /** El operador asigna a mano: vale aunque la persona tenga «Recibe citas» apagado. */
+  allowExcludedStaff?: boolean;
+};
+
+/** Un hueco reservable con los profesionales que lo pueden tomar, en el orden en que se intentan. */
+export type BookableSlot = AvailableSlot & { staffIds: string[] };
+
+/** Lo mínimo que se necesita para leer: la base o una transacción (la reserva lee DENTRO de su candado). */
+type Reader = Pick<ReturnType<typeof getDb>, "select">;
+
+type AvailabilityOpts = SlotTarget & {
+  fromISO?: string;
+  toISO?: string;
+  excludeBookingId?: string;
+  now?: Date;
+  settings?: CalendarSettings;
+  db?: Reader;
+};
+
+/** Una cita de hasta 600 min que empezó el día anterior todavía ocupa el principio del rango. */
+const LOOKBACK_MS = 24 * 3_600_000;
+
+/** Lo que se lee de la base para calcular cupos. */
+export type AgendaSnapshot = {
+  members: CapacityMember[];
+  sessions: CapacitySession[];
+  blocks: { startMs: number; endMs: number }[];
+  /** Quiénes dan el servicio u oferta pedido; `null` = todo el equipo. */
+  providers: string[] | null;
+};
+
+async function loadSnapshot(
+  db: Reader,
+  organizationId: string,
+  input: { fromUtc: Date; toUtc: Date; target: SlotTarget }
+): Promise<AgendaSnapshot> {
+  const { target } = input;
+  const [members, schedules, rows, providerRows] = await Promise.all([
+    db
+      .select({
+        id: schema.staff.id,
+        acceptsBookings: schema.staff.acceptsBookings,
+        createdAt: schema.staff.createdAt,
+      })
+      .from(schema.staff)
+      .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.active, true))),
+    db
+      .select({
+        staffId: schema.staffSchedule.staffId,
+        dayOfWeek: schema.staffSchedule.dayOfWeek,
+        isOff: schema.staffSchedule.isOff,
+        startTime: schema.staffSchedule.startTime,
+        endTime: schema.staffSchedule.endTime,
+      })
+      .from(schema.staffSchedule)
+      .where(scoped(schema.staffSchedule.organizationId, organizationId)),
+    db
+      .select({
+        id: schema.booking.id,
+        kind: schema.booking.kind,
+        staffId: schema.booking.staffId,
+        scheduledAt: schema.booking.scheduledAt,
+        durationMinutes: schema.booking.durationMinutes,
+      })
+      .from(schema.booking)
+      .where(
+        scoped(
+          schema.booking.organizationId,
+          organizationId,
+          and(
+            // Canceladas y no-show liberan el hueco.
+            inArray(schema.booking.status, ["agendada", "realizada"]),
+            // Sandbox: una cita de prueba no consume la agenda real.
+            eq(schema.booking.isTest, false),
+            gte(schema.booking.scheduledAt, new Date(input.fromUtc.getTime() - LOOKBACK_MS)),
+            lte(schema.booking.scheduledAt, input.toUtc)
+          )
+        )
+      ),
+    target.serviceId
+      ? db
+          .select({ staffId: schema.serviceStaff.staffId })
+          .from(schema.serviceStaff)
+          .where(
+            scoped(
+              schema.serviceStaff.organizationId,
+              organizationId,
+              eq(schema.serviceStaff.serviceId, target.serviceId)
+            )
+          )
+      : target.comboId
+        ? db
+            .select({ staffId: schema.comboStaff.staffId })
+            .from(schema.comboStaff)
+            .where(
+              scoped(schema.comboStaff.organizationId, organizationId, eq(schema.comboStaff.comboId, target.comboId))
+            )
+        : Promise.resolve([] as { staffId: string }[]),
+  ]);
+
+  const shiftsBy = new Map<string, Map<number, StaffShift>>();
+  for (const s of schedules) {
+    const map = shiftsBy.get(s.staffId) ?? new Map<number, StaffShift>();
+    map.set(s.dayOfWeek, { isOff: s.isOff, startTime: s.startTime, endTime: s.endTime });
+    shiftsBy.set(s.staffId, map);
+  }
+
+  const sessions: CapacitySession[] = [];
+  const blocks: AgendaSnapshot["blocks"] = [];
+  for (const r of rows) {
+    const startMs = r.scheduledAt.getTime();
+    const endMs = startMs + r.durationMinutes * 60_000;
+    if (r.kind === "block") blocks.push({ startMs, endMs });
+    else sessions.push({ id: r.id, staffId: r.staffId, startMs, endMs });
+  }
+
+  return {
+    members: members.map((m) => ({
+      id: m.id,
+      acceptsBookings: m.acceptsBookings,
+      createdAtMs: m.createdAt.getTime(),
+      shifts: shiftsBy.get(m.id) ?? new Map(),
+    })),
+    sessions,
+    blocks,
+    providers: providerRows.length > 0 ? providerRows.map((r) => r.staffId) : null,
+  };
+}
+
+/**
+ * PURA: los tramos en que el negocio abre, en UTC, para cada día de [from, to]. Una cita tiene que caber
+ * ENTERA en uno de ellos: un servicio de 60 min no empieza media hora antes de cerrar.
+ */
+export function openIntervals(
+  settings: Pick<CalendarSettings, "weeklyHours" | "timezone">,
+  fromISO: string,
+  toISO: string
+): { startMs: number; endMs: number }[] {
+  const out: { startMs: number; endMs: number }[] = [];
+  for (const date of eachDateInRange(fromISO, toISO)) {
+    const weekday = weekdayKeyOf(date, settings.timezone);
+    if (!weekday) continue;
+    for (const iv of settings.weeklyHours[weekday] ?? []) {
+      const start = zonedWallClockToUtc(date, iv.start, settings.timezone);
+      const end = zonedWallClockToUtc(date, iv.end, settings.timezone);
+      if (start && end && end > start) out.push({ startMs: start.getTime(), endMs: end.getTime() });
+    }
+  }
+  return out;
+}
+
+/**
+ * PURA: de las franjas candidatas, las que se pueden reservar para esta cita: con aviso mínimo, enteras
+ * dentro del horario, sin bloqueo encima en toda su duración y con alguien que la pueda atender.
+ */
+export function bookableSlots(input: {
+  candidates: SlotUtc[];
+  open: { startMs: number; endMs: number }[];
+  snapshot: AgendaSnapshot;
+  durationMinutes: number;
+  target: SlotTarget;
+  excludeBookingId?: string | null;
+  now: Date;
+  minNoticeHours: number;
+  timezone: string;
+}): BookableSlot[] {
+  const minStartMs = input.now.getTime() + input.minNoticeHours * 3_600_000;
+  const span = input.durationMinutes * 60_000;
+  const out: BookableSlot[] = [];
+  for (const c of input.candidates) {
+    const startMs = Date.parse(c.startUtc);
+    const endMs = startMs + span;
+    if (Number.isNaN(startMs) || startMs < minStartMs) continue;
+    if (!input.open.some((o) => startMs >= o.startMs && endMs <= o.endMs)) continue;
+    if (input.snapshot.blocks.some((b) => b.startMs < endMs && startMs < b.endMs)) continue;
+    const verdict = evaluateSlot(
+      { members: input.snapshot.members, sessions: input.snapshot.sessions, timezone: input.timezone },
+      {
+        startMs,
+        endMs,
+        providers: input.snapshot.providers,
+        staffId: input.target.staffId ?? null,
+        allowExcludedStaff: input.target.allowExcludedStaff,
+        excludeBookingId: input.excludeBookingId,
+      }
+    );
+    if (!verdict.ok) continue;
+    const startUtc = new Date(startMs).toISOString();
+    out.push({
+      startUtc,
+      endUtc: new Date(endMs).toISOString(),
+      label: labelInTz(startUtc, input.timezone),
+      staffIds: verdict.staffIds,
+    });
+  }
+  return out.sort((a, b) => Date.parse(a.startUtc) - Date.parse(b.startUtc));
+}
+
+/** Duración de la cita: la pedida o, sin ella, una franja. */
+const durationOf = (target: SlotTarget, settings: CalendarSettings): number =>
+  target.durationMinutes && target.durationMinutes > 0 ? target.durationMinutes : settings.slotMinutes;
+
 export async function computeAvailability(
   organizationId: string,
-  opts?: {
-    fromISO?: string;
-    toISO?: string;
-    excludeBookingId?: string;
-    now?: Date;
-    settings?: CalendarSettings;
-  }
+  opts?: AvailabilityOpts
 ): Promise<AvailableSlot[]> {
+  return (await bookable(organizationId, opts)).map(({ startUtc, endUtc, label }) => ({ startUtc, endUtc, label }));
+}
+
+async function bookable(organizationId: string, opts?: AvailabilityOpts): Promise<BookableSlot[]> {
   const settings = opts?.settings ?? (await getSettings(organizationId));
   const now = opts?.now ?? new Date();
   const tz = settings.timezone;
@@ -95,15 +317,22 @@ export async function computeAvailability(
   const candidates = buildCandidateSlots(settings, from, to);
   if (candidates.length === 0) return [];
 
-  const busy = await getBusyIntervals(organizationId, {
+  const target: SlotTarget = opts ?? {};
+  const snapshot = await loadSnapshot(opts?.db ?? getDb(), organizationId, {
     fromUtc: zonedWallClockToUtc(from, "00:00", tz) ?? new Date(0),
     toUtc:
       zonedWallClockToUtc(addDaysISO(to, 1), "00:00", tz) ??
       new Date(now.getTime() + 86_400_000 * 61),
-    excludeBookingId: opts?.excludeBookingId,
+    target,
   });
 
-  return filterFreeSlots(candidates, busy, {
+  return bookableSlots({
+    candidates,
+    open: openIntervals(settings, from, to),
+    snapshot,
+    durationMinutes: durationOf(target, settings),
+    target,
+    excludeBookingId: opts?.excludeBookingId,
     now,
     minNoticeHours: settings.minNoticeHours,
     timezone: tz,
@@ -111,36 +340,86 @@ export async function computeAvailability(
 }
 
 /**
- * Re-valida que un instante concreto siga libre. Se llama AL CONFIRMAR, nunca
- * al ofrecer. `excludeBookingId` permite reprogramar sin que la propia cita se
- * bloquee a sí misma.
+ * Re-valida que un instante concreto siga libre para ESTA cita (su duración, su servicio y, si se pidió, su
+ * profesional) y devuelve quiénes la pueden tomar, en el orden en que se intentan. Se llama AL CONFIRMAR,
+ * nunca al ofrecer. `excludeBookingId` permite reprogramar sin que la propia cita se bloquee a sí misma.
  *
- * Solo recalcula ±1 día alrededor del instante pedido.
- *
- * OJO: esto reduce la ventana de la carrera, no la cierra — entre este SELECT
- * y el INSERT cabe otra confirmación. Quien cierra de verdad es el índice
- * único parcial de `booking` (research D7); esto existe para dar una respuesta
- * útil (con alternativas) en el caso normal.
+ * Solo recalcula ±1 día alrededor del instante pedido. La reserva lo llama con la transacción que tiene el
+ * candado de la agenda (`db`): lo que lee ya incluye lo que confirmó la reserva anterior.
  */
 export async function findSlot(
   organizationId: string,
   whenISO: string,
-  opts?: { excludeBookingId?: string; now?: Date; settings?: CalendarSettings }
-): Promise<AvailableSlot | null> {
+  opts?: SlotTarget & { excludeBookingId?: string; now?: Date; settings?: CalendarSettings; db?: Reader }
+): Promise<BookableSlot | null> {
   const target = Date.parse(whenISO);
   if (Number.isNaN(target)) return null;
 
   const settings = opts?.settings ?? (await getSettings(organizationId));
+  const db = opts?.db ?? getDb();
   const dayInTz = todayInTz(new Date(target), settings.timezone);
 
-  const slots = await computeAvailability(organizationId, {
+  const slots = await bookable(organizationId, {
+    ...opts,
     fromISO: addDaysISO(dayInTz, -1),
     toISO: addDaysISO(dayInTz, 1),
-    excludeBookingId: opts?.excludeBookingId,
-    now: opts?.now,
     settings,
+    db,
   });
-  return slots.find((s) => Date.parse(s.startUtc) === target) ?? null;
+  const slot = slots.find((s) => Date.parse(s.startUtc) === target);
+  if (!slot || slot.staffIds.length <= 1) return slot ?? null;
+
+  // Varios libres: se ordenan por carga del día y por quién lleva más tiempo sin recibir una cita.
+  const dayStart = zonedWallClockToUtc(dayInTz, "00:00", settings.timezone)!.getTime();
+  const dayEnd = zonedWallClockToUtc(addDaysISO(dayInTz, 1), "00:00", settings.timezone)!.getTime();
+  const snapshot = await loadSnapshot(db, organizationId, {
+    fromUtc: new Date(dayStart),
+    toUtc: new Date(dayEnd),
+    target: {},
+  });
+  const last = await db
+    .select({ staffId: schema.booking.staffId, at: max(schema.booking.createdAt) })
+    .from(schema.booking)
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        organizationId,
+        eq(schema.booking.kind, "session"),
+        eq(schema.booking.isTest, false),
+        inArray(schema.booking.staffId, slot.staffIds)
+      )
+    )
+    .groupBy(schema.booking.staffId);
+
+  return {
+    ...slot,
+    staffIds: orderStaffForAssignment(slot.staffIds, {
+      members: snapshot.members,
+      loadMinutes: dayLoadMinutes(snapshot.sessions, dayStart, dayEnd, opts?.excludeBookingId),
+      lastAssignedMs: new Map(
+        last.flatMap((r) => (r.staffId && r.at ? [[r.staffId, r.at.getTime()] as const] : []))
+      ),
+    }),
+  };
+}
+
+/**
+ * Los profesionales que reciben citas (activos y con «Recibe citas»), para decirle al agente a quién puede
+ * nombrar. Vacío = sin equipo: la cita no lleva profesional.
+ */
+export async function bookableStaff(organizationId: string): Promise<{ id: string; name: string }[]> {
+  return getDb()
+    .select({ id: schema.staff.id, name: schema.staff.name })
+    .from(schema.staff)
+    .where(
+      scoped(
+        schema.staff.organizationId,
+        organizationId,
+        eq(schema.staff.active, true),
+        eq(schema.staff.acceptsBookings, true)
+      )
+    )
+    .orderBy(asc(schema.staff.createdAt), asc(schema.staff.name));
 }
 
 /** Una cita o un bloqueo, ya con sus instantes (lo que necesita el cálculo de ocupación). */
@@ -148,7 +427,8 @@ export type BusyRow = { kind: "session" | "block"; startUtc: string; endUtc: str
 
 /**
  * PURA: qué intervalos NO se pueden ofrecer, dadas las citas del rango y el
- * número de sillas.
+ * número de sillas. Es la vista AGREGADA del multicupo (sin mirar quién atiende cada cita); el motor ya
+ * decide por profesional con `evaluateSlot` (`src/lib/agenda/capacity.ts`).
  *
  *  - Un BLOQUEO manual ocupa su intervalo completo sea cual sea el número de
  *    sillas: es tiempo que el negocio no atiende, no una cita más.
@@ -196,55 +476,4 @@ export function buildBusyIntervals(rows: BusyRow[], chairs: number): SlotUtc[] {
     }
   }
   return busy;
-}
-
-async function getBusyIntervals(
-  organizationId: string,
-  input: { fromUtc: Date; toUtc: Date; excludeBookingId?: string }
-): Promise<SlotUtc[]> {
-  const db = getDb();
-
-  // Multicupo: tantas sillas como profesionales activos (al menos una). Es una
-  // simplificación documentada: no mira los turnos ni los días libres de cada
-  // uno — eso lo dibuja el tablero por sillas (Negocio → Agenda).
-  const activeStaff = await db
-    .select({ id: schema.staff.id })
-    .from(schema.staff)
-    .where(
-      scoped(schema.staff.organizationId, organizationId, eq(schema.staff.active, true))
-    );
-
-  const rows = await db
-    .select({
-      id: schema.booking.id,
-      kind: schema.booking.kind,
-      scheduledAt: schema.booking.scheduledAt,
-      durationMinutes: schema.booking.durationMinutes,
-    })
-    .from(schema.booking)
-    .where(
-      scoped(
-        schema.booking.organizationId,
-        organizationId,
-        and(
-          // Canceladas y no-show liberan el hueco.
-          inArray(schema.booking.status, ["agendada", "realizada"]),
-          // Sandbox: una cita de prueba no consume la agenda real.
-          eq(schema.booking.isTest, false),
-          gte(schema.booking.scheduledAt, input.fromUtc),
-          lte(schema.booking.scheduledAt, input.toUtc)
-        )
-      )
-    );
-
-  return buildBusyIntervals(
-    rows
-      .filter((r) => r.id !== input.excludeBookingId)
-      .map((r) => ({
-        kind: r.kind,
-        startUtc: r.scheduledAt.toISOString(),
-        endUtc: new Date(r.scheduledAt.getTime() + r.durationMinutes * 60_000).toISOString(),
-      })),
-    activeStaff.length
-  );
 }

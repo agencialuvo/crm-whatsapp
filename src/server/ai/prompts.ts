@@ -103,6 +103,8 @@ export function buildAgentSystemPrompt(input: {
    * token en hablar de horarios: la agenda no existe aquí.
    */
   agenda?: boolean;
+  /** Quiénes reciben citas (activos y con «Recibe citas»); vacío = sin equipo, no se habla de profesionales. */
+  agendaStaff?: { id: string; name: string }[];
   /** El anuncio de Meta del que llegó la conversación (si llegó de uno). */
   anuncio?: { headline: string | null; body: string | null } | null;
   /** Enrutamiento por anuncio: si la conversación llegó de un anuncio con flujo activo, manda sobre las reglas genéricas. */
@@ -136,10 +138,22 @@ export function buildAgentSystemPrompt(input: {
         '- {"action":"book_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — agendar el horario que el cliente eligió.',
       ]
     : [];
+  // Los nombres los escribe el dueño; se aplanan a una línea, igual que el texto del anuncio.
+  const equipo = input.agenda
+    ? (input.agendaStaff ?? [])
+        .map((m) => ({ id: m.id, name: limpiarTextoDeAnuncio(m.name, 60) }))
+        .filter((m) => m.name)
+    : [];
   const agendaRules = input.agenda
     ? [
         "- NUNCA escribas tú los horarios ni los inventes: usa offer_slots y el sistema pega los reales.",
         "- book_slot solo acepta un horario que el sistema ofreció antes en ESTA conversación. Si el cliente pide otro, vuelve a ofrecer con offer_slots.",
+        ...(equipo.length > 0
+          ? [
+              `- Profesionales que atienden citas: ${equipo.map((m) => `${m.name} (staffId "${m.id}")`).join(", ")}.`,
+              '- Si el cliente pide atenderse con alguien en concreto, añade su "staffId" a offer_slots y a book_slot. Si no pide a nadie, NO lo pongas: el sistema asigna a quien esté libre.',
+            ]
+          : []),
         "- Si el cliente quiere CANCELAR una cita → handoff: esa decisión no es tuya.",
       ]
     : [];

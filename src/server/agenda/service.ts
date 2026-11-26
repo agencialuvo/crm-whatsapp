@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -8,6 +8,7 @@ import {
   computeAvailability,
   findSlot,
   type AvailableSlot,
+  type SlotTarget,
 } from "@/server/agenda/availability";
 import { getSettings, type CalendarSettings } from "@/server/agenda/settings";
 import {
@@ -33,6 +34,8 @@ import {
 } from "@/server/automation/triggers";
 import { publish } from "@/server/events/bus";
 import { notify } from "@/server/notifications/service";
+import { requestCalendarSync } from "@/server/agenda/calendar-sync/sync";
+import { shortClientName } from "@/server/agenda/calendar-sync/event";
 
 /**
  * 015 — Ciclo de vida de la cita y las dos reglas INNEGOCIABLES:
@@ -54,7 +57,9 @@ export type BookingErrorCode =
   | "slot_taken"
   | "slot_not_offered"
   | "not_found"
-  | "invalid";
+  | "invalid"
+  /** Paso 4: un bloqueo traído de Google Calendar; se cambia allí, no en Vocero. */
+  | "external_block";
 
 export class BookingError extends Error {
   code: BookingErrorCode;
@@ -97,7 +102,10 @@ export async function createSessionBooking(input: {
   conversationId?: string | null;
   /** Camino manual del operador. */
   contactId?: string | null;
-  /** Módulo SALON: el profesional («silla») que atiende; nulo = sin asignar. */
+  /**
+   * El profesional que atiende. Sin él («cualquiera disponible», la IA y el bot) se elige uno libre que dé el
+   * servicio y trabaje toda la duración; con él, tiene que estar libre él. Sin equipo, la cita no lleva.
+   */
   staffId?: string | null;
   /** Módulo SALON: el servicio u oferta de la cita y cuánto dura (si no, una franja). */
   serviceId?: string | null;
@@ -167,21 +175,6 @@ export async function createSessionBooking(input: {
     }
   }
 
-  // REGLA 2 (primera mitad): el hueco debe seguir libre AHORA.
-  const slot = await findSlot(input.organizationId, input.startUtc, {
-    now: input.now,
-    settings,
-  });
-  if (!slot) {
-    throw new BookingError(
-      "slot_taken",
-      "Ese horario ya no está disponible",
-      await refreshOffer(input.organizationId, input.conversationId, {
-        now: input.now,
-      })
-    );
-  }
-
   const leadRows = await db
     .select({ id: schema.lead.id })
     .from(schema.lead)
@@ -194,46 +187,92 @@ export async function createSessionBooking(input: {
     )
     .limit(1);
 
-  let booking: BookingRow;
-  try {
-    const inserted = await db
-      .insert(schema.booking)
-      .values({
-        id: newId("booking"),
-        organizationId: input.organizationId,
-        kind: "session",
-        source: input.source === "ai" ? "ai" : "manual",
-        contactId,
-        conversationId: input.conversationId ?? null,
-        leadId: leadRows[0]?.id ?? null,
-        scheduledAt: new Date(slot.startUtc),
-        durationMinutes: input.durationMinutes ?? settings.slotMinutes,
-        // Copia histórica: si el negocio cambia de conector, esta cita conserva
-        // el que le tocó y sigue hablando con él al moverse o cancelarse.
-        connector: settings.connector,
-        isTest,
-        staffId: input.staffId ?? null,
-        serviceId: input.serviceId ?? null,
-        comboId: input.comboId ?? null,
-        notes: input.notes ?? null,
-      })
-      .returning();
-    booking = inserted[0]!;
-  } catch (err) {
-    // REGLA 2 (segunda mitad): la llave única cierra la carrera exacta. Dos
-    // confirmaciones simultáneas del mismo instante — la perdedora sale por
-    // aquí, sin cita creada.
-    if (isUniqueViolation(err)) {
-      throw new BookingError(
-        "slot_taken",
-        "Ese horario acaba de ocuparse",
-        await refreshOffer(input.organizationId, input.conversationId, {
-          now: input.now,
-        })
-      );
+  // La cita dura lo que dura su servicio u oferta (todas las franjas que abarca tienen que estar libres).
+  const durationMinutes =
+    input.durationMinutes ??
+    (await itemDuration(input.organizationId, input.serviceId, input.comboId)) ??
+    settings.slotMinutes;
+  const target: SlotTarget = {
+    durationMinutes,
+    serviceId: input.serviceId ?? null,
+    comboId: input.comboId ?? null,
+    staffId: input.staffId ?? null,
+    // Solo el operador puede asignar a alguien que no recibe citas (cubrir una ausencia, por ejemplo).
+    allowExcludedStaff: input.source === "manual" && !!input.staffId,
+  };
+
+  // REGLA 2: bajo el candado de la agenda de este negocio, el hueco se re-valida y se elige profesional. Dos
+  // reservas simultáneas pasan una detrás de otra, así la segunda ya ve a la primera (también las que se
+  // cruzan sin empezar a la misma hora, que el índice único no ve). Si aun así la base rechaza la fila
+  // (23505: alguien que no pasa por aquí ocupó ese instante), se prueba con el siguiente libre.
+  const outcome = await db.transaction(async (tx) => {
+    await lockAgenda(tx, input.organizationId);
+    const slot = await findSlot(input.organizationId, input.startUtc, {
+      ...target,
+      now: input.now,
+      settings,
+      db: tx,
+    });
+    if (!slot) return { slot: null, booking: null };
+    const candidates: (string | null)[] = slot.staffIds.length > 0 ? slot.staffIds : [null];
+    for (const staffId of candidates) {
+      try {
+        const row = await tx.transaction(async (sp) => {
+          const inserted = await sp
+            .insert(schema.booking)
+            .values({
+              id: newId("booking"),
+              organizationId: input.organizationId,
+              kind: "session",
+              source: input.source === "ai" ? "ai" : "manual",
+              contactId,
+              conversationId: input.conversationId ?? null,
+              leadId: leadRows[0]?.id ?? null,
+              scheduledAt: new Date(slot.startUtc),
+              durationMinutes,
+              // Copia histórica: si el negocio cambia de conector, esta cita conserva
+              // el que le tocó y sigue hablando con él al moverse o cancelarse.
+              connector: settings.connector,
+              isTest,
+              staffId,
+              serviceId: input.serviceId ?? null,
+              comboId: input.comboId ?? null,
+              notes: input.notes ?? null,
+            })
+            .returning();
+          return inserted[0]!;
+        });
+        return { slot, booking: row };
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+      }
     }
-    throw err;
+    return { slot, booking: null };
+  });
+
+  if (!outcome.slot) {
+    throw new BookingError(
+      "slot_taken",
+      "Ese horario ya no está disponible",
+      await refreshOffer(input.organizationId, input.conversationId, {
+        now: input.now,
+        target,
+      })
+    );
   }
+  if (!outcome.booking) {
+    // Todos los que estaban libres se ocuparon en el instante: sin cita creada.
+    throw new BookingError(
+      "slot_taken",
+      "Ese horario acaba de ocuparse",
+      await refreshOffer(input.organizationId, input.conversationId, {
+        now: input.now,
+        target,
+      })
+    );
+  }
+  const slot = outcome.slot;
+  const booking: BookingRow = outcome.booking;
 
   // La oferta cumplió su propósito.
   if (input.conversationId) {
@@ -246,6 +285,8 @@ export async function createSessionBooking(input: {
 
   // Efectos secundarios: ninguno puede revertir la cita.
   const delivered = await deliverMeeting(booking, settings, contactName);
+  // Paso 3: publicarla en Google Calendar (si está encendido). En segundo plano: nunca la retrasa.
+  await requestCalendarSync(input.organizationId, delivered.id);
   // 044: agendar una cita lleva al lead a «Interesado» (solo desde Nuevo / En conversación, nunca hacia atrás;
   // una cita de prueba no mueve nada). Reemplaza al antiguo «avanza una etapa» sin mirar cuál era.
   if (!isTest) {
@@ -333,40 +374,88 @@ export async function rescheduleBooking(input: {
   organizationId: string;
   bookingId: string;
   startUtc: string;
+  /** Con quién, si se pide a alguien concreto; sin él se conserva el profesional si sigue libre. */
+  staffId?: string | null;
   now?: Date;
 }): Promise<BookingResult> {
   const db = getDb();
   const booking = await getOwnBooking(input.organizationId, input.bookingId);
+  assertNotExternal(booking);
   if (booking.status === "cancelada") {
     throw new BookingError("invalid", "La cita está cancelada");
   }
 
   const settings = await getSettings(input.organizationId);
-  // excludeBookingId: la propia cita no debe bloquearse a sí misma.
-  const slot = await findSlot(input.organizationId, input.startUtc, {
-    excludeBookingId: booking.id,
-    now: input.now,
-    settings,
+  const base: SlotTarget = {
+    durationMinutes: booking.durationMinutes,
+    serviceId: booking.serviceId,
+    comboId: booking.comboId,
+  };
+
+  const outcome = await db.transaction(async (tx) => {
+    await lockAgenda(tx, input.organizationId);
+    // excludeBookingId: la propia cita no debe bloquearse a sí misma.
+    const find = (target: SlotTarget) =>
+      findSlot(input.organizationId, input.startUtc, {
+        ...base,
+        ...target,
+        excludeBookingId: booking.id,
+        now: input.now,
+        settings,
+        db: tx,
+      });
+
+    let slot: Awaited<ReturnType<typeof findSlot>> = null;
+    let candidates: (string | null)[] = [booking.staffId];
+    if (booking.kind === "block") {
+      slot = await find({});
+    } else {
+      // Primero, quien se pidió o quien ya la tenía (si ya era suya, vale aunque no reciba citas nuevas).
+      const preferred = input.staffId ?? booking.staffId;
+      if (preferred) {
+        slot = await find({ staffId: preferred, allowExcludedStaff: !input.staffId || preferred === booking.staffId });
+        if (slot) candidates = [preferred];
+      }
+      // Si no se pidió a nadie en concreto y quien la tenía ya no puede, cualquiera libre.
+      if (!slot && !input.staffId) {
+        slot = await find({});
+        if (slot) candidates = slot.staffIds.length > 0 ? slot.staffIds : [null];
+      }
+    }
+    if (!slot) return { slot: null, next: null };
+
+    for (const staffId of candidates) {
+      try {
+        const next = await tx.transaction(async (sp) => {
+          const updated = await sp
+            .update(schema.booking)
+            // Reprogramar limpia la confirmación: la hora nueva hay que confirmarla de nuevo.
+            .set({
+              scheduledAt: new Date(slot.startUtc),
+              ...(booking.kind === "session" && { staffId }),
+              confirmedAt: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.booking.id, booking.id))
+            .returning();
+          return updated[0]!;
+        });
+        return { slot, next };
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+      }
+    }
+    return { slot, next: null };
   });
-  if (!slot) {
+
+  if (!outcome.slot) {
     throw new BookingError("slot_taken", "Ese horario ya no está disponible");
   }
-
-  let next: BookingRow;
-  try {
-    const updated = await db
-      .update(schema.booking)
-      // Reprogramar limpia la confirmación: la hora nueva hay que confirmarla de nuevo.
-      .set({ scheduledAt: new Date(slot.startUtc), confirmedAt: null, updatedAt: new Date() })
-      .where(eq(schema.booking.id, booking.id))
-      .returning();
-    next = updated[0]!;
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      throw new BookingError("slot_taken", "Ese horario acaba de ocuparse");
-    }
-    throw err;
+  if (!outcome.next) {
+    throw new BookingError("slot_taken", "Ese horario acaba de ocuparse");
   }
+  const slot = outcome.slot;
+  const next: BookingRow = outcome.next;
 
   // Mover la reunión en el proveedor conserva el enlace: es la MISMA reunión,
   // en otra hora. Un fallo aquí no deshace nada — el enlace anterior sigue
@@ -378,6 +467,7 @@ export async function rescheduleBooking(input: {
       timezone: settings.timezone,
     });
   });
+  await requestCalendarSync(input.organizationId, next.id);
 
   publish(input.organizationId, {
     type: "booking.updated",
@@ -481,6 +571,7 @@ export async function cancelBooking(input: {
 }): Promise<void> {
   const db = getDb();
   const booking = await getOwnBooking(input.organizationId, input.bookingId);
+  assertNotExternal(booking);
   if (booking.status === "cancelada") return;
 
   await db
@@ -492,6 +583,7 @@ export async function cancelBooking(input: {
   await withConnector(booking, settings, async (conn, externalRef) => {
     await conn.deleteMeeting(externalRef);
   });
+  await requestCalendarSync(input.organizationId, booking.id);
 
   publish(input.organizationId, {
     type: "booking.updated",
@@ -509,6 +601,7 @@ export async function markBookingStatus(input: {
 }): Promise<void> {
   const db = getDb();
   const booking = await getOwnBooking(input.organizationId, input.bookingId);
+  assertNotExternal(booking);
   try {
     await db
       .update(schema.booking)
@@ -521,6 +614,8 @@ export async function markBookingStatus(input: {
     }
     throw err;
   }
+  // El evento lleva el resultado en el título («[Realizada]», «[No asistió]»).
+  await requestCalendarSync(input.organizationId, booking.id);
   publish(input.organizationId, {
     type: "booking.updated",
     data: { bookingId: booking.id },
@@ -602,6 +697,8 @@ export async function confirmBooking(input: {
     scheduledAt: booking.scheduledAt,
     isTest: booking.isTest,
   });
+  // El evento muestra «✓» en el título y «Asistencia confirmada» en la descripción.
+  await requestCalendarSync(input.organizationId, input.bookingId);
   return { confirmedAt: now, alreadyConfirmed: false };
 }
 
@@ -625,6 +722,8 @@ export async function retryMeetingLink(input: {
     ? await getContactName(input.organizationId, booking.contactId)
     : "";
   const delivered = await deliverMeeting(booking, settings, contactName);
+  // El enlace nuevo va en la descripción del evento.
+  await requestCalendarSync(input.organizationId, delivered.id);
 
   publish(input.organizationId, {
     type: "booking.updated",
@@ -667,11 +766,16 @@ async function deliverMeeting(
       booking.externalRef && conn.refreshMeeting
         ? await conn.refreshMeeting(booking.externalRef)
         : await conn.createMeeting({
-            topic: contactName ? `Cita — ${contactName}` : "Cita",
+            // Privacidad: el título de la reunión (y del evento de Google) lleva el nombre con la inicial
+            // del apellido; el calendario del negocio suele estar compartido.
+            topic: contactName ? `Cita — ${shortClientName(contactName)}` : "Cita",
             startUtc: booking.scheduledAt.toISOString(),
             durationMinutes: booking.durationMinutes,
             timezone: settings.timezone,
             notes: booking.notes ?? undefined,
+            // Llave de idempotencia: Google la usa como id del evento y de la conferencia de Meet.
+            bookingId: booking.id,
+            organizationId: booking.organizationId,
           });
 
     return await persistDelivery(booking.id, {
@@ -759,11 +863,13 @@ async function withConnector(
 async function refreshOffer(
   organizationId: string,
   conversationId: string | null | undefined,
-  opts: { now?: Date }
+  opts: { now?: Date; target?: SlotTarget }
 ): Promise<OfferedSlot[]> {
   let fresh: AvailableSlot[] = [];
   try {
-    fresh = (await computeAvailability(organizationId, { now: opts.now })).slice(
+    // Las alternativas son para la MISMA cita: su duración, su servicio y, si se pidió, su profesional.
+    const { allowExcludedStaff: _manual, ...target } = opts.target ?? {};
+    fresh = (await computeAvailability(organizationId, { ...target, now: opts.now })).slice(
       0,
       FRESH_ALTERNATIVES
     );
@@ -781,6 +887,19 @@ async function refreshOffer(
     });
   }
   return offers;
+}
+
+/**
+ * Paso 4 — Lo ocupado que se trajo de Google Calendar es un REFLEJO: se mueve o se quita en Google y la
+ * próxima lectura lo actualiza. Si se pudiera quitar aquí, la siguiente lectura lo volvería a poner.
+ */
+function assertNotExternal(booking: BookingRow): void {
+  if (booking.busySource === "google") {
+    throw new BookingError(
+      "external_block",
+      "Este bloqueo viene de tu Google Calendar: muévelo o bórralo allí y Vocero lo actualizará solo."
+    );
+  }
 }
 
 async function getOwnBooking(
@@ -820,6 +939,40 @@ async function getContactName(
     )
     .limit(1);
   return rows[0]?.name ?? "";
+}
+
+/**
+ * El candado de la agenda de UN negocio, hasta el final de la transacción: las reservas y los cambios de hora
+ * del mismo negocio pasan en fila (milisegundos), los de negocios distintos no se esperan.
+ */
+export async function lockAgenda(
+  tx: Pick<ReturnType<typeof getDb>, "execute">,
+  organizationId: string
+): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`agenda:${organizationId}`}))`);
+}
+
+/** Cuánto dura el servicio u oferta de la cita (`null` si no tiene duración o no se pidió ninguno). */
+async function itemDuration(
+  organizationId: string,
+  serviceId: string | null | undefined,
+  comboId: string | null | undefined
+): Promise<number | null> {
+  if (!serviceId && !comboId) return null;
+  const db = getDb();
+  const rows = serviceId
+    ? await db
+        .select({ minutes: schema.service.durationMinutes })
+        .from(schema.service)
+        .where(scoped(schema.service.organizationId, organizationId, eq(schema.service.id, serviceId)))
+        .limit(1)
+    : await db
+        .select({ minutes: schema.combo.durationMinutes })
+        .from(schema.combo)
+        .where(scoped(schema.combo.organizationId, organizationId, eq(schema.combo.id, comboId!)))
+        .limit(1);
+  const minutes = rows[0]?.minutes;
+  return minutes && minutes > 0 ? minutes : null;
 }
 
 /** Citas que ocupan agenda de verdad. */

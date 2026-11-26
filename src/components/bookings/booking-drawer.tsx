@@ -15,7 +15,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { bookingTitle, bookingTone, canRetrySync, isConfirmed, statusLabel, type Booking } from "./booking-look";
+import {
+  bookingTitle,
+  bookingTone,
+  calendarSyncLine,
+  canRetrySync,
+  isConfirmed,
+  statusLabel,
+  type Booking,
+} from "./booking-look";
 
 /**
  * 215 — La cita, abierta, sin salir del calendario. Tiene TODO lo que tenía la
@@ -77,7 +85,9 @@ export function BookingDrawer({
   const first = segments[0];
   const last = segments[segments.length - 1];
   const isSession = b.kind === "session";
-  const active = b.status === "agendada";
+  // Paso 4: lo ocupado que viene de Google Calendar se cambia allí; aquí solo se ve.
+  const fromGoogle = b.busySource === "google";
+  const active = b.status === "agendada" && !fromGoogle;
   const endMs = Date.parse(b.scheduledAtUtc) + b.durationMinutes * 60_000;
   const tone = bookingTone(b);
 
@@ -188,7 +198,7 @@ export function BookingDrawer({
                   <Video className="h-4 w-4 shrink-0" /> Enlace de la reunión
                 </a>
               )}
-              {b.connector === "google" && (
+              {(b.connector === "google" || b.calendarSync) && (
                 <p className="text-xs text-text-3">
                   Mueve y cancela desde Vocero: los cambios hechos en Google Calendar no se importan.
                 </p>
@@ -223,6 +233,35 @@ export function BookingDrawer({
             </section>
           )}
 
+          {/* Paso 3: su publicación en Google Calendar. Nunca bloquea la cita: si Google falla, se
+              reintenta sola y, cuando se rinde, se ofrece reintentar desde aquí. */}
+          {(() => {
+            const sync = calendarSyncLine(b);
+            if (!sync) return null;
+            return (
+              <section className="border-b p-4">
+                <div
+                  className={cn(
+                    "space-y-2 rounded-sm p-3 text-sm",
+                    sync.tone === "error" ? "bg-danger-tint text-danger-text" : "bg-subtle text-text-2"
+                  )}
+                >
+                  <p>{sync.text}</p>
+                  {sync.canRetry && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => void run({ action: "retry_calendar_sync" })}
+                    >
+                      Reintentar en Google Calendar
+                    </Button>
+                  )}
+                </div>
+              </section>
+            );
+          })()}
+
           {rescheduling && (
             <Reschedule
               today={today}
@@ -235,6 +274,15 @@ export function BookingDrawer({
                 }
               }}
             />
+          )}
+
+          {fromGoogle && (
+            <section className="border-b p-4">
+              <p className="rounded-sm bg-subtle p-3 text-sm text-text-2">
+                Este tramo está ocupado en tu Google Calendar. Para liberarlo, mueve o borra el evento allí: Vocero
+                lo actualiza solo en unos minutos (o con «Leer ahora» en Ajustes → Agenda).
+              </p>
+            </section>
           )}
 
           {error && (

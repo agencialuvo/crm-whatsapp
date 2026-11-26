@@ -156,6 +156,21 @@ export function resumeMetaAds(): void {
 }
 
 /**
+ * Paso 3 — La sincronización de citas con Google Calendar: arranca su barrido solo con la agenda encendida
+ * (`AGENDA`). Import dinámico: apagada, ni se cargan los módulos. Un fallo aquí nunca tumba el arranque.
+ */
+export function resumeCalendarSync(): void {
+  void import("@/server/agenda/flag")
+    .then(async ({ agendaEnabled }) => {
+      if (!agendaEnabled()) return;
+      const { startCalendarSyncSweeper, tickCalendarSync } = await import("@/server/agenda/calendar-sync/sweeper");
+      startCalendarSyncSweeper();
+      void tickCalendarSync();
+    })
+    .catch((err) => console.error("[boot] no se pudo iniciar la sincronización con Google Calendar:", err));
+}
+
+/**
  * Catálogo base de la plataforma (categorías de sector y plan por defecto).
  * Idempotente y nunca tumba el arranque: si la BD aún no está lista o la tabla
  * no existe, se reintenta en el próximo arranque.

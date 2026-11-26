@@ -44,6 +44,12 @@ export type CalendarSettings = {
   connector: ConnectorId;
   /** Sala fija del conector `enlace-fijo`; null ⇒ citas sin link. */
   meetingLink: string | null;
+  /** Paso 3: publicar las citas en el Google Calendar conectado (aparte de Meet). Apagado por defecto. */
+  googleSync: boolean;
+  /** Paso 3: incluir el teléfono del cliente en el evento (privacidad: apagado por defecto). */
+  googleSyncPhone: boolean;
+  /** Paso 4: tener en cuenta lo ocupado en el Google Calendar conectado (como bloqueos). Apagado por defecto. */
+  googleBusy: boolean;
 };
 
 /** Lo que ve una instancia recién encendida: útil sin configurar nada. */
@@ -56,6 +62,9 @@ export const DEFAULT_CALENDAR_SETTINGS: CalendarSettings = {
   timezone: DEFAULT_TIMEZONE,
   connector: DEFAULT_CONNECTOR,
   meetingLink: null,
+  googleSync: false,
+  googleSyncPhone: false,
+  googleBusy: false,
 };
 
 export const LIMITS = {
@@ -94,6 +103,9 @@ export async function getSettings(
     // puede dejar la agenda inservible: se degrada al soberano.
     connector: isConnectorId(row.connector) ? row.connector : DEFAULT_CONNECTOR,
     meetingLink: row.meetingLink,
+    googleSync: row.googleSync,
+    googleSyncPhone: row.googleSyncPhone,
+    googleBusy: row.googleBusy,
   };
 }
 
@@ -167,6 +179,9 @@ export async function upsertSettings(
     meetingLink: normalizeLink(
       input.meetingLink !== undefined ? input.meetingLink : current.meetingLink
     ),
+    googleSync: input.googleSync ?? current.googleSync,
+    googleSyncPhone: input.googleSyncPhone ?? current.googleSyncPhone,
+    googleBusy: input.googleBusy ?? current.googleBusy,
   };
 
   const db = getDb();
@@ -179,6 +194,9 @@ export async function upsertSettings(
     timezone: next.timezone,
     connector: next.connector,
     meetingLink: next.meetingLink,
+    googleSync: next.googleSync,
+    googleSyncPhone: next.googleSyncPhone,
+    googleBusy: next.googleBusy,
   };
   await db
     .insert(schema.calendarSettings)

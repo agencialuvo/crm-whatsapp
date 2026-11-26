@@ -34,6 +34,9 @@ export const dynamic = "force-dynamic";
  * `query.status` dice por qué no hay ninguna. Sin esto, a «¿mañana en la
  * tarde?» el cerebro solo veía las tres primeras horas de mañana y contestaba
  * que solo había mañana (`src/server/agenda/spread.ts`, `armarHuecos`).
+ *
+ * Con `staffId` (opcional) son los huecos de ESA persona («con Ana»); sin él,
+ * los de cualquiera del equipo que reciba citas.
  */
 
 const LIMITS = {
@@ -96,6 +99,7 @@ export async function GET(req: Request) {
     .limit(1);
   if (!rows[0]) return apiError(404, "not_found", "Conversación no encontrada");
 
+  const staffId = url.searchParams.get("staffId")?.trim() || null;
   const limit = clamp(url.searchParams.get("limit"), LIMITS.limit);
   const perDay = clamp(url.searchParams.get("perDay"), LIMITS.perDay);
   const days = clamp(url.searchParams.get("days"), LIMITS.days);
@@ -110,6 +114,7 @@ export async function GET(req: Request) {
     ? await computeAvailability(organizationId, {
         settings,
         now,
+        staffId,
         ...(date ? { fromISO: date, toISO: date } : {}),
       })
     : [];

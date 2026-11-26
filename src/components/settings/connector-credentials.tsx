@@ -70,6 +70,7 @@ const HELP: Record<ExternalConnector, { title: string; items: string[] }> = {
   google: {
     title: "Crea un proyecto en Google Cloud con la API de Calendar activada",
     items: [
+      "Solo si esta instancia no ofrece «Conectar con Google», o si prefieres tu propia app.",
       "Necesitas Client ID, Client Secret y un refresh token con el permiso de eventos de calendario (calendar.events).",
       "IMPORTANTE: publica tu app OAuth «en producción». Si la dejas en modo prueba, Google revoca el permiso a los 7 días y las citas dejarán de crear su enlace sin previo aviso.",
     ],
@@ -84,8 +85,11 @@ type Connection = {
 
 export function ConnectorCredentials({
   connector,
+  onConnectionChange,
 }: {
   connector: ExternalConnector;
+  /** Paso 3: avisa al contenedor (la tarjeta de Google) cuando se conecta o desconecta desde aquí. */
+  onConnectionChange?: () => void;
 }) {
   const meta = CONNECTOR_META[connector];
   const fields = FIELDS[connector];
@@ -145,6 +149,7 @@ export function ConnectorCredentials({
     const data = (await res.json()) as { connection: Connection };
     setConnection(data.connection);
     setMessage({ kind: "ok", text: `${meta.label} conectado` });
+    onConnectionChange?.();
   }
 
   async function disconnect() {
@@ -156,6 +161,7 @@ export function ConnectorCredentials({
     setConnection(null);
     setValues({});
     setMessage(null);
+    onConnectionChange?.();
   }
 
   return (

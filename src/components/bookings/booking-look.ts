@@ -16,6 +16,27 @@ export function isConfirmed(b: Booking): boolean {
   return b.kind === "session" && b.status === "agendada" && !!b.confirmedAt;
 }
 
+/**
+ * Paso 3 — Cómo va su publicación en Google Calendar, en una línea. `null` si no aplica (sincronización
+ * apagada, cita de prueba o bloqueo). `canRetry`: se ofrece «Reintentar» cuando falló y ya no se reintenta
+ * sola (agotó intentos, o Google se desconectó).
+ */
+export function calendarSyncLine(b: Booking): { text: string; tone: "ok" | "wait" | "error"; canRetry: boolean } | null {
+  const s = b.calendarSync;
+  if (!s || b.kind !== "session") return null;
+  if (s.status === "synced") {
+    return { text: b.status === "cancelada" ? "Quitada de Google Calendar" : "Publicada en Google Calendar", tone: "ok", canRetry: false };
+  }
+  if (s.status === "pending") return { text: "Publicándose en Google Calendar…", tone: "wait", canRetry: false };
+  return {
+    text: s.willRetry
+      ? `Google Calendar falló; se reintentará sola. ${s.error ?? ""}`.trim()
+      : `No se publicó en Google Calendar. ${s.error ?? ""}`.trim(),
+    tone: "error",
+    canRetry: !s.willRetry,
+  };
+}
+
 /** Un bloqueo no se "agenda" ni se "cancela": está activo o se quitó. */
 export function statusLabel(b: Booking): string {
   if (b.kind === "block") return b.status === "cancelada" ? "Quitado" : "Activo";

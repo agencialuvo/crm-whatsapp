@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getEnv } from "@/lib/env";
 import {
   ConnectorError,
@@ -12,6 +12,10 @@ import {
   setCachedGoogleToken,
   type GoogleCreds,
 } from "@/server/agenda/connectors/google-credentials";
+import {
+  calendarEventIdFor,
+  conferenceRequestIdFor,
+} from "@/server/agenda/calendar-sync/event";
 
 /**
  * 015 — Conector Google Calendar + Meet, por REST directo (sin SDK: la
@@ -32,6 +36,13 @@ import {
  *     prueba.** Eso no se puede arreglar desde aquí: se advierte en la guía de
  *     conexión, y cuando pasa, el 401 marca la credencial como rota para que
  *     el dueño se entere por la UI y no por un cliente sin enlace.
+ *
+ * Paso 3 — Idempotencia por cita: con `bookingId`, el evento lleva un id PROPIO
+ * y determinista (`calendarEventIdFor`) y la conferencia un `requestId` por cita.
+ * Si la respuesta del insert se pierde y se reintenta, Google contesta 409 y se
+ * reutiliza ese mismo evento (añadiéndole Meet si le falta) en vez de duplicarlo.
+ * Antes el `requestId` salía del instante: dos citas a la misma hora (multicupo)
+ * pedían la conferencia con el mismo id.
  */
 
 export const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar.events";
@@ -39,6 +50,8 @@ export const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 /** Cuántas veces se re-lee el evento esperando el enlace de Meet. */
 const CONFERENCE_POLLS = 3;
 const POLL_DELAY_MS = 400;
+/** Ninguna llamada a Google espera más que esto: una cita nunca queda colgada de un proveedor lento. */
+export const GOOGLE_TIMEOUT_MS = 10_000;
 
 /**
  * La clave del caché incluye TODO lo que determina el token.
@@ -68,7 +81,7 @@ function claveDeToken(creds: GoogleCreds): string {
     .digest("hex");
 }
 
-async function getAccessToken(creds: GoogleCreds): Promise<string> {
+export async function getAccessToken(creds: GoogleCreds): Promise<string> {
   const key = claveDeToken(creds);
   const cached = getCachedGoogleToken(key);
   if (cached) return cached;
@@ -84,6 +97,7 @@ async function getAccessToken(creds: GoogleCreds): Promise<string> {
         refresh_token: creds.refreshToken,
         grant_type: "refresh_token",
       }).toString(),
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     });
   } catch (err) {
     throw new ConnectorError("google", `No se pudo contactar a Google: ${err}`);
@@ -111,41 +125,58 @@ async function getAccessToken(creds: GoogleCreds): Promise<string> {
   return data.access_token;
 }
 
-async function googleFetch(
+/**
+ * Una llamada a la API de Calendar. Lanza `ConnectorError` salvo en los estados de `accept`, que se
+ * devuelven tal cual (`body` null si no hay cuerpo): así quien llama decide qué es éxito (un 404 al
+ * borrar, un 409 al crear con id propio).
+ */
+export async function googleRequest(
   creds: GoogleCreds,
   path: string,
-  init: RequestInit & { allow404?: boolean } = {}
-): Promise<unknown> {
+  init: RequestInit & { accept?: readonly number[] } = {}
+): Promise<{ status: number; body: unknown }> {
   const token = await getAccessToken(creds);
+  const { accept = [], ...rest } = init;
   let res: Response;
   try {
     res = await fetch(`${getEnv().GOOGLE_CAL_BASE_URL}${path}`, {
-      ...init,
+      ...rest,
       headers: {
         Authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        ...(init.headers ?? {}),
+        ...(rest.headers ?? {}),
       },
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     });
   } catch (err) {
     throw new ConnectorError("google", `No se pudo contactar a Google: ${err}`);
   }
 
-  if (res.status === 404 && init.allow404) return null;
-  if (res.status === 204) return null;
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new ConnectorError(
-      "google",
-      `Google respondió ${res.status}: ${detail}`,
-      { status: res.status }
-    );
+  if (res.ok || accept.includes(res.status)) {
+    const body = res.status === 204 ? null : await res.json().catch(() => null);
+    return { status: res.status, body };
   }
-  return await res.json().catch(() => null);
+  const detail = await res.text().catch(() => "");
+  throw new ConnectorError(
+    "google",
+    `Google respondió ${res.status}: ${detail.slice(0, 500)}`,
+    { status: res.status }
+  );
+}
+
+async function googleFetch(
+  creds: GoogleCreds,
+  path: string,
+  init: RequestInit & { allow404?: boolean } = {}
+): Promise<unknown> {
+  const { allow404, ...rest } = init;
+  const res = await googleRequest(creds, path, { ...rest, accept: allow404 ? [404, 410] : [] });
+  return res.status === 404 || res.status === 410 ? null : res.body;
 }
 
 type GoogleEvent = {
   id?: string;
+  status?: string;
   hangoutLink?: string;
   conferenceData?: {
     createRequest?: { status?: { statusCode?: string } };
@@ -162,8 +193,18 @@ function meetLinkOf(event: GoogleEvent | null): string | null {
   return video?.uri ?? event.hangoutLink ?? null;
 }
 
-function eventsPath(creds: GoogleCreds, suffix = ""): string {
+export function eventsPath(creds: GoogleCreds, suffix = ""): string {
   return `/calendars/${encodeURIComponent(creds.calendarId)}/events${suffix}`;
+}
+
+/** El camino de UN evento. */
+export function eventPath(creds: GoogleCreds, eventId: string, query = ""): string {
+  return eventsPath(creds, `/${encodeURIComponent(eventId)}${query}`);
+}
+
+/** ¿La conferencia ya existe o se está creando? (para no pedir otra encima). */
+function hasConference(event: GoogleEvent | null): boolean {
+  return !!meetLinkOf(event) || !!event?.conferenceData?.createRequest;
 }
 
 export const googleConnector: AgendaConnector<GoogleCreds> = {
@@ -174,31 +215,67 @@ export const googleConnector: AgendaConnector<GoogleCreds> = {
     const endUtc = new Date(
       Date.parse(req.startUtc) + req.durationMinutes * 60_000
     ).toISOString();
+    // Con la cita: id de evento y de conferencia propios y estables (idempotencia).
+    const eventId = req.bookingId ? calendarEventIdFor(req.bookingId) : undefined;
+    const requestId = req.bookingId
+      ? conferenceRequestIdFor(req.bookingId)
+      : `vocero-${randomUUID()}`;
+    const conferenceData = {
+      createRequest: { requestId, conferenceSolutionKey: { type: "hangoutsMeet" } },
+    };
 
-    const created = (await googleFetch(
+    const res = await googleRequest(
       creds,
-      `${eventsPath(creds)}?conferenceDataVersion=1`,
+      `${eventsPath(creds)}?conferenceDataVersion=1&sendUpdates=none`,
       {
         method: "POST",
+        accept: eventId ? [409] : [],
         body: JSON.stringify({
+          ...(eventId ? { id: eventId } : {}),
           summary: req.topic,
           description: req.notes ?? undefined,
-          start: { dateTime: req.startUtc, timeZone: "UTC" },
-          end: { dateTime: endUtc, timeZone: "UTC" },
-          conferenceData: {
-            createRequest: {
-              // Google exige un id de petición propio; el instante lo hace
-              // único por cita sin necesitar aleatoriedad.
-              requestId: `vocero-${Date.parse(req.startUtc)}`,
-              conferenceSolutionKey: { type: "hangoutsMeet" },
-            },
-          },
+          start: { dateTime: req.startUtc, timeZone: req.timezone || "UTC" },
+          end: { dateTime: endUtc, timeZone: req.timezone || "UTC" },
+          conferenceData,
+          ...(req.bookingId
+            ? {
+                extendedProperties: {
+                  private: {
+                    voceroBookingId: req.bookingId,
+                    ...(req.organizationId ? { voceroOrg: req.organizationId } : {}),
+                  },
+                },
+              }
+            : {}),
         }),
       }
-    )) as GoogleEvent | null;
+    );
 
-    const eventId = created?.id ?? null;
-    if (!eventId) {
+    let created = res.body as GoogleEvent | null;
+    if (res.status === 409 && eventId) {
+      // Ya existe: un reintento cuya primera respuesta se perdió, o el evento que publicó la
+      // sincronización del calendario. Se reutiliza; si le falta Meet (o se había borrado), se pide aquí.
+      const existing = (await googleFetch(creds, eventPath(creds, eventId))) as GoogleEvent | null;
+      created =
+        existing && hasConference(existing) && existing.status !== "cancelled"
+          ? existing
+          : ((await googleFetch(
+              creds,
+              eventPath(creds, eventId, "?conferenceDataVersion=1&sendUpdates=none"),
+              {
+                method: "PATCH",
+                body: JSON.stringify({
+                  status: "confirmed",
+                  start: { dateTime: req.startUtc, timeZone: req.timezone || "UTC" },
+                  end: { dateTime: endUtc, timeZone: req.timezone || "UTC" },
+                  ...(hasConference(existing) ? {} : { conferenceData }),
+                }),
+              }
+            )) as GoogleEvent | null) ?? { id: eventId };
+    }
+
+    const id = created?.id ?? eventId ?? null;
+    if (!id) {
       throw new ConnectorError("google", "Google no devolvió el evento creado");
     }
 
@@ -207,23 +284,19 @@ export const googleConnector: AgendaConnector<GoogleCreds> = {
     // venir `pending`. Se re-lee un par de veces antes de rendirse.
     for (let i = 0; i < CONFERENCE_POLLS && !link; i++) {
       await sleep(POLL_DELAY_MS);
-      const refreshed = (await googleFetch(
-        creds,
-        `${eventsPath(creds, `/${encodeURIComponent(eventId)}`)}`
-      ).catch(() => null)) as GoogleEvent | null;
+      const refreshed = (await googleFetch(creds, eventPath(creds, id)).catch(
+        () => null
+      )) as GoogleEvent | null;
       link = meetLinkOf(refreshed);
     }
 
     // Con el evento creado y sin enlace, el motor deja la cita "sin enlace" y
     // el operador reintenta: eso re-lee este mismo evento, no crea otro.
-    return { externalId: eventId, joinUrl: link };
+    return { externalId: id, joinUrl: link };
   },
 
   async refreshMeeting(creds, externalId): Promise<MeetingResult> {
-    const event = (await googleFetch(
-      creds,
-      eventsPath(creds, `/${encodeURIComponent(externalId)}`)
-    )) as GoogleEvent | null;
+    const event = (await googleFetch(creds, eventPath(creds, externalId))) as GoogleEvent | null;
     return { externalId, joinUrl: meetLinkOf(event) };
   },
 
@@ -231,17 +304,18 @@ export const googleConnector: AgendaConnector<GoogleCreds> = {
     const endUtc = new Date(
       Date.parse(req.startUtc) + req.durationMinutes * 60_000
     ).toISOString();
-    await googleFetch(creds, eventsPath(creds, `/${encodeURIComponent(externalId)}`), {
+    await googleFetch(creds, eventPath(creds, externalId, "?sendUpdates=none"), {
       method: "PATCH",
       body: JSON.stringify({
-        start: { dateTime: req.startUtc, timeZone: "UTC" },
-        end: { dateTime: endUtc, timeZone: "UTC" },
+        start: { dateTime: req.startUtc, timeZone: req.timezone || "UTC" },
+        end: { dateTime: endUtc, timeZone: req.timezone || "UTC" },
       }),
     });
   },
 
   async deleteMeeting(creds, externalId): Promise<void> {
-    await googleFetch(creds, eventsPath(creds, `/${encodeURIComponent(externalId)}`), {
+    // 404 (nunca existió) y 410 (ya estaba borrado) son éxito: borrar es idempotente.
+    await googleFetch(creds, eventPath(creds, externalId, "?sendUpdates=none"), {
       method: "DELETE",
       allow404: true,
     });

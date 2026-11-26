@@ -33,6 +33,7 @@ function toDto(
     name: r.name,
     phone: r.phone,
     active: r.active,
+    acceptsBookings: r.acceptsBookings,
     globalCommissionPercentage: r.globalCommissionPercentage,
     schedule,
     commissions,
@@ -106,6 +107,7 @@ export async function createStaff(
         name: input.name,
         phone: input.phone ?? null,
         active: input.active ?? true,
+        acceptsBookings: input.acceptsBookings ?? true,
         globalCommissionPercentage: input.globalCommissionPercentage ?? null,
         imageMediaId: input.imageMediaId ?? null,
       })
@@ -126,6 +128,7 @@ export async function updateStaff(
       ...(patch.name !== undefined && { name: patch.name }),
       ...(patch.phone !== undefined && { phone: patch.phone }),
       ...(patch.active !== undefined && { active: patch.active }),
+      ...(patch.acceptsBookings !== undefined && { acceptsBookings: patch.acceptsBookings }),
       ...(patch.globalCommissionPercentage !== undefined && {
         globalCommissionPercentage: patch.globalCommissionPercentage,
       }),

@@ -230,6 +230,11 @@ export const staff = pgTable(
     name: text("name").notNull(),
     phone: text("phone"),
     active: boolean("active").notNull().default(true),
+    /**
+     * ¿Cuenta para los cupos de la agenda? Apagado, el profesional sigue activo (ventas, comisiones, tablero)
+     * pero ni la IA ni el bot lo eligen y no suma capacidad. El operador aún puede asignárselo a mano.
+     */
+    acceptsBookings: boolean("accepts_bookings").notNull().default(true),
     /** Porcentaje global de comisión si aplica para todo (ej: 50%) */
     globalCommissionPercentage: integer("global_commission_percentage"),
     /** Foto elegida de la biblioteca (Medios). Si el medio se borra, queda sin foto. */
@@ -1972,6 +1977,19 @@ export const calendarSettings = pgTable(
     connector: text("connector").notNull().default("enlace-fijo"),
     /** Sala fija del conector `enlace-fijo`; null ⇒ citas sin link. */
     meetingLink: text("meeting_link"),
+    /**
+     * Paso 3 — Publicar las citas en el Google Calendar conectado, sea cual sea el conector de entrega
+     * (Meet solo con el conector `google`). Conector opcional: apagado por defecto.
+     */
+    googleSync: boolean("google_sync").notNull().default(false),
+    /** Incluir el teléfono del cliente en la descripción del evento (privacidad: apagado por defecto). */
+    googleSyncPhone: boolean("google_sync_phone").notNull().default(false),
+    /**
+     * Paso 4 — Tener en cuenta lo ocupado en el Google Calendar conectado: un barrido lee los eventos y los
+     * guarda como bloqueos (`booking.busy_source = 'google'`). La disponibilidad sigue leyendo SOLO la base.
+     * Apagado por defecto.
+     */
+    googleBusy: boolean("google_busy").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -2046,11 +2064,35 @@ export const booking = pgTable(
      * sí). null = sin confirmar. Reprogramar la cita la limpia: la hora nueva hay que confirmarla de nuevo.
      */
     confirmedAt: timestamp("confirmed_at"),
+    /**
+     * Paso 3 — Publicación de la cita en el Google Calendar del negocio (`calendar_settings.google_sync`),
+     * aparte de Meet. `calendar_event_id`: el evento que la refleja (id determinista por cita). Estado:
+     * null = no aplica (sincronización apagada, bloqueo o cita de prueba); `pending` por enviar;
+     * `synced` al día; `error` falló (se reintenta con espera creciente hasta agotar intentos).
+     * `calendar_sync_next_at` es a la vez cuándo toca el próximo intento y la «versión» del pedido: quien
+     * termina un intento solo escribe si sigue siendo la misma (un cambio a mitad vuelve a pedir).
+     */
+    calendarEventId: text("calendar_event_id"),
+    calendarSyncStatus: text("calendar_sync_status", { enum: ["pending", "synced", "error"] }),
+    calendarSyncAttempts: integer("calendar_sync_attempts").notNull().default(0),
+    calendarSyncNextAt: timestamp("calendar_sync_next_at"),
+    calendarSyncedAt: timestamp("calendar_synced_at"),
+    calendarSyncError: text("calendar_sync_error"),
+    /**
+     * Paso 4 — De dónde salió un BLOQUEO: null = lo puso alguien en Vocero; `google` = lo ocupado en el
+     * Google Calendar conectado (`calendar_settings.google_busy`). Los de Google los escribe y borra SOLO
+     * `src/server/agenda/calendar-busy/`; desde Vocero no se mueven ni se quitan (se cambian en Google).
+     */
+    busySource: text("busy_source", { enum: ["google"] }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
     index("booking_org_when_idx").on(t.organizationId, t.scheduledAt),
+    // El barrido de la sincronización: solo las filas con algo pendiente.
+    index("booking_calendar_sync_due_idx")
+      .on(t.calendarSyncNextAt)
+      .where(sql`${t.calendarSyncStatus} in ('pending', 'error') and ${t.calendarSyncNextAt} is not null`),
     index("booking_org_staff_idx").on(t.organizationId, t.staffId, t.scheduledAt),
     index("booking_org_status_idx").on(t.organizationId, t.status),
     /**
@@ -2068,7 +2110,9 @@ export const booking = pgTable(
       // cambio.
       .on(t.organizationId, t.scheduledAt, sql`coalesce(${t.staffId}, '')`)
       .where(
-        sql`${t.status} in ('agendada','realizada') and ${t.isTest} = false`
+        // Paso 4: lo ocupado en Google no entra en el índice. Es un reflejo, no una reserva: puede empezar a
+        // la misma hora que una cita o un bloqueo propio y no debe impedirlo ni chocar con ellos.
+        sql`${t.status} in ('agendada','realizada') and ${t.isTest} = false and ${t.busySource} is null`
       ),
   ]
 );
@@ -2140,10 +2184,16 @@ export const googleCredentials = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
+    /**
+     * Paso 3 — De dónde salió la conexión: `oauth` (botón «Conectar con Google», con la app OAuth de la
+     * instancia: su secreto vive en `GOOGLE_OAUTH_CLIENT_SECRET` y NO se copia aquí) o `manual` (Avanzado:
+     * el negocio pega las credenciales de su propia app).
+     */
+    source: text("source", { enum: ["oauth", "manual"] }).notNull().default("manual"),
     clientId: text("client_id").notNull(),
-    clientSecretCipher: text("client_secret_cipher").notNull(),
-    clientSecretIv: text("client_secret_iv").notNull(),
-    clientSecretTag: text("client_secret_tag").notNull(),
+    clientSecretCipher: text("client_secret_cipher"),
+    clientSecretIv: text("client_secret_iv"),
+    clientSecretTag: text("client_secret_tag"),
     refreshTokenCipher: text("refresh_token_cipher").notNull(),
     refreshTokenIv: text("refresh_token_iv").notNull(),
     refreshTokenTag: text("refresh_token_tag").notNull(),
@@ -2151,6 +2201,24 @@ export const googleCredentials = pgTable(
     status: text("status", { enum: ["connected", "error"] })
       .notNull()
       .default("connected"),
+    /** La cuenta que autorizó (OAuth), para mostrar «Conectado como …». */
+    accountEmail: text("account_email"),
+    connectedAt: timestamp("connected_at"),
+    /** Último error de Google (sin secretos) y última llamada correcta: el estado que ve Ajustes. */
+    lastError: text("last_error"),
+    lastOkAt: timestamp("last_ok_at"),
+    /**
+     * Paso 4 — La lectura de lo ocupado (Google → bloqueos). `busy_status`: null = nunca leída; `ok`;
+     * `error` (falló, se reintenta sola; los bloqueos ya guardados se quedan); `needs_reconnect` (Google no
+     * dio permiso para leer: se pausa hasta reconectar). `busy_next_at`: cuándo toca la próxima lectura.
+     */
+    busyStatus: text("busy_status", { enum: ["ok", "error", "needs_reconnect"] }),
+    busySyncedAt: timestamp("busy_synced_at"),
+    busyError: text("busy_error"),
+    busyAttempts: integer("busy_attempts").notNull().default(0),
+    busyNextAt: timestamp("busy_next_at"),
+    /** Cuántos tramos ocupados quedaron guardados en la última lectura. */
+    busyBlocks: integer("busy_blocks").notNull().default(0),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

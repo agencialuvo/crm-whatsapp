@@ -54,6 +54,8 @@ const postSchema = z.discriminatedUnion("kind", [
     contactId: z.string().min(1),
     conversationId: z.string().min(1).nullish(),
     startUtc: z.string().min(1),
+    /** Con quién; ausente o `null` = cualquiera disponible (se asigna solo). */
+    staffId: z.string().min(1).nullish(),
     notes: z.string().nullish(),
   }),
   z.object({
@@ -97,6 +99,7 @@ export const POST = withAuth(async (session, req: Request) => {
       contactId: body.data.contactId,
       conversationId: body.data.conversationId ?? null,
       startUtc: body.data.startUtc,
+      staffId: body.data.staffId ?? null,
       notes: body.data.notes ?? null,
       source: "manual",
       requireOffer: false,

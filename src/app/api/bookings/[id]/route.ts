@@ -8,6 +8,7 @@ import {
   rescheduleBooking,
   retryMeetingLink,
 } from "@/server/agenda/service";
+import { requestCalendarSync } from "@/server/agenda/calendar-sync/sync";
 import { bookingErrorResponse } from "@/server/agenda/http";
 import { moduleGate } from "@/server/business/saas-guard";
 
@@ -24,6 +25,8 @@ const patchSchema = z.discriminatedUnion("action", [
     status: z.enum(["realizada", "no_show"]),
   }),
   z.object({ action: z.literal("retry_link") }),
+  // Paso 3: volver a publicar la cita en Google Calendar (tras agotar reintentos o reconectar).
+  z.object({ action: z.literal("retry_calendar_sync") }),
 ]);
 
 /**
@@ -68,6 +71,11 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
           bookingId: id,
           status: body.data.status,
         });
+        return Response.json({ ok: true });
+      }
+      case "retry_calendar_sync": {
+        // Sin la sincronización encendida no hace nada; una cita ajena o de prueba no se marca.
+        await requestCalendarSync(session.organizationId, id);
         return Response.json({ ok: true });
       }
       case "retry_link": {

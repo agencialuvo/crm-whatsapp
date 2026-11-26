@@ -19,6 +19,7 @@ import {
   type ConnectorId,
 } from "@/lib/agenda-connectors";
 import { ConnectorCredentials } from "@/components/settings/connector-credentials";
+import { GoogleCalendarCard } from "@/components/settings/google-calendar-card";
 
 /**
  * 015 — Ajustes → Agenda: cuándo atiende el negocio y cómo se entrega la
@@ -38,6 +39,9 @@ type Settings = {
   timezone: string;
   connector: ConnectorId;
   meetingLink: string | null;
+  googleSync: boolean;
+  googleSyncPhone: boolean;
+  googleBusy: boolean;
 };
 
 const DAYS: { key: DayKey; label: string }[] = [
@@ -378,9 +382,19 @@ export function AgendaClient() {
 
       {/* Las credenciales se guardan por su cuenta, no con el botón de arriba:
           se validan contra el proveedor antes de tocar la base. */}
-      {settings.connector !== "enlace-fijo" && (
-        <ConnectorCredentials connector={settings.connector} />
-      )}
+      {settings.connector === "zoom" && <ConnectorCredentials connector="zoom" />}
+
+      {/* Paso 3: Google se conecta aquí aunque el conector sea otro, porque publicar las citas en el
+          calendario ya no depende de Meet. */}
+      <GoogleCalendarCard
+        sync={{
+          googleSync: settings.googleSync,
+          googleSyncPhone: settings.googleSyncPhone,
+          googleBusy: settings.googleBusy,
+        }}
+        meetSelected={settings.connector === "google"}
+        onSyncSaved={(next) => setSettings((s) => (s ? { ...s, ...next } : s))}
+      />
 
       <Card>
         <CardHeader>

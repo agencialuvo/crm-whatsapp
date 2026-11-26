@@ -45,7 +45,8 @@ vi.mock("@/server/agenda/settings", () => ({
 
 vi.mock("@/server/agenda/availability", () => ({
   // El hueco se ve libre al re-validar: la otra confirmación aún no escribía.
-  findSlot: async () => ({ startUtc: SLOT, endUtc: "…", label: "mié 5 ago, 09:00" }),
+  // Sin equipo: `staffIds` vacío, la cita queda sin profesional (como siempre).
+  findSlot: async () => ({ startUtc: SLOT, endUtc: "…", label: "mié 5 ago, 09:00", staffIds: [...slotStaff] }),
   computeAvailability: async () => ALTERNATIVES,
 }));
 
@@ -77,6 +78,10 @@ vi.mock("@/server/events/bus", () => ({ publish: () => {} }));
 const selectRows: unknown[][] = [];
 /** Si tiene algo, el INSERT lo lanza en vez de insertar. */
 let insertThrows: unknown = null;
+/** Si tiene algo, solo los PRIMEROS intentos de INSERT lo lanzan (uno por elemento). */
+const insertThrowsOnce: unknown[] = [];
+/** Quiénes están libres según `findSlot`, en el orden en que se intentan (vacío = sin equipo). */
+let slotStaff: string[] = [];
 const inserted: unknown[] = [];
 
 function chain(rows: unknown[]) {
@@ -88,13 +93,25 @@ function chain(rows: unknown[]) {
   return c;
 }
 
+/**
+ * La reserva corre dentro de una transacción con el candado de la agenda (`pg_advisory_xact_lock`) y cada
+ * intento de INSERT en un savepoint: aquí la transacción es la misma base simulada y el candado no hace nada.
+ */
+function withTx<T extends object>(db: T): T {
+  const o = db as Record<string, unknown>;
+  o.transaction = async (fn: (tx: unknown) => unknown) => fn(o);
+  o.execute = async () => ({ rows: [] });
+  return db;
+}
+
 vi.mock("@/lib/db", () => ({
-  getDb: () => ({
+  getDb: () => withTx({
     select: () => chain(selectRows.shift() ?? []),
     insert: () => ({
       values: (v: unknown) => ({
         returning: () => {
           if (insertThrows) return Promise.reject(insertThrows);
+          if (insertThrowsOnce.length > 0) return Promise.reject(insertThrowsOnce.shift());
           inserted.push(v);
           return Promise.resolve([
             {
@@ -152,6 +169,8 @@ describe("la carrera del hueco", () => {
     selectRows.length = 0;
     inserted.length = 0;
     insertThrows = null;
+    insertThrowsOnce.length = 0;
+    slotStaff = [];
     replaceOffers.mockClear();
     clearOffers.mockClear();
   });
@@ -218,6 +237,44 @@ describe("la carrera del hueco", () => {
         requireOffer: true,
       })
     ).rejects.toMatchObject({ code: "23503" });
+  });
+
+  it("con equipo, un 23505 con quien estaba libre se reintenta con el SIGUIENTE libre, sin alternativas", async () => {
+    const { createSessionBooking } = await import("@/server/agenda/service");
+    primeLookups();
+    slotStaff = ["stf_ana", "stf_beto"];
+    // Alguien que no pasa por el candado (asignar a mano) tomó a Ana en ese instante.
+    insertThrowsOnce.push({ code: "23505" });
+
+    await createSessionBooking({
+      organizationId: "org_1",
+      conversationId: "cv_1",
+      startUtc: SLOT,
+      source: "ai",
+      requireOffer: true,
+    });
+    // La única fila que llegó a guardarse es la de Beto (la de Ana la rechazó la base).
+    expect(inserted).toHaveLength(1);
+    expect((inserted[0] as { staffId: string }).staffId).toBe("stf_beto");
+    expect(replaceOffers).not.toHaveBeenCalled();
+  });
+
+  it("si TODOS los libres chocan, slot_taken con alternativas y sin cita", async () => {
+    const { createSessionBooking } = await import("@/server/agenda/service");
+    primeLookups();
+    slotStaff = ["stf_ana", "stf_beto"];
+    insertThrowsOnce.push({ code: "23505" }, { code: "23505" });
+
+    await expect(
+      createSessionBooking({
+        organizationId: "org_1",
+        conversationId: "cv_1",
+        startUtc: SLOT,
+        source: "ai",
+        requireOffer: true,
+      })
+    ).rejects.toMatchObject({ code: "slot_taken", slots: [{ label: "mié 5 ago, 09:30" }, { label: "mié 5 ago, 10:00" }] });
+    expect(inserted).toHaveLength(0);
   });
 
   it("un instante que nunca se ofreció se rechaza ANTES de tocar la base", async () => {

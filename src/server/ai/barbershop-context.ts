@@ -78,6 +78,7 @@ export async function getBarbershopAiContext(organizationId: string): Promise<st
     .select({
       id: staff.id,
       name: staff.name,
+      acceptsBookings: staff.acceptsBookings,
     })
     .from(staff)
     .where(scoped(staff.organizationId, organizationId, eq(staff.active, true)));
@@ -92,6 +93,9 @@ export async function getBarbershopAiContext(organizationId: string): Promise<st
     const lista = activeProviders(item, equipo).map((m) => m.name);
     return lista.length > 0 ? ` Solo lo realiza: ${lista.join(", ")}.` : "";
   };
+
+  // Para agendar solo cuentan quienes reciben citas (Equipo → «Recibe citas»).
+  const atiendenCitas = personalActivo.filter((p) => p.acceptsBookings);
 
   // 4. Construir el texto estructurado para el prompt del sistema del LLM
   return `
@@ -125,8 +129,8 @@ ${
 
 ### PERSONAL (STAFF) DISPONIBLE:
 Contamos con los siguientes profesionales: ${
-    personalActivo.length > 0
-      ? personalActivo.map((st) => st.name).join(", ")
+    atiendenCitas.length > 0
+      ? atiendenCitas.map((st) => st.name).join(", ")
       : "Equipo general de barberos"
   }.
 

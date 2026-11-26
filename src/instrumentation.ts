@@ -12,6 +12,7 @@ export async function register(): Promise<void> {
       cleanupOrphanRuns,
       encryptLegacySecrets,
       resumeAutomations,
+      resumeCalendarSync,
       resumeDispatch,
       resumeMediaMaintenance,
       resumeMediaOptimizer,
@@ -31,6 +32,7 @@ export async function register(): Promise<void> {
     resumeDispatch();
     resumeAutomations();
     resumeMetaAds();
+    resumeCalendarSync();
     resumeOutboxSweeper();
     resumeSubscriptionSweeper();
     resumeMediaMaintenance();

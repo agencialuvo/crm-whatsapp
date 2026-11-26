@@ -8,6 +8,8 @@ import {
   upsertSettings,
 } from "@/server/agenda/settings";
 import { moduleGate } from "@/server/business/saas-guard";
+import { resyncUpcomingBookings } from "@/server/agenda/calendar-sync/sync";
+import { clearGoogleBusyBlocks, requestBusySync } from "@/server/agenda/calendar-busy/sync";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +51,11 @@ const putSchema = z.object({
     })
     .optional(),
   meetingLink: z.string().nullish(),
+  /** Paso 3: publicar las citas en Google Calendar y, opcionalmente, con el teléfono del cliente. */
+  googleSync: z.boolean().optional(),
+  googleSyncPhone: z.boolean().optional(),
+  /** Paso 4: tener en cuenta lo ocupado en Google Calendar. */
+  googleBusy: z.boolean().optional(),
 });
 
 /**
@@ -65,12 +72,27 @@ export const PUT = withAuth(async (session, req: Request) => {
   if (!body.ok) return body.response;
 
   try {
+    const before = await getSettings(session.organizationId);
     const settings = await upsertSettings(session.organizationId, {
       ...body.data,
       // `undefined` = no lo tocaron; `null` = lo vaciaron a propósito.
       meetingLink:
         body.data.meetingLink === undefined ? undefined : body.data.meetingLink,
     });
+    // Encender la publicación (o cambiar qué se muestra) vuelve a publicar las citas que vienen.
+    if (
+      settings.googleSync &&
+      (!before.googleSync || before.googleSyncPhone !== settings.googleSyncPhone)
+    ) {
+      await resyncUpcomingBookings(session.organizationId);
+    }
+    // Paso 4: encender la lectura lee ya (en segundo plano); apagarla quita lo que se había traído de Google.
+    // Cambiar cuántos días se ofrecen cambia qué tramo hay que leer.
+    if (settings.googleBusy && (!before.googleBusy || before.maxDaysAhead !== settings.maxDaysAhead)) {
+      await requestBusySync(session.organizationId);
+    } else if (!settings.googleBusy && before.googleBusy) {
+      await clearGoogleBusyBlocks(session.organizationId);
+    }
     return Response.json({ settings });
   } catch (err) {
     if (err instanceof CalendarSettingsError) {

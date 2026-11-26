@@ -216,6 +216,8 @@ export const staffInputSchema = z.object({
   name: staffName,
   phone,
   active: z.boolean().optional(),
+  /** ¿Recibe citas? (cuenta para los cupos de la agenda). Ausente al crear = sí. */
+  acceptsBookings: z.boolean().optional(),
   /** `null` = sin porcentaje propio: manda el del servicio; sin ninguno, no hay comisión. */
   globalCommissionPercentage: percentage.nullable().optional(),
   /** Foto de la biblioteca de Medios; `null` la quita, ausente no la toca. */

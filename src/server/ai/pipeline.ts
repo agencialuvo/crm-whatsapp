@@ -33,6 +33,7 @@ import {
 } from "@/server/ai/orden-turno";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { bookSlot, offerSlots } from "@/server/agenda/agent";
+import { bookableStaff } from "@/server/agenda/availability";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { salonEnabled } from "@/server/business/flag";
 import { getPlanAccess } from "@/server/business/saas-guard";
@@ -306,6 +307,14 @@ export async function runAgentTurn(
    */
   const ofertas = agenda ? await getOffers(organizationId, conversationId) : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
+  // Quiénes reciben citas: el modelo solo puede pedir «con Ana» si sabe que Ana existe (y su id). Un fallo
+  // aquí deja al agente sin esa opción, no sin agenda.
+  const equipoAgenda = agenda
+    ? await bookableStaff(organizationId).catch((err) => {
+        console.error("[agente] no se pudo leer el equipo de la agenda:", err);
+        return [] as { id: string; name: string }[];
+      })
+    : [];
 
   /**
    * 031 — Módulo SALON: si el mensaje trae la palabra clave de un combo activo
@@ -329,6 +338,7 @@ export async function runAgentTurn(
         kb,
         stages,
         agenda,
+        agendaStaff: equipoAgenda,
         anuncio: attribution ? { headline: attribution.headline, body: attribution.body } : null,
         adFlow,
       }),
@@ -385,12 +395,18 @@ export async function runAgentTurn(
       action = degradeAction(action);
     } else {
       try {
+        // «Con Ana»: solo un id que el sistema le dio; uno inventado se ignora (atiende quien esté libre).
+        const pedido = "staffId" in action ? action.staffId : undefined;
+        const staffId = pedido && equipoAgenda.some((m) => m.id === pedido) ? pedido : undefined;
         const turn =
           action.action === "offer_slots"
             ? await offerSlots({
                 organizationId,
                 conversationId,
                 intro: action.reply,
+                // Se ofrece lo que cabe para el servicio del anuncio (su duración y quién lo da).
+                ...bookingTargetOf(adFlow),
+                staffId,
               })
             : await bookSlot({
                 organizationId,
@@ -399,6 +415,7 @@ export async function runAgentTurn(
                 confirmation: action.reply,
                 // La cita queda atribuida al servicio u oferta del anuncio.
                 ...bookingTargetOf(adFlow),
+                staffId,
               });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {

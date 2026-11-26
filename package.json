@@ -19,6 +19,7 @@
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:e2e": "node --env-file=.env scripts/e2e-selftest.mjs",
     "test:e2e:calendario": "node --env-file=.env scripts/e2e-calendario.mjs",
+    "test:e2e:google-calendar": "node --env-file=.env scripts/e2e-google-calendar.mjs",
     "test:e2e:resultados": "node --env-file=.env scripts/e2e-resultados.mjs",
     "test:e2e:salon": "node --env-file=.env scripts/e2e-salon.mjs",
     "test:e2e:automations": "node --env-file=.env scripts/e2e-automations.mjs",

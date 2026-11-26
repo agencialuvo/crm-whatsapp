@@ -29,6 +29,12 @@ export type MeetingRequest = {
   /** Zona IANA del negocio: el proveedor la usa para mostrarla a los suyos. */
   timezone: string;
   notes?: string;
+  /**
+   * La cita (Paso 3). Opcional para no romper conectores de forks: quien la use la toma como llave de
+   * idempotencia (Google: id de evento y `requestId` de Meet por cita), así un reintento no duplica.
+   */
+  bookingId?: string;
+  organizationId?: string;
 };
 
 export type MeetingResult = {

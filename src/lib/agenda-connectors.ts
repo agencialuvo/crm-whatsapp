@@ -62,7 +62,7 @@ export const CONNECTOR_META: Record<ConnectorId, ConnectorMeta> = {
   google: {
     label: "Google Calendar + Meet",
     description:
-      "Cada cita crea un evento en tu calendario con su enlace de Meet.",
+      "Cada cita genera su enlace de Meet, en un evento de tu Google Calendar. Para publicar las citas en tu calendario sin Meet, conecta Google abajo y elige otro conector.",
     perBookingLink: true,
     updatesMeeting: true,
     writesCalendarEvent: true,

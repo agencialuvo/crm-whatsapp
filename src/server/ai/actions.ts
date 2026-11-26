@@ -39,11 +39,14 @@ const agendaActions = [
   z.object({
     action: z.literal("offer_slots"),
     reply: z.string().optional(),
+    /** Persona específica («con Ana»): el id que el prompt le dio. Sin él, cualquiera disponible. */
+    staffId: z.string().min(1).optional(),
   }),
   z.object({
     action: z.literal("book_slot"),
     startUtc: z.string().min(1),
     reply: z.string().optional(),
+    staffId: z.string().min(1).optional(),
   }),
 ] as const;
 

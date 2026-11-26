@@ -483,17 +483,22 @@ export function NewBookingDialog({
                 htmlFor="nb-staff"
                 error={errors.staffId}
                 hint={
-                  availableChairs.length === 0
-                    ? "Nadie está libre en ese tramo: queda sin asignar."
-                    : undefined
+                  !availableChairs.some((c) => c.acceptsBookings)
+                    ? "Nadie que reciba citas está libre en ese tramo: elige otra hora o asigna a alguien a mano."
+                    : staffId
+                      ? undefined
+                      : "Se asigna sola a quien esté libre, repartiendo el trabajo del día."
                 }
               >
                 <SearchSelect
                   id="nb-staff"
                   value={staffId}
                   onChange={setStaffId}
-                  options={availableChairs.map((c) => ({ value: c.id, label: c.name }))}
-                  emptyLabel="Sin asignar (elegir después)"
+                  options={availableChairs.map((c) => ({
+                    value: c.id,
+                    label: c.acceptsBookings ? c.name : `${c.name} (no recibe citas)`,
+                  }))}
+                  emptyLabel="Cualquiera disponible"
                   searchPlaceholder="Buscar profesional…"
                   disabled={busy}
                 />
