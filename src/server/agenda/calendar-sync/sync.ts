@@ -1,10 +1,10 @@
-import { and, asc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { getEnv } from "@/lib/env";
 import { dayIsoInTz } from "@/lib/time/slots";
 import { getSettings } from "@/server/agenda/settings";
-import { eventPath, eventsPath, googleRequest } from "@/server/agenda/connectors/google";
+import { eventPath, eventsPath, googleRequest, moveEvent } from "@/server/agenda/connectors/google";
 import {
   getGoogleCredentials,
   markGoogleError,
@@ -37,6 +37,12 @@ import { notify } from "@/server/notifications/service";
  *
  * Reintentos: 1 min, 5 min, 30 min, 2 h, 6 h y se rinde (queda «error», con botón de reintentar). Un 401 /
  * `invalid_grant` marca la conexión como rota, avisa UNA vez y pausa la sincronización hasta reconectar.
+ *
+ * Mejora 2 — Cada cita anota en qué calendario vive su evento (`calendar_event_calendar_id`). Si el negocio
+ * cambia el calendario de publicación, `relocateUpcomingEvents` pide la sincronización de las citas que
+ * vienen y cada intento MUEVE el evento (`events.move`: mismo id, mismo Meet) antes de dejarlo al día. Con
+ * la publicación apagada se mueven igual los eventos de Meet (si no, el conector los buscaría en el
+ * calendario nuevo y no los encontraría).
  */
 
 /** Cuánto «arrienda» un intento la fila (más que el peor caso de las llamadas a Google). */
@@ -96,6 +102,54 @@ export async function resyncUpcomingBookings(organizationId: string, now = new D
   }
 }
 
+/**
+ * Mejora 2 — Se cambió el calendario de publicación: las citas que vienen y tienen evento se mueven al nuevo
+ * (lo hace cada intento de sincronización). `fromCalendarId` es el calendario anterior: las citas con evento
+ * que no lo tenían anotado (un Meet creado con la publicación apagada) vivían ahí. Nunca lanza.
+ */
+export async function relocateUpcomingEvents(
+  organizationId: string,
+  fromCalendarId: string,
+  now = new Date()
+): Promise<number> {
+  try {
+    const db = getDb();
+    const withEvent = or(
+      isNotNull(schema.booking.calendarEventId),
+      and(eq(schema.booking.connector, "google"), isNotNull(schema.booking.externalRef))
+    );
+    await db
+      .update(schema.booking)
+      .set({ calendarEventCalendarId: fromCalendarId })
+      .where(scoped(schema.booking.organizationId, organizationId, isNull(schema.booking.calendarEventCalendarId), withEvent));
+    const rows = await db
+      .select({ id: schema.booking.id })
+      .from(schema.booking)
+      .where(
+        scoped(
+          schema.booking.organizationId,
+          organizationId,
+          eq(schema.booking.kind, "session"),
+          eq(schema.booking.isTest, false),
+          inArray(schema.booking.status, ["agendada", "realizada", "no_show"]),
+          gte(schema.booking.scheduledAt, new Date(now.getTime() - 86_400_000)),
+          withEvent
+        )
+      );
+    const marked = await markPending(db, organizationId, rows.map((r) => r.id), now);
+    if (marked > 0) {
+      // Una barrida ya (en segundo plano); el temporizador sigue con el resto en tandas.
+      const p = sweepCalendarSync(now).catch(() => {});
+      inflight().add(p);
+      void p.finally(() => inflight().delete(p));
+    }
+    return marked;
+  } catch (err) {
+    console.warn(`[calendario] no pude preparar el cambio de calendario: ${msg(err)}`);
+    return 0;
+  }
+}
+
 async function markPending(db: Db, organizationId: string, ids: string[], now = new Date()): Promise<number> {
   if (ids.length === 0) return 0;
   const rows = await db
@@ -133,7 +187,16 @@ export async function waitForCalendarSyncIdle(): Promise<void> {
 
 /* ---------- un intento ---------- */
 
-export type SyncOutcome = "synced" | "deleted" | "skipped" | "busy" | "retry" | "failed" | "auth_error" | "stale";
+export type SyncOutcome =
+  | "synced"
+  | "deleted"
+  | "moved"
+  | "skipped"
+  | "busy"
+  | "retry"
+  | "failed"
+  | "auth_error"
+  | "stale";
 
 /**
  * Un intento de dejar el evento de la cita igual que la cita. Solo corre si la fila está pendiente (o en
@@ -210,7 +273,29 @@ export async function syncBookingNow(
       status: b.status,
     });
 
+    // El evento de la cita: el que ya tiene, el de Meet (citas viejas con id de Google) o el determinista.
+    const hasEvent = !!b.calendarEventId || (b.connector === "google" && !!b.externalRef);
+    const eventId =
+      b.calendarEventId ??
+      (b.connector === "google" && b.externalRef ? b.externalRef : calendarEventIdFor(b.id));
+    // Mejora 2: dónde vive hoy el evento y dónde debería vivir.
+    const target = creds?.calendarId ?? "primary";
+    const livesIn = b.calendarEventCalendarId ?? target;
+    const mustMove = hasEvent && livesIn !== target;
+
     if (decision.action === "skip") {
+      // Publicación apagada pero el evento (un Meet) quedó en el calendario anterior: solo se mueve.
+      if (decision.reason === "disabled" && mustMove && creds?.status === "connected" && b.status !== "cancelada") {
+        await moveEvent(creds, eventId, livesIn, target);
+        const wrote = await finish({
+          calendarSyncStatus: null,
+          calendarSyncNextAt: null,
+          calendarSyncError: null,
+          calendarEventCalendarId: target,
+        });
+        await markGoogleOk(organizationId).catch(() => {});
+        return wrote ? "moved" : "stale";
+      }
       if (decision.reason === "not_connected") {
         // Esperando a que se (re)conecte Google: al hacerlo, `resyncUpcomingBookings` la vuelve a pedir.
         await finish({
@@ -224,14 +309,14 @@ export async function syncBookingNow(
       return "skipped";
     }
 
-    // El evento de la cita: el que ya tiene, el de Meet (citas viejas con id de Google) o el determinista.
-    const eventId =
-      b.calendarEventId ??
-      (b.connector === "google" && b.externalRef ? b.externalRef : calendarEventIdFor(b.id));
     const c = creds!;
 
     if (decision.action === "delete") {
-      await googleRequest(c, eventPath(c, eventId, "?sendUpdates=none"), { method: "DELETE", accept: [404, 410] });
+      // Se borra de donde vive (aunque se haya cambiado el calendario de publicación).
+      await googleRequest(c, eventPath(c, eventId, "?sendUpdates=none", livesIn), {
+        method: "DELETE",
+        accept: [404, 410],
+      });
       const wrote = await finish({
         calendarSyncStatus: "synced",
         calendarSyncAttempts: 0,
@@ -239,6 +324,7 @@ export async function syncBookingNow(
         calendarSyncedAt: new Date(),
         calendarSyncError: null,
         calendarEventId: eventId,
+        calendarEventCalendarId: livesIn,
       });
       await markGoogleOk(organizationId).catch(() => {});
       return wrote ? "deleted" : "stale";
@@ -263,7 +349,11 @@ export async function syncBookingNow(
       source: b.source,
       crmLink: `${getEnv().APP_BASE_URL.replace(/\/+$/, "")}/citas?pestana=sillas&fecha=${dayIsoInTz(b.scheduledAt, settings.timezone)}&cita=${b.id}`,
     });
-    await upsertEvent(c, eventId, body, { known: !!b.calendarEventId || (b.connector === "google" && !!b.externalRef) });
+    // Mejora 2: primero se lleva el evento al calendario de publicación (mismo id, mismo Meet). Si ya no
+    // estaba en el anterior, se crea en el nuevo.
+    let known = hasEvent;
+    if (mustMove) known = await moveEvent(c, eventId, livesIn, target);
+    await upsertEvent(c, eventId, body, { known });
 
     const wrote = await finish({
       calendarSyncStatus: "synced",
@@ -272,6 +362,7 @@ export async function syncBookingNow(
       calendarSyncedAt: new Date(),
       calendarSyncError: null,
       calendarEventId: eventId,
+      calendarEventCalendarId: target,
     });
     await markGoogleOk(organizationId).catch(() => {});
     return wrote ? "synced" : "stale";

@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { googleConflictOf, type Booking } from "@/components/bookings/booking-look";
 import {
   busyRetryDelayMs,
   busyWindow,
   classifyEvent,
   computeBusyBlocks,
+  detectConflicts,
   diffBusyBlocks,
   isOwnEvent,
   isScopeError,
@@ -187,6 +189,60 @@ describe("diffBusyBlocks: qué cambiar en la base", () => {
     );
     expect(d.toDelete.sort()).toEqual(["corto", "dup"]);
     expect(d.toInsert).toEqual([{ startMs: h(3), endMs: h(4) }]);
+  });
+});
+
+describe("detectConflicts (Mejora 1): citas que chocan con lo ocupado en Google", () => {
+  const m = (n: number) => n * 60_000;
+  const cita = (id: string, start: number, end: number, conflict: { startMs: number; endMs: number } | null = null) => ({
+    id,
+    startMs: m(start),
+    endMs: m(end),
+    conflict,
+  });
+
+  it("una cita pisada por un bloqueo queda marcada con el tramo de Google, y es un choque NUEVO", () => {
+    const out = detectConflicts([cita("a", 600, 660)], [{ startMs: m(630), endMs: m(720) }]);
+    expect(out).toEqual({ set: [{ id: "a", conflict: { startMs: m(630), endMs: m(720) }, isNew: true }], cleared: [] });
+  });
+
+  it("tocarse no es chocar (fin de uno = inicio del otro)", () => {
+    expect(detectConflicts([cita("a", 600, 660)], [{ startMs: m(660), endMs: m(720) }, { startMs: m(540), endMs: m(600) }]).set).toEqual([]);
+  });
+
+  it("el mismo choque de antes no cambia nada (no se vuelve a avisar)", () => {
+    const prev = { startMs: m(630), endMs: m(720) };
+    expect(detectConflicts([cita("a", 600, 660, prev)], [prev])).toEqual({ set: [], cleared: [] });
+  });
+
+  it("si el evento de Google se alarga, se actualiza el tramo SIN contarlo como nuevo", () => {
+    const out = detectConflicts([cita("a", 600, 660, { startMs: m(630), endMs: m(720) })], [{ startMs: m(630), endMs: m(780) }]);
+    expect(out.set).toEqual([{ id: "a", conflict: { startMs: m(630), endMs: m(780) }, isNew: false }]);
+  });
+
+  it("si el choque desaparece, se limpia la marca", () => {
+    expect(detectConflicts([cita("a", 600, 660, { startMs: m(630), endMs: m(720) })], [])).toEqual({ set: [], cleared: ["a"] });
+  });
+
+  it("varios bloqueos seguidos (un evento partido a medianoche) = un solo tramo, del primero al último", () => {
+    const out = detectConflicts([cita("a", 1380, 1500)], [
+      { startMs: m(1400), endMs: m(1440) },
+      { startMs: m(1440), endMs: m(1480) },
+    ]);
+    expect(out.set[0]!.conflict).toEqual({ startMs: m(1400), endMs: m(1480) });
+  });
+
+  it("googleConflictOf: solo se muestra en una cita ACTIVA (no en canceladas, cerradas ni bloqueos)", () => {
+    const base = {
+      kind: "session",
+      status: "agendada",
+      googleConflict: { startUtc: "2026-12-01T15:00:00.000Z", endUtc: "2026-12-01T16:00:00.000Z" },
+    } as unknown as Booking;
+    expect(googleConflictOf(base)).toEqual(base.googleConflict);
+    expect(googleConflictOf({ ...base, status: "cancelada" })).toBeNull();
+    expect(googleConflictOf({ ...base, status: "realizada" })).toBeNull();
+    expect(googleConflictOf({ ...base, kind: "block" })).toBeNull();
+    expect(googleConflictOf({ ...base, googleConflict: null })).toBeNull();
   });
 });
 

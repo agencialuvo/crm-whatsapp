@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import { AlertTriangle, CalendarDays, Sparkles, Video } from "lucide-react";
+import { AlertTriangle, CalendarDays, CalendarX2, Sparkles, Video } from "lucide-react";
 import { bookingSegments, hhmm, longDayLabel, spanLabel, type DateRange } from "@/lib/time/calendar";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
-import { STATUS_LABEL, bookingTitle, bookingTone, hasDeliveryIssue, type Booking } from "./booking-look";
+import { STATUS_LABEL, bookingTitle, bookingTone, googleConflictOf, hasDeliveryIssue, type Booking } from "./booking-look";
 
 /**
  * 215 — La Lista: las citas del rango, agrupadas por día, como la «Agenda» de
@@ -101,6 +101,9 @@ export function AgendaList({
                   </span>
                   {hasDeliveryIssue(b) && (
                     <AlertTriangle aria-label="Sin enlace de la reunión" className="h-4 w-4 shrink-0 text-warning-text" />
+                  )}
+                  {googleConflictOf(b) && (
+                    <CalendarX2 aria-label="Choca con tu Google Calendar" className="h-4 w-4 shrink-0 text-warning-text" />
                   )}
                   {b.meetingLink && b.status === "agendada" && (
                     <Video aria-label="Tiene enlace de reunión" className="hidden h-4 w-4 shrink-0 text-text-3 sm:block" />

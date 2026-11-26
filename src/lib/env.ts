@@ -129,6 +129,19 @@ export const envSchema = z.object({
   // URI de redirección a registrar en Google Cloud: ${APP_BASE_URL}/api/settings/google/oauth/callback
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  // Mejora 2: pedir además `calendar.calendarlist.readonly` para elegir en qué calendario publicar y cuáles
+  // leer como ocupado. APAGADA por defecto: enciéndela (GOOGLE_CALENDAR_LIST=on) solo cuando Google haya
+  // aprobado ese permiso en la pantalla de consentimiento de la app de la instancia.
+  GOOGLE_CALENDAR_LIST: z.string().optional(),
+  // Mejora 3: cada profesional conecta SU Google Calendar (solo lectura, `calendar.events.readonly`) con un
+  // enlace de 24 h; lo ocupado ahí bloquea solo a esa persona. APAGADA por defecto. Exige AGENDA, SALON, la
+  // app OAuth de la instancia y registrar en Google Cloud la URI
+  //   ${APP_BASE_URL}/api/calendar-invite/oauth/callback
+  GOOGLE_STAFF_CALENDARS: z.string().optional(),
+  // Mejora 4: avisos al instante (`events.watch`) de los calendarios que se leen como ocupado. APAGADA por
+  // defecto. Exige AGENDA y que APP_BASE_URL sea https con un dominio público (Google solo avisa a https con
+  // certificado válido): sin eso, la lectura sigue cada 5 min. Aviso en ${APP_BASE_URL}/api/webhooks/google-calendar
+  GOOGLE_CALENDAR_WATCH: z.string().optional(),
   ALLOW_SIGNUP: z.string().optional(),
   AGENT_COALESCE_MS: z.coerce.number().int().min(0).default(6000),
   WA_MOCK_ENABLED: z.string().optional(),

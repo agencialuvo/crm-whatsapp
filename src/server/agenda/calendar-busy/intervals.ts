@@ -204,3 +204,44 @@ export function isScopeError(status: number | undefined, detail: string): boolea
   if (status !== 403) return false;
   return /insufficient|scope/i.test(detail);
 }
+
+/* ---------- Mejora 1: choques con citas ya agendadas ---------- */
+
+export type ConflictCandidate = {
+  id: string;
+  startMs: number;
+  endMs: number;
+  /** El choque que ya tenía guardado (null = ninguno). */
+  conflict: Interval | null;
+};
+
+export type ConflictChanges = {
+  /** Citas cuyo choque hay que guardar; `isNew` = no tenía choque antes (es lo que se avisa). */
+  set: { id: string; conflict: Interval; isNew: boolean }[];
+  /** Citas que ya no chocan: se limpia la marca. */
+  cleared: string[];
+};
+
+/**
+ * PURA: qué citas chocan con lo ocupado en Google. El choque de una cita es el tramo de Google que se le
+ * pisa (si son varios bloqueos seguidos —un evento partido a medianoche—, de su primer inicio a su último
+ * fin). Solo devuelve CAMBIOS: una cita que ya tenía ese mismo choque no se toca (ni se vuelve a avisar).
+ */
+export function detectConflicts(candidates: ConflictCandidate[], blocks: Interval[]): ConflictChanges {
+  const set: ConflictChanges["set"] = [];
+  const cleared: string[] = [];
+  for (const c of candidates) {
+    const hits = blocks.filter((b) => b.startMs < c.endMs && b.endMs > c.startMs);
+    if (hits.length === 0) {
+      if (c.conflict) cleared.push(c.id);
+      continue;
+    }
+    const conflict = {
+      startMs: Math.min(...hits.map((h) => h.startMs)),
+      endMs: Math.max(...hits.map((h) => h.endMs)),
+    };
+    if (c.conflict && c.conflict.startMs === conflict.startMs && c.conflict.endMs === conflict.endMs) continue;
+    set.push({ id: c.id, conflict, isNew: !c.conflict });
+  }
+  return { set, cleared };
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarClock, Pencil, Percent, Plus, Trash2, Upload, Users } from "lucide-react";
+import { CalendarCheck2, CalendarClock, Pencil, Percent, Plus, Trash2, Upload, Users } from "lucide-react";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
@@ -14,6 +14,11 @@ import { BulkImportDialog } from "@/components/negocio/bulk-import-dialog";
 import { ConfirmDialog } from "@/components/negocio/modal";
 import { StaffDialog } from "@/components/negocio/staff-dialog";
 import { StaffScheduleDialog } from "@/components/negocio/staff-schedule-dialog";
+import {
+  StaffCalendarDialog,
+  staffCalendarLabel,
+  type StaffCalendarRow,
+} from "@/components/negocio/staff-calendar-dialog";
 import { matchesQuery } from "@/lib/search";
 import { scheduleSummary } from "@/lib/salon/format";
 import { formatStaffPhone } from "@/lib/salon/staff-fields";
@@ -23,6 +28,8 @@ import { cn } from "@/lib/utils";
 type Dialog =
   | { kind: "edit"; item: StaffDto | null }
   | { kind: "config"; item: StaffDto; tab: "horario" | "comisiones" }
+  /** Mejora 3: el Google Calendar del profesional. */
+  | { kind: "calendar"; staffId: string }
   | null;
 
 /** Lista vacía estable mientras el equipo carga. */
@@ -46,6 +53,8 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   const [dialog, setDialog] = useState<Dialog>(null);
   const [removal, setRemoval] = useState<StaffDto | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  // Mejora 3: el Google Calendar de cada profesional (null = la instancia no lo ofrece).
+  const [calendars, setCalendars] = useState<Map<string, StaffCalendarRow> | null>(null);
   // Búsqueda local por nombre o celular (el celular se compara por dígitos).
   const [query, setQuery] = useState("");
   const filtered = useMemo(
@@ -54,8 +63,18 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   );
   const table = useDataTable(filtered, { view: "equipo", resetKey: query });
 
+  const loadCalendars = useCallback(async () => {
+    try {
+      const out = await apiFetch<{ available: boolean; staff: StaffCalendarRow[] }>("/api/negocio/equipo/calendarios");
+      setCalendars(out.available ? new Map(out.staff.map((r) => [r.staffId, r])) : null);
+    } catch {
+      setCalendars(null);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setLoadError(null);
+    void loadCalendars();
     try {
       const [s, c] = await Promise.all([
         apiFetch<{ staff: StaffDto[] }>("/api/negocio/equipo"),
@@ -66,7 +85,7 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
     } catch (err) {
       setLoadError(describeError(err));
     }
-  }, []);
+  }, [loadCalendars]);
 
   useEffect(() => {
     void load();
@@ -82,7 +101,10 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
   }, []);
 
   async function toggleActive(member: StaffDto, active: boolean): Promise<boolean> {
-    return patchMember(member, { active });
+    const ok = await patchMember(member, { active });
+    // Mejora 3: desactivarlo desconecta su Google Calendar en el servidor.
+    if (ok) void loadCalendars();
+    return ok;
   }
 
   /** «Recibe citas»: si cuenta para los cupos de la agenda (la IA y el bot solo eligen a quien sí). */
@@ -215,6 +237,15 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
                 >
                   Recibe citas
                 </th>
+                {calendars && (
+                  <th
+                    scope="col"
+                    className="px-4 py-2.5"
+                    title="Lo ocupado en el Google Calendar de cada profesional bloquea solo a esa persona."
+                  >
+                    Google Calendar
+                  </th>
+                )}
                 <th scope="col" className="px-4 py-2.5">
                   <span className="sr-only">Acciones</span>
                 </th>
@@ -265,6 +296,29 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
                       onCheckedChange={(v) => void toggleBookings(m, v)}
                     />
                   </td>
+                  {calendars && (
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {m.active ? (
+                        (() => {
+                          const label = staffCalendarLabel(calendars.get(m.id));
+                          return (
+                            <span
+                              className={cn(
+                                "text-xs",
+                                label.tone === "ok" && "font-medium text-success-text",
+                                label.tone === "warn" && "font-medium text-danger-text",
+                                label.tone === "muted" && "text-text-3"
+                              )}
+                            >
+                              {label.text}
+                            </span>
+                          );
+                        })()
+                      ) : (
+                        <span className="text-xs text-text-3">—</span>
+                      )}
+                    </td>
+                  )}
                   <td className="whitespace-nowrap px-4 py-3 text-right">
                     <div className="flex justify-end gap-1">
                       <Button
@@ -276,6 +330,17 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
                       >
                         <CalendarClock className="h-4 w-4" aria-hidden />
                       </Button>
+                      {calendars && m.active && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Google Calendar de ${m.name}`}
+                          title="Conectar su Google Calendar"
+                          onClick={() => setDialog({ kind: "calendar", staffId: m.id })}
+                        >
+                          <CalendarCheck2 className="h-4 w-4" aria-hidden />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -314,6 +379,14 @@ export function StaffClient({ businessHours }: { businessHours: Record<number, s
           label="Paginación del equipo"
         />
         </>
+      )}
+
+      {dialog?.kind === "calendar" && calendars?.get(dialog.staffId) && (
+        <StaffCalendarDialog
+          row={calendars.get(dialog.staffId)!}
+          onClose={() => setDialog(null)}
+          onChanged={() => void loadCalendars()}
+        />
       )}
 
       {bulkOpen && (

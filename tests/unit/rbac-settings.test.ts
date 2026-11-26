@@ -35,6 +35,8 @@ vi.mock("@/lib/env", () => ({
 vi.mock("@/server/agenda/flag", () => ({
   agendaEnabled: () => true,
   agendaDisabledResponse: () => new Response(null, { status: 404 }),
+  // Mejora 4: el estado de los avisos al instante (importado por Ajustes → Google) lee las banderas con esto.
+  parseAgendaFlag: (raw: string | undefined) => ["on", "1", "true"].includes((raw ?? "").trim().toLowerCase()),
 }));
 vi.mock("@/server/attribution/flag", () => ({
   atribucionEnabled: () => true,
@@ -108,6 +110,11 @@ vi.mock("@/server/agenda/connectors/google-credentials", () => ({
 }));
 // Paso 3: resincronizar al conectar no toca la base en esta prueba.
 vi.mock("@/server/agenda/calendar-sync/sync", () => ({ resyncUpcomingBookings: vi.fn(async () => 0) }));
+// Mejora 2: elegir calendarios (nunca se llega a Google sin permiso).
+vi.mock("@/server/agenda/google-calendars", () => ({
+  getCalendarChoices: vi.fn(async () => null),
+  saveCalendarChoices: vi.fn(async () => ({ ok: false, status: 409, code: "not_connected", message: "x" })),
+}));
 // Paso 4: la lectura de lo ocupado (nunca se llega a ella sin permiso).
 vi.mock("@/server/agenda/calendar-busy/sync", () => ({
   requestBusySync: vi.fn(async () => {}),
@@ -192,6 +199,7 @@ async function cases(): Promise<Case[]> {
   const oauthStart = await import("@/app/api/settings/google/oauth/start/route");
   const oauthCallback = await import("@/app/api/settings/google/oauth/callback/route");
   const googleBusy = await import("@/app/api/settings/google/busy/route");
+  const googleCalendars = await import("@/app/api/settings/google/calendars/route");
 
   const req = (url: string, body: unknown, method = "PUT") =>
     new Request(url, {
@@ -230,6 +238,15 @@ async function cases(): Promise<Case[]> {
     },
     // Paso 4: «Leer ahora» lo ocupado en Google Calendar.
     { label: "POST /api/settings/google/busy", run: () => googleBusy.POST() },
+    // Mejora 2: ver y elegir calendarios.
+    { label: "GET /api/settings/google/calendars", run: () => googleCalendars.GET() },
+    {
+      label: "PUT /api/settings/google/calendars",
+      run: () =>
+        googleCalendars.PUT(
+          req("https://x/api/settings/google/calendars", { publishCalendarId: "primary", busyCalendarIds: ["primary"] })
+        ),
+    },
     {
       label: "PUT /api/settings/zoom",
       run: () =>

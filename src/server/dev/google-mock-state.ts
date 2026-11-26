@@ -13,10 +13,57 @@
  * Paso 4 — Y el listado del calendario de verdad (ventana `timeMin`/`timeMax` y páginas), con eventos
  * «del dueño» sembrados a mano (`_external`): con hora o de día completo, «Disponible», rechazados,
  * cancelados… Un 403 provocado trae el cuerpo real de «permiso insuficiente».
+ *
+ * Mejora 2 — Varios calendarios con roles distintos (`calendarList`), cada evento vive en UNO (leerlo o
+ * tocarlo desde otro da 404, como en Google), `events.move`, y la pantalla de permisos que concede o no la
+ * lista de calendarios (`grantCalendarList`). Un token con la lista lleva `.list` al final.
+ *
+ * Mejora 3 — Otra cuenta: la del PROFESIONAL (`staffAccountEmail`), que concede solo leer
+ * (`calendar.events.readonly`; `staffGrantRead: false` = la desmarca). Su token es `TOKEN.staff|<correo>`,
+ * su `primary` es SU calendario (eventos `_external` con `calendarId` = su correo) y no puede escribir.
+ *
+ * Mejora 4 — Los canales de avisos (`events.watch`, `channels.stop`) y el AVISO en sí: al crear un canal manda
+ * `sync` a su dirección, y al cambiar los eventos de un calendario (`_external`) manda `exists` a los canales
+ * que lo vigilan, con los encabezados reales de Google (`X-Goog-*`). `_watch` provoca rechazos.
  */
+
+/** Mejora 3: la cuenta personal de un profesional en el mock. */
+export const MOCK_STAFF_EMAIL = "carla@personal.mock";
+
+/** Mejora 3: el refresh token que devuelve el mock a un profesional (lleva su correo). */
+export function mockStaffRefreshToken(email: string): string {
+  return `mock-refresh-staff|${email}`;
+}
+
+/** El calendario principal de la cuenta del mock (`primary` es su alias). */
+export const MOCK_PRIMARY_CALENDAR = "agenda@negocio.mock";
+
+export type MockCalendar = {
+  id: string;
+  summary: string;
+  primary?: boolean;
+  accessRole: "owner" | "writer" | "reader" | "freeBusyReader";
+};
+
+/** La cuenta del mock: el principal, uno del equipo (editor), uno personal (lector) y uno de libre/ocupado. */
+export function defaultMockCalendars(): MockCalendar[] {
+  return [
+    { id: MOCK_PRIMARY_CALENDAR, summary: "Agenda del negocio", primary: true, accessRole: "owner" },
+    { id: "equipo@group.calendar.mock", summary: "Equipo", accessRole: "writer" },
+    { id: "personal@group.calendar.mock", summary: "Personal", accessRole: "reader" },
+    { id: "socio@group.calendar.mock", summary: "Socio", accessRole: "freeBusyReader" },
+  ];
+}
+
+/** `primary` → el id real del principal. */
+export function mockCalendarId(id: string): string {
+  return id === "primary" ? MOCK_PRIMARY_CALENDAR : id;
+}
 
 export type MockEvent = {
   id: string;
+  /** Mejora 2: en qué calendario vive. */
+  calendarId: string;
   summary: string;
   description: string;
   location: string | null;
@@ -31,11 +78,15 @@ export type MockEvent = {
   reads: number;
   meetLink: string | null;
   updates: number;
+  /** Mejora 2: cuántas veces se movió de calendario. */
+  moves?: number;
 };
 
 /** Un evento que el dueño puso en su calendario, tal como lo devuelve Google (forma libre). */
 export type MockExternalEvent = {
   id: string;
+  /** Mejora 2: calendario donde está (por defecto, el principal). */
+  calendarId?: string;
   status?: string;
   summary?: string;
   transparency?: string;
@@ -46,12 +97,34 @@ export type MockExternalEvent = {
   extendedProperties?: { private?: Record<string, string> };
 };
 
+/** Mejora 4: un canal de avisos que «Google» tiene abierto. */
+export type MockChannel = {
+  id: string;
+  resourceId: string;
+  /** El calendario real (ya resuelto `primary`). */
+  calendarId: string;
+  address: string;
+  token: string | null;
+  expiration: number;
+  stopped: boolean;
+  /** Avisos enviados (el `X-Goog-Message-Number` sigue de aquí). */
+  messages: number;
+};
+
 type MockState = {
   events: Map<string, MockEvent>;
   /** Paso 4: lo que el dueño tiene en su calendario aparte de lo que publica Vocero. */
   external: MockExternalEvent[];
   /** Tamaño de página máximo que el mock respeta (para ejercitar la paginación). */
   pageSize: number;
+  /** Mejora 2: los calendarios de la cuenta. */
+  calendars: MockCalendar[];
+  /** Mejora 2: si la próxima pantalla de permisos concede la lista de calendarios (cuando se pide). */
+  grantCalendarList: boolean;
+  /** Mejora 3: la cuenta con la que «entra» el profesional en la pantalla de permisos. */
+  staffAccountEmail: string;
+  /** Mejora 3: si el profesional deja marcado el permiso de leer su calendario. */
+  staffGrantRead: boolean;
   deleted: string[];
   nextId: number;
   /** Lecturas que tarda la conferencia en estar lista. */
@@ -60,6 +133,12 @@ type MockState = {
   failNext: { status: number; count: number } | null;
   /** Tokens revocados. */
   revoked: string[];
+  /** Mejora 4: los canales de avisos. */
+  channels: MockChannel[];
+  /** Mejora 4: las próximas N altas de canal fallan con este estado. */
+  failWatch: { status: number; count: number } | null;
+  /** Mejora 4: calendarios que no admiten avisos (400 `pushNotSupportedForRequestedResource`). */
+  watchUnsupported: string[];
 };
 
 const globalForMock = globalThis as unknown as { __googleMock?: MockState };
@@ -70,11 +149,18 @@ export function googleMockState(): MockState {
       events: new Map(),
       external: [],
       pageSize: 250,
+      calendars: defaultMockCalendars(),
+      grantCalendarList: true,
+      staffAccountEmail: MOCK_STAFF_EMAIL,
+      staffGrantRead: true,
       deleted: [],
       nextId: 1,
       conferenceDelayReads: 1,
       failNext: null,
       revoked: [],
+      channels: [],
+      failWatch: null,
+      watchUnsupported: [],
     };
   }
   return globalForMock.__googleMock;
@@ -85,11 +171,18 @@ export function resetGoogleMock(): void {
   s.events.clear();
   s.external.length = 0;
   s.pageSize = 250;
+  s.calendars = defaultMockCalendars();
+  s.grantCalendarList = true;
+  s.staffAccountEmail = MOCK_STAFF_EMAIL;
+  s.staffGrantRead = true;
   s.deleted.length = 0;
   s.nextId = 1;
   s.conferenceDelayReads = 1;
   s.failNext = null;
   s.revoked.length = 0;
+  s.channels.length = 0;
+  s.failWatch = null;
+  s.watchUnsupported = [];
 }
 
 export function googleMockSnapshot() {
@@ -97,8 +190,10 @@ export function googleMockSnapshot() {
   return {
     events: [...s.events.values()],
     external: [...s.external],
+    calendars: [...s.calendars],
     deleted: [...s.deleted],
     revoked: [...s.revoked],
+    channels: s.channels.map((c) => ({ ...c })),
   };
 }
 
@@ -121,6 +216,47 @@ export function takeMockFailure(): number | null {
   return status;
 }
 
+/** Mejora 4: el `resourceId` (opaco y estable) de un calendario. */
+export function mockResourceId(calendarId: string): string {
+  return `res-${Buffer.from(calendarId).toString("base64url")}`;
+}
+
+/**
+ * Mejora 4: manda el aviso de Google a los canales abiertos sobre ese calendario (o sobre todos con `null`). Con
+ * los encabezados reales; sin cuerpo. Espera las respuestas (para que el self-test sea determinista).
+ */
+export async function sendMockNotifications(
+  calendarId: string | null,
+  state: "exists" | "not_exists" | "sync" = "exists",
+  onlyChannel?: MockChannel
+): Promise<number> {
+  const s = googleMockState();
+  const targets = onlyChannel
+    ? [onlyChannel]
+    : s.channels.filter((c) => !c.stopped && c.expiration > Date.now() && (calendarId === null || c.calendarId === calendarId));
+  const out = await Promise.allSettled(
+    targets.map((c) => {
+      c.messages += 1;
+      return fetch(c.address, {
+        method: "POST",
+        headers: {
+          "X-Goog-Channel-ID": c.id,
+          ...(c.token ? { "X-Goog-Channel-Token": c.token } : {}),
+          "X-Goog-Channel-Expiration": new Date(c.expiration).toUTCString(),
+          "X-Goog-Resource-ID": c.resourceId,
+          "X-Goog-Resource-URI": `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.calendarId)}/events?alt=json`,
+          "X-Goog-Resource-State": state,
+          "X-Goog-Message-Number": String(c.messages),
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+    })
+  );
+  return out.filter((r) => r.status === "fulfilled" && r.value.ok).length;
+}
+
 /** El correo de la cuenta «autorizada» en el mock. */
 export const MOCK_ACCOUNT_EMAIL = "agenda@negocio.mock";
 export const MOCK_REFRESH_TOKEN = "mock-refresh-oauth";
+/** Mejora 2: el refresh token de una conexión que SÍ concedió la lista de calendarios. */
+export const MOCK_REFRESH_TOKEN_LIST = "mock-refresh-oauth-list";

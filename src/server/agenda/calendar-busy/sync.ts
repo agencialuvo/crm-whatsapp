@@ -1,8 +1,9 @@
-import { and, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { getSettings } from "@/server/agenda/settings";
+import { dayIsoInTz, labelInTz, timeInTz } from "@/lib/time/slots";
 import { eventsPath, googleRequest } from "@/server/agenda/connectors/google";
 import {
   getGoogleCredentials,
@@ -17,12 +18,14 @@ import {
   busyRetryDelayMs,
   busyWindow,
   computeBusyBlocks,
+  detectConflicts,
   diffBusyBlocks,
   durationMinutesOf,
   isScopeError,
   type GoogleBusyEvent,
   type Interval,
 } from "@/server/agenda/calendar-busy/intervals";
+import { stopWatchesFor } from "@/server/agenda/calendar-watch/channels";
 import { publish } from "@/server/events/bus";
 import { notify } from "@/server/notifications/service";
 
@@ -44,6 +47,18 @@ import { notify } from "@/server/notifications/service";
  *  - Token revocado o vencido (401 / `invalid_grant`) → la conexión pasa a «se perdió» (la misma marca del
  *    Paso 3), se avisa UNA vez y se pausa hasta reconectar. Los bloqueos se quedan.
  *  - 403 de permiso insuficiente → `needs_reconnect`: hay que reconectar dando permiso de lectura.
+ *
+ * Mejora 2 — Lee TODOS los calendarios elegidos (`busy_calendars`, por defecto el de publicar) y suma lo
+ * ocupado. Todo o nada: si uno falla, no se aplica la lectura y el error dice QUÉ calendario falló.
+ *
+ * Mejora 3 — Las mismas piezas sirven para el calendario de cada profesional (`staff-calendar/busy.ts`):
+ * `applyBusyBlocks` escribe los bloqueos de UNA fuente (el negocio, `staff_id` null; o un profesional,
+ * `staff_id` = él) sin tocar los de las demás, y `reconcileConflicts` cruza cada cita con lo ocupado del
+ * negocio y con lo de SU profesional.
+ *
+ * Mejora 1 — Choques: si lo ocupado en Google se pisa con una cita activa que viene, la cita se marca
+ * (`booking.google_conflict_start/end`) y se avisa UNA vez por choque (varios en la misma lectura = un solo
+ * aviso). La cita nunca se cancela ni se mueve; la marca se limpia sola cuando el choque desaparece.
  */
 
 /** Páginas de 250 eventos: 20 son 5 000 eventos en la ventana (60 días como mucho). Más es un error. */
@@ -55,7 +70,7 @@ const SWEEP_BATCH = 10;
 export const GOOGLE_BUSY_NOTE = "Ocupado en Google Calendar";
 
 export type BusyOutcome =
-  | { outcome: "synced"; blocks: number; inserted: number; deleted: number }
+  | { outcome: "synced"; blocks: number; inserted: number; deleted: number; conflicts: number; newConflicts: number }
   | { outcome: "disabled" | "not_connected" | "auth_error" | "needs_reconnect" | "error"; error?: string };
 
 /* ---------- una lectura a la vez por negocio (y para esperar en pruebas) ---------- */
@@ -79,6 +94,11 @@ export function syncGoogleBusy(organizationId: string, now = new Date()): Promis
   return p;
 }
 
+/** Mejora 4: la lectura en curso de ese negocio, si hay (un aviso de Google la espera y lee otra vez). */
+export function busySyncInflight(organizationId: string): Promise<BusyOutcome> | undefined {
+  return inflight().get(organizationId);
+}
+
 /** Espera a que terminen las lecturas en curso (pruebas y apagado ordenado). */
 export async function waitForBusySyncIdle(): Promise<void> {
   while (inflight().size > 0) await Promise.allSettled([...inflight().values()]);
@@ -88,10 +108,17 @@ export async function waitForBusySyncIdle(): Promise<void> {
  * Pide una lectura YA (al encender la opción, al reconectar, al cambiar los días reservables): la deja
  * vencida para el barrido y la lanza en segundo plano. Nunca lanza.
  */
-export async function requestBusySync(organizationId: string): Promise<void> {
+export async function requestBusySync(organizationId: string, opts: { ensureWatch?: boolean } = {}): Promise<void> {
   try {
     const settings = await getSettings(organizationId);
     if (!settings.googleBusy) return;
+    // Mejora 4: con la lectura encendida (o recién reconectada / con otros calendarios), los avisos al instante
+    // se ponen al día. Import diferido: `reconcile` depende de módulos que dependen de este.
+    if (opts.ensureWatch !== false) {
+      void import("@/server/agenda/calendar-watch/reconcile")
+        .then((m) => m.ensureWatches(organizationId))
+        .catch(() => {});
+    }
     await getDb()
       .update(schema.googleCredentials)
       .set({ busyNextAt: new Date(), busyAttempts: 0 })
@@ -108,13 +135,27 @@ export async function requestBusySync(organizationId: string): Promise<void> {
  */
 export async function clearGoogleBusyBlocks(organizationId: string): Promise<number> {
   try {
+    // Mejora 4: sin lectura no hace falta que Google avise. Se detienen sus canales ANTES de que quien llama
+    // revoque el permiso (`channels.stop` necesita el token vigente).
+    await stopWatchesFor(organizationId, null, await getGoogleCredentials(organizationId).catch(() => null));
     const db = getDb();
     const removed = await db.transaction(async (tx) => {
       await lockAgenda(tx, organizationId);
-      return tx
+      // Solo lo del negocio: lo de cada profesional (Mejora 3) tiene su propia conexión.
+      const deleted = await tx
         .delete(schema.booking)
-        .where(scoped(schema.booking.organizationId, organizationId, eq(schema.booking.busySource, "google")))
+        .where(
+          scoped(
+            schema.booking.organizationId,
+            organizationId,
+            eq(schema.booking.busySource, "google"),
+            isNull(schema.booking.staffId)
+          )
+        )
         .returning({ id: schema.booking.id });
+      // Sin eso ya no hay con qué chocar (salvo lo de cada profesional): se recalculan las marcas.
+      await reconcileConflicts(tx, organizationId, new Date());
+      return deleted;
     });
     await db
       .update(schema.googleCredentials)
@@ -158,7 +199,7 @@ async function runSync(organizationId: string, now: Date): Promise<BusyOutcome> 
 
   const window = busyWindow(now, settings);
   try {
-    const events = await listEvents(creds, window);
+    const events = await listAllCalendars(creds, window);
     const ownEventIds = await knownOwnEventIds(organizationId, window);
     const { blocks } = computeBusyBlocks(events, { timezone: settings.timezone, window, ownEventIds });
 
@@ -177,58 +218,9 @@ async function runSync(organizationId: string, now: Date): Promise<BusyOutcome> 
         .limit(1);
       if (!still?.busy) return null;
 
-      const existing = await tx
-        .select({
-          id: schema.booking.id,
-          scheduledAt: schema.booking.scheduledAt,
-          durationMinutes: schema.booking.durationMinutes,
-        })
-        .from(schema.booking)
-        .where(
-          scoped(
-            schema.booking.organizationId,
-            organizationId,
-            eq(schema.booking.busySource, "google"),
-            // Lo de días pasados queda como estaba (historia); se administra de hoy en adelante.
-            gte(schema.booking.scheduledAt, new Date(window.startMs))
-          )
-        );
-      const diff = diffBusyBlocks(
-        existing.map((r) => ({ id: r.id, startMs: r.scheduledAt.getTime(), durationMinutes: r.durationMinutes })),
-        blocks
-      );
-      if (diff.toDelete.length > 0) {
-        await tx
-          .delete(schema.booking)
-          .where(
-            scoped(
-              schema.booking.organizationId,
-              organizationId,
-              eq(schema.booking.busySource, "google"),
-              inArray(schema.booking.id, diff.toDelete)
-            )
-          );
-      }
-      const insertedIds: string[] = [];
-      if (diff.toInsert.length > 0) {
-        const values = diff.toInsert.map((iv: Interval) => {
-          const id = newId("booking");
-          insertedIds.push(id);
-          return {
-            id,
-            organizationId,
-            kind: "block" as const,
-            source: "manual" as const,
-            status: "agendada" as const,
-            busySource: "google" as const,
-            scheduledAt: new Date(iv.startMs),
-            durationMinutes: durationMinutesOf(iv),
-            notes: GOOGLE_BUSY_NOTE,
-          };
-        });
-        await tx.insert(schema.booking).values(values);
-      }
-      return { inserted: insertedIds, deleted: diff.toDelete };
+      const written = await applyBusyBlocks(tx, organizationId, { staffId: null, note: GOOGLE_BUSY_NOTE }, blocks, window);
+      const conflicts = await reconcileConflicts(tx, organizationId, now);
+      return { ...written, conflicts };
     });
     if (!applied) return { outcome: "disabled" };
 
@@ -241,9 +233,19 @@ async function runSync(organizationId: string, now: Date): Promise<BusyOutcome> 
       busyBlocks: blocks.length,
     });
     await markGoogleOk(organizationId).catch(() => {});
-    const changed = applied.inserted[0] ?? applied.deleted[0];
+    const { conflicts } = applied;
+    const changed =
+      applied.inserted[0] ?? applied.deleted[0] ?? conflicts.changedIds[0];
     if (changed) publish(organizationId, { type: "booking.updated", data: { bookingId: changed } });
-    return { outcome: "synced", blocks: blocks.length, inserted: applied.inserted.length, deleted: applied.deleted.length };
+    if (conflicts.newIds.length > 0) await notifyConflicts(organizationId, conflicts.newIds, settings.timezone);
+    return {
+      outcome: "synced",
+      blocks: blocks.length,
+      inserted: applied.inserted.length,
+      deleted: applied.deleted.length,
+      conflicts: conflicts.active,
+      newConflicts: conflicts.newIds.length,
+    };
   } catch (err) {
     return await handleFailure(organizationId, err, { previous: row.busyStatus, attempts: row.attempts });
   }
@@ -299,8 +301,262 @@ async function handleFailure(
   return { outcome: "error", error: text };
 }
 
-/** Todos los eventos de la ventana, página por página. Una página que falla tumba la lectura ENTERA. */
-async function listEvents(creds: GoogleCreds, window: Interval): Promise<GoogleBusyEvent[]> {
+export type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/**
+ * Deja en la base EXACTAMENTE los bloqueos leídos de una fuente: el negocio (`staffId: null`) o un
+ * profesional (Mejora 3). Solo toca filas de Google de ESA fuente y de hoy en adelante (lo de días pasados
+ * queda como historia). Lo que ya está igual no se toca. Se llama con el candado de la agenda tomado.
+ */
+export async function applyBusyBlocks(
+  tx: Tx,
+  organizationId: string,
+  scope: { staffId: string | null; note: string },
+  blocks: Interval[],
+  window: Interval
+): Promise<{ inserted: string[]; deleted: string[] }> {
+  const ofScope = scope.staffId ? eq(schema.booking.staffId, scope.staffId) : isNull(schema.booking.staffId);
+  const existing = await tx
+    .select({
+      id: schema.booking.id,
+      scheduledAt: schema.booking.scheduledAt,
+      durationMinutes: schema.booking.durationMinutes,
+    })
+    .from(schema.booking)
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        organizationId,
+        eq(schema.booking.busySource, "google"),
+        ofScope,
+        gte(schema.booking.scheduledAt, new Date(window.startMs))
+      )
+    );
+  const diff = diffBusyBlocks(
+    existing.map((r) => ({ id: r.id, startMs: r.scheduledAt.getTime(), durationMinutes: r.durationMinutes })),
+    blocks
+  );
+  if (diff.toDelete.length > 0) {
+    await tx
+      .delete(schema.booking)
+      .where(
+        scoped(
+          schema.booking.organizationId,
+          organizationId,
+          eq(schema.booking.busySource, "google"),
+          ofScope,
+          inArray(schema.booking.id, diff.toDelete)
+        )
+      );
+  }
+  const inserted: string[] = [];
+  if (diff.toInsert.length > 0) {
+    const values = diff.toInsert.map((iv: Interval) => {
+      const id = newId("booking");
+      inserted.push(id);
+      return {
+        id,
+        organizationId,
+        kind: "block" as const,
+        source: "manual" as const,
+        status: "agendada" as const,
+        busySource: "google" as const,
+        staffId: scope.staffId,
+        scheduledAt: new Date(iv.startMs),
+        durationMinutes: durationMinutesOf(iv),
+        notes: scope.note,
+      };
+    });
+    await tx.insert(schema.booking).values(values);
+  }
+  return { inserted, deleted: diff.toDelete };
+}
+
+/**
+ * Mejora 1 — Deja la marca de choque de cada cita igual a lo que dicen los bloqueos de Google GUARDADOS. Mira
+ * las citas activas que aún no terminan y, para limpiar, cualquier cita que tuviera marca (se canceló, se
+ * cerró o ya pasó). Devuelve las que chocan por PRIMERA vez (lo que se avisa).
+ *
+ * Mejora 3: cada cita se cruza con lo ocupado del negocio (bloqueos sin profesional) y con lo de SU
+ * profesional; lo de otro profesional no le choca.
+ */
+export async function reconcileConflicts(
+  tx: Tx,
+  organizationId: string,
+  now: Date
+): Promise<{ newIds: string[]; changedIds: string[]; active: number }> {
+  const blockRows = await tx
+    .select({
+      staffId: schema.booking.staffId,
+      scheduledAt: schema.booking.scheduledAt,
+      durationMinutes: schema.booking.durationMinutes,
+    })
+    .from(schema.booking)
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        organizationId,
+        eq(schema.booking.busySource, "google"),
+        gt(schema.booking.scheduledAt, new Date(now.getTime() - 2 * 86_400_000))
+      )
+    );
+  const blocksFor = (staffId: string | null): Interval[] =>
+    blockRows
+      .filter((b) => b.staffId === null || (staffId !== null && b.staffId === staffId))
+      .map((b) => ({ startMs: b.scheduledAt.getTime(), endMs: b.scheduledAt.getTime() + b.durationMinutes * 60_000 }));
+
+  const rows = await tx
+    .select({
+      id: schema.booking.id,
+      staffId: schema.booking.staffId,
+      status: schema.booking.status,
+      scheduledAt: schema.booking.scheduledAt,
+      durationMinutes: schema.booking.durationMinutes,
+      conflictStart: schema.booking.googleConflictStart,
+      conflictEnd: schema.booking.googleConflictEnd,
+    })
+    .from(schema.booking)
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        organizationId,
+        eq(schema.booking.kind, "session"),
+        eq(schema.booking.isTest, false),
+        or(
+          and(
+            eq(schema.booking.status, "agendada"),
+            // Las que pueden terminar después de ahora (la más larga empezó, como mucho, ayer).
+            gt(schema.booking.scheduledAt, new Date(now.getTime() - 86_400_000))
+          ),
+          isNotNull(schema.booking.googleConflictStart)
+        )
+      )
+    );
+
+  const live = rows.filter(
+    (r) => r.status === "agendada" && r.scheduledAt.getTime() + r.durationMinutes * 60_000 > now.getTime()
+  );
+  // Por profesional: cada grupo de citas contra lo del negocio + lo de su profesional.
+  const groups = new Map<string | null, typeof live>();
+  for (const r of live) groups.set(r.staffId, [...(groups.get(r.staffId) ?? []), r]);
+  const changes: ReturnType<typeof detectConflicts> = { set: [], cleared: [] };
+  for (const [staffId, group] of groups) {
+    const part = detectConflicts(
+      group.map((r) => ({
+        id: r.id,
+        startMs: r.scheduledAt.getTime(),
+        endMs: r.scheduledAt.getTime() + r.durationMinutes * 60_000,
+        conflict:
+          r.conflictStart && r.conflictEnd ? { startMs: r.conflictStart.getTime(), endMs: r.conflictEnd.getTime() } : null,
+      })),
+      blocksFor(staffId)
+    );
+    changes.set.push(...part.set);
+    changes.cleared.push(...part.cleared);
+  }
+  // Cerradas, canceladas o ya pasadas con marca: se limpian.
+  const liveIds = new Set(live.map((r) => r.id));
+  const stale = rows.filter((r) => r.conflictStart && !liveIds.has(r.id)).map((r) => r.id);
+  const toClear = [...changes.cleared, ...stale];
+
+  for (const s of changes.set) {
+    await tx
+      .update(schema.booking)
+      .set({ googleConflictStart: new Date(s.conflict.startMs), googleConflictEnd: new Date(s.conflict.endMs) })
+      .where(scoped(schema.booking.organizationId, organizationId, eq(schema.booking.id, s.id)));
+  }
+  if (toClear.length > 0) {
+    await tx
+      .update(schema.booking)
+      .set({ googleConflictStart: null, googleConflictEnd: null })
+      .where(scoped(schema.booking.organizationId, organizationId, inArray(schema.booking.id, toClear)));
+  }
+
+  const stillConflicting = live.filter((r) => r.conflictStart && !changes.cleared.includes(r.id)).length;
+  return {
+    newIds: changes.set.filter((s) => s.isNew).map((s) => s.id),
+    changedIds: [...changes.set.map((s) => s.id), ...toClear],
+    active: stillConflicting + changes.set.filter((s) => s.isNew).length,
+  };
+}
+
+/** Un aviso por lectura: una cita con detalle; varias, juntas (unas vacaciones no son diez avisos). */
+export async function notifyConflicts(organizationId: string, ids: string[], timezone: string): Promise<void> {
+  try {
+    const rows = await getDb()
+      .select({
+        id: schema.booking.id,
+        scheduledAt: schema.booking.scheduledAt,
+        conflictStart: schema.booking.googleConflictStart,
+        conflictEnd: schema.booking.googleConflictEnd,
+        contactName: schema.contact.name,
+        staffName: schema.staff.name,
+      })
+      .from(schema.booking)
+      .leftJoin(schema.contact, eq(schema.booking.contactId, schema.contact.id))
+      .leftJoin(schema.staff, eq(schema.booking.staffId, schema.staff.id))
+      .where(scoped(schema.booking.organizationId, organizationId, inArray(schema.booking.id, ids)))
+      .orderBy(schema.booking.scheduledAt);
+    const first = rows[0];
+    if (!first) return;
+    // «Ana» o, si la cita tiene profesional, «Ana con Carla» (Mejora 3: el choque puede ser de su calendario).
+    const who = (r: (typeof rows)[number]) =>
+      `${r.contactName?.trim() || "Sin contacto"}${r.staffName ? ` con ${r.staffName}` : ""}`;
+    if (rows.length === 1) {
+      const range =
+        first.conflictStart && first.conflictEnd
+          ? ` (${timeInTz(first.conflictStart.toISOString(), timezone)}–${timeInTz(first.conflictEnd.toISOString(), timezone)})`
+          : "";
+      await notify(organizationId, {
+        title: "Una cita choca con tu Google Calendar",
+        message: `La cita de ${who(first)} del ${labelInTz(first.scheduledAt.toISOString(), timezone)} cae sobre un horario ocupado en tu Google Calendar${range}. La cita sigue en pie: muévela o libera ese horario en Google.`,
+        category: "cita",
+        link: `/citas?pestana=sillas&fecha=${dayIsoInTz(first.scheduledAt, timezone)}&cita=${first.id}`,
+      });
+      return;
+    }
+    const names = rows.slice(0, 3).map((r) => `${who(r)} (${labelInTz(r.scheduledAt.toISOString(), timezone)})`);
+    const more = rows.length > 3 ? ` y ${rows.length - 3} más` : "";
+    await notify(organizationId, {
+      title: `${rows.length} citas chocan con tu Google Calendar`,
+      message: `Caen sobre horarios ocupados en tu Google Calendar: ${names.join(", ")}${more}. Siguen en pie: muévelas o libera esos horarios en Google.`,
+      category: "cita",
+      link: "/citas",
+    });
+  } catch (err) {
+    console.warn(`[calendario] no pude avisar de los choques con Google: ${msg(err)}`);
+  }
+}
+
+/**
+ * Mejora 2 — Los eventos de todos los calendarios que se leen. Uno que falla tumba la lectura ENTERA (nunca se
+ * aplica una a medias) y el error lleva su nombre; se conservan el estado HTTP y si es de autenticación, para
+ * que el manejo de siempre (reconectar, permiso insuficiente, reintento) siga valiendo.
+ */
+export async function listAllCalendars(creds: GoogleCreds, window: Interval): Promise<GoogleBusyEvent[]> {
+  const calendars = creds.busyCalendars?.length ? creds.busyCalendars : [{ id: creds.calendarId, summary: "Calendario principal" }];
+  const out: GoogleBusyEvent[] = [];
+  for (const cal of calendars) {
+    try {
+      out.push(...(await listEvents(creds, window, cal.id)));
+    } catch (err) {
+      if (calendars.length === 1 && !(err instanceof ConnectorError && (err.status === 404 || err.status === 410))) throw err;
+      const status = err instanceof ConnectorError ? err.status : null;
+      const why =
+        status === 404 || status === 410
+          ? "ya no está compartido contigo o se borró. Quítalo de la lista en Ajustes → Agenda o vuelve a compartirlo."
+          : msg(err);
+      throw new ConnectorError("google", `No se pudo leer «${cal.summary}»: ${why}`, {
+        status,
+        isAuthError: err instanceof ConnectorError ? err.isAuthError : false,
+      });
+    }
+  }
+  return out;
+}
+
+/** Todos los eventos de la ventana de UN calendario, página por página. Una página que falla tumba la lectura ENTERA. */
+async function listEvents(creds: GoogleCreds, window: Interval, calendarId: string): Promise<GoogleBusyEvent[]> {
   const out: GoogleBusyEvent[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -314,7 +570,7 @@ async function listEvents(creds: GoogleCreds, window: Interval): Promise<GoogleB
       maxResults: String(PAGE_SIZE),
       ...(pageToken ? { pageToken } : {}),
     });
-    const res = await googleRequest(creds, eventsPath(creds, `?${params.toString()}`));
+    const res = await googleRequest(creds, eventsPath(creds, `?${params.toString()}`, calendarId));
     const body = (res.body ?? {}) as { items?: GoogleBusyEvent[]; nextPageToken?: string };
     out.push(...(body.items ?? []));
     if (!body.nextPageToken) return out;
@@ -324,7 +580,7 @@ async function listEvents(creds: GoogleCreds, window: Interval): Promise<GoogleB
 }
 
 /** Los ids de evento que publicó Vocero (por si alguno perdió su marca o es un Meet de antes del Paso 3). */
-async function knownOwnEventIds(organizationId: string, window: Interval): Promise<Set<string>> {
+export async function knownOwnEventIds(organizationId: string, window: Interval): Promise<Set<string>> {
   const rows = await getDb()
     .select({ eventId: schema.booking.calendarEventId, externalRef: schema.booking.externalRef, connector: schema.booking.connector })
     .from(schema.booking)

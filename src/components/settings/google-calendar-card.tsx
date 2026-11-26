@@ -11,6 +11,9 @@ import {
 } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { ConnectorCredentials } from "@/components/settings/connector-credentials";
+import { GoogleCalendarPicker } from "@/components/settings/google-calendar-picker";
+import { WatchLine } from "@/components/settings/watch-line";
+import type { WatchStatus } from "@/lib/google-watch-status";
 import { calendarLabel, oauthErrorMessage } from "@/lib/google-calendar";
 
 /**
@@ -23,6 +26,8 @@ import { calendarLabel, oauthErrorMessage } from "@/lib/google-calendar";
  *  - «Publicar las citas en Google Calendar» y «Incluir el teléfono» se guardan al momento.
  *  - Paso 4: «Tener en cuenta lo ocupado en Google Calendar» (Google → bloqueos), con su última lectura,
  *    el aviso si falla o falta permiso, y «Leer ahora».
+ *  - Mejora 2: en qué calendario se publica y cuáles se leen (`GoogleCalendarPicker`), o el aviso para
+ *    reconectar si la conexión no tiene el permiso de la lista.
  */
 
 type Connection = {
@@ -32,6 +37,7 @@ type Connection = {
   lastError: string | null;
   lastOkAt: string | null;
   appMissing: boolean;
+  calendarSummary?: string | null;
   fields: Record<string, string>;
 };
 
@@ -63,7 +69,11 @@ export function GoogleCalendarCard({
   const [connection, setConnection] = useState<Connection | null | undefined>(undefined);
   const [oauthAvailable, setOauthAvailable] = useState(false);
   const [busyState, setBusyState] = useState<BusyState>(null);
+  // Mejora 4: los avisos al instante (null = no se muestra).
+  const [watch, setWatch] = useState<WatchStatus | null>(null);
   const [reading, setReading] = useState(false);
+  // Mejora 3: cuántos del equipo conectaron su propio calendario (null = la instancia no lo ofrece).
+  const [team, setTeam] = useState<{ connected: number; total: number } | null>(null);
   const polls = useRef(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
@@ -71,10 +81,27 @@ export function GoogleCalendarCard({
   const load = useCallback(async () => {
     const res = await fetch("/api/settings/google").catch(() => null);
     if (!res?.ok) return setConnection(null);
-    const data = (await res.json()) as { connection: Connection | null; oauthAvailable?: boolean; busy?: BusyState };
+    const data = (await res.json()) as {
+      connection: Connection | null;
+      oauthAvailable?: boolean;
+      busy?: BusyState;
+      watch?: WatchStatus;
+    };
     setConnection(data.connection);
     setOauthAvailable(!!data.oauthAvailable);
     setBusyState(data.busy ?? null);
+    setWatch(data.watch ?? null);
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/negocio/equipo/calendarios")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { available?: boolean; staff?: { connection: { status: string } | null }[] } | null) => {
+        if (d?.available && d.staff && d.staff.length > 0) {
+          setTeam({ connected: d.staff.filter((s) => s.connection?.status === "connected").length, total: d.staff.length });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -197,7 +224,10 @@ export function GoogleCalendarCard({
               <span className="font-medium text-foreground">
                 {connection.accountEmail ? `Conectado como ${connection.accountEmail}` : "Conectado con tus credenciales"}
               </span>{" "}
-              · {calendarLabel(connection.fields.calendarId)}
+              ·{" "}
+              {connection.calendarSummary
+                ? `publica en «${connection.calendarSummary}»`
+                : calendarLabel(connection.fields.calendarId)}
             </p>
             {connection.lastError && (
               <p className="text-xs text-text-3">Último aviso de Google: {connection.lastError}</p>
@@ -210,6 +240,13 @@ export function GoogleCalendarCard({
                 Desconectar
               </Button>
             </div>
+            <GoogleCalendarPicker
+              reconnectHref={oauthAvailable ? connectHref : null}
+              onSaved={() => {
+                polls.current = 0;
+                void load();
+              }}
+            />
           </div>
         ) : (
           <div className="space-y-2 rounded-sm border border-danger-soft bg-danger-tint p-3 text-sm text-danger-text">
@@ -298,7 +335,17 @@ export function GoogleCalendarCard({
               onReadNow={() => void readNow()}
             />
           )}
+          {sync.googleBusy && connection && <WatchLine status={watch} />}
         </div>
+
+        {team && (
+          <p className="border-t pt-4 text-xs text-text-3">
+            Calendarios del equipo: {team.connected} de {team.total}{" "}
+            {team.total === 1 ? "profesional conectó" : "profesionales conectaron"} su Google Calendar (lo ocupado ahí
+            bloquea solo a esa persona).{" "}
+            <a href="/equipo" className="font-medium text-brand-text hover:underline">Gestionar en Equipo</a>
+          </p>
+        )}
 
         {/* Avanzado: las credenciales de la app propia del negocio */}
         <details className="border-t pt-4" open={!oauthAvailable && connection === null ? true : undefined}>

@@ -15,6 +15,7 @@ import { revokeToken } from "@/server/agenda/google-oauth";
 import { resyncUpcomingBookings } from "@/server/agenda/calendar-sync/sync";
 import { clearGoogleBusyBlocks, getBusyState, requestBusySync } from "@/server/agenda/calendar-busy/sync";
 import { moduleGate } from "@/server/business/saas-guard";
+import { getWatchStatuses } from "@/server/agenda/calendar-watch/reconcile";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,8 @@ export const GET = withAuth(async (session) => {
     oauthAvailable,
     // Paso 4: la lectura de lo ocupado (última lectura, error, cuántos bloqueos).
     busy: await getBusyState(session.organizationId),
+    // Mejora 4: cómo llegan los cambios (avisos al instante, cada 5 min, o nada que mostrar).
+    watch: (await getWatchStatuses(session.organizationId).catch(() => null))?.business ?? { status: "off" },
     connection: {
       status: info.status,
       source: info.source,
@@ -49,6 +52,8 @@ export const GET = withAuth(async (session) => {
       lastOkAt: info.lastOkAt?.toISOString() ?? null,
       appMissing: info.appMissing,
       secretLast4: info.secretLast4,
+      // Mejora 2: el nombre del calendario donde se publica (null = el principal).
+      calendarSummary: info.calendarSummary,
       // Lo que rellena el formulario de Avanzado (solo del origen manual).
       fields: info.source === "manual" ? { clientId: info.clientId, calendarId: info.calendarId } : { calendarId: info.calendarId },
     },
@@ -112,10 +117,11 @@ export const DELETE = withAuth(async (session) => {
     return apiError(403, "forbidden", "Solo el dueño o un administrador puede hacer esto");
   }
   const creds = await getGoogleCredentials(session.organizationId).catch(() => null);
+  // Paso 4: sin conexión, lo que se había traído de Google deja de corresponder a nada: se quita. Mejora 4: y
+  // sus avisos al instante se detienen (antes de revocar: `channels.stop` necesita el token vigente).
+  await clearGoogleBusyBlocks(session.organizationId);
   // Revocar es cortesía con la cuenta del negocio: si Google no responde, se desconecta igual.
   const revoked = creds ? await revokeToken(creds.refreshToken) : false;
-  // Paso 4: sin conexión, lo que se había traído de Google deja de corresponder a nada: se quita.
-  await clearGoogleBusyBlocks(session.organizationId);
   await deleteGoogleCredentials(session.organizationId);
   return Response.json({ ok: true, revoked });
 });

@@ -19,8 +19,16 @@ Automatizado en `scripts/e2e-google-calendar.mjs` (`pnpm test:e2e:google-calenda
    reservar encima da 409 `slot_taken` y quitar el bloqueo desde Vocero da 409 `external_block`; lo marcado
    «Disponible» se sigue ofreciendo. Google caído + «Leer ahora» → aviso y el bloqueo se conserva. Borrado en
    Google + «Leer ahora» → el horario vuelve. 403 de permiso → «Falta permiso para leer tu calendario» con
-   «Reconectar con Google», conservando lo último leído.
-6. **Desconectar** desde la pantalla: «Google Calendar desconectado», sin conexión, el permiso revocado y sin
+   «Reconectar con Google», conservando lo último leído. **Mejora 1**: un evento nuevo encima de una cita ya
+   agendada la marca «Choca con tu Google Calendar» (Lista y panel), llega UN aviso (leer otra vez no lo
+   repite) y la cita sigue agendada; al quitar el evento en Google la marca se va sola.
+6. **Varios calendarios (Mejora 2, con `GOOGLE_CALENDAR_LIST=on`)**: la primera conexión no concedió la lista
+   (`_calendars {grantCalendarList:false}`, como una conexión antigua) → la tarjeta dice «Nuevo: elige tus
+   calendarios» con «Reconectar con Google» y todo sigue en el principal. Al reconectar aparece el selector:
+   para publicar solo los calendarios con escritura; «Socio» (libre/ocupado) no se puede marcar. Publicar en
+   «Equipo» MUEVE la cita que venía (mismo evento) y la siguiente nace ahí; marcar «Personal» hace que su
+   evento bloquee la agenda.
+7. **Desconectar** desde la pantalla: «Google Calendar desconectado», sin conexión, el permiso revocado y sin
    bloqueos de Google.
 
 Camino infeliz adicional (pruebas automáticas): `tests/unit/google-oauth.test.ts` (state alterado, vencido o
@@ -29,4 +37,7 @@ guarda) y `tests/unit/google-calendar-sync-live.test.ts` (respuesta perdida → 
 un aviso, cambio a mitad de intento, Laboratorio y sincronización apagada → cero llamadas). Paso 4:
 `tests/unit/google-calendar-busy.test.ts` (reglas, anti-bucle, ventana, partir por día, diff, mock) y
 `tests/unit/google-calendar-busy-live.test.ts` (crear/actualizar/limpiar, no pisar lo propio, Google caído,
-lectura a medias, token revocado, 403, apagar a mitad de una lectura).
+lectura a medias, token revocado, 403, apagar a mitad de una lectura). Mejora 2:
+`tests/unit/google-calendars.test.ts` (reglas de elección, permisos según la bandera) y
+`tests/unit/google-calendars-live.test.ts` (sin permiso = como antes, roles, validación con la lista fresca,
+misma/otra cuenta, mover citas y Meet, varios calendarios, calendario que dejaron de compartir, Avanzado).

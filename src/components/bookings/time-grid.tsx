@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { AlertTriangle, Sparkles } from "lucide-react";
+import { AlertTriangle, CalendarX2, Sparkles } from "lucide-react";
 import {
   bookingSegments,
   dayHeading,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/time/calendar";
 import type { WeeklyHours } from "@/server/agenda/settings";
 import { cn } from "@/lib/utils";
-import { bookingTitle, bookingTone, hasDeliveryIssue, type Booking } from "./booking-look";
+import { bookingTitle, bookingTone, googleConflictOf, hasDeliveryIssue, type Booking } from "./booking-look";
 
 /**
  * 215 — La rejilla de horas de las vistas Día y Semana, como Google Calendar:
@@ -287,6 +287,9 @@ function EventBlock({
         )}
         {hasDeliveryIssue(b) && (
           <AlertTriangle aria-label="Sin enlace de la reunión" className="h-3 w-3 shrink-0" strokeWidth={2} />
+        )}
+        {googleConflictOf(b) && (
+          <CalendarX2 aria-label="Choca con tu Google Calendar" className="h-3 w-3 shrink-0" strokeWidth={2} />
         )}
         <span className="truncate">
           {b.isTest && "Prueba · "}

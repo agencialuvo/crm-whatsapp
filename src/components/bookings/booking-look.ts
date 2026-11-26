@@ -37,6 +37,14 @@ export function calendarSyncLine(b: Booking): { text: string; tone: "ok" | "wait
   };
 }
 
+/**
+ * Mejora 1: la cita (activa) cae sobre un horario ocupado en el Google Calendar conectado. Solo avisa: la
+ * cita sigue en pie. Devuelve el tramo de Google a mostrar, o null.
+ */
+export function googleConflictOf(b: Booking): { startUtc: string; endUtc: string } | null {
+  return b.kind === "session" && b.status === "agendada" ? b.googleConflict : null;
+}
+
 /** Un bloqueo no se "agenda" ni se "cancela": está activo o se quitó. */
 export function statusLabel(b: Booking): string {
   if (b.kind === "block") return b.status === "cancelada" ? "Quitado" : "Activo";

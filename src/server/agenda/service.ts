@@ -36,6 +36,7 @@ import { publish } from "@/server/events/bus";
 import { notify } from "@/server/notifications/service";
 import { requestCalendarSync } from "@/server/agenda/calendar-sync/sync";
 import { shortClientName } from "@/server/agenda/calendar-sync/event";
+import { getGoogleConnectionInfo } from "@/server/agenda/connectors/google-credentials";
 
 /**
  * 015 — Ciclo de vida de la cita y las dos reglas INNEGOCIABLES:
@@ -434,6 +435,9 @@ export async function rescheduleBooking(input: {
               scheduledAt: new Date(slot.startUtc),
               ...(booking.kind === "session" && { staffId }),
               confirmedAt: null,
+              // Mejora 1: la hora nueva ya se validó libre (también de lo ocupado en Google).
+              googleConflictStart: null,
+              googleConflictEnd: null,
               updatedAt: new Date(),
             })
             .where(eq(schema.booking.id, booking.id))
@@ -778,8 +782,15 @@ async function deliverMeeting(
             organizationId: booking.organizationId,
           });
 
+    // Mejora 2: el evento de Meet nace en el calendario de publicación de ESE momento; se anota para poder
+    // moverlo si el negocio cambia de calendario.
+    const meetCalendarId =
+      connectorId === "google" && meeting.externalId && !booking.calendarEventCalendarId
+        ? ((await getGoogleConnectionInfo(booking.organizationId).catch(() => null))?.calendarId ?? null)
+        : null;
     return await persistDelivery(booking.id, {
       externalRef: meeting.externalId ?? booking.externalRef,
+      ...(meetCalendarId ? { calendarEventCalendarId: meetCalendarId } : {}),
       meetingLink: meeting.joinUrl,
       // Un conector que promete enlace por cita y no lo trajo todavía deja la
       // cita "sin enlace" — reintentable. `enlace-fijo` sin sala configurada,
@@ -812,6 +823,7 @@ async function persistDelivery(
     externalRef: string | null;
     meetingLink: string | null;
     linkPending: boolean;
+    calendarEventCalendarId?: string;
   }
 ): Promise<BookingRow> {
   const db = getDb();

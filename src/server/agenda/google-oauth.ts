@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getEnv } from "@/lib/env";
 import { GOOGLE_SCOPE, GOOGLE_TIMEOUT_MS } from "@/server/agenda/connectors/google";
+import { CALENDAR_LIST_SCOPE } from "@/lib/google-calendar";
 
 /**
  * Paso 3 — «Conectar con Google» con un clic: el flujo OAuth 2.0 (código de autorización + PKCE S256) con
@@ -18,6 +19,19 @@ import { GOOGLE_SCOPE, GOOGLE_TIMEOUT_MS } from "@/server/agenda/connectors/goog
 /** Lo mínimo: escribir eventos, y la identidad (correo) para mostrar «Conectado como …». */
 export const GOOGLE_OAUTH_SCOPES = [GOOGLE_SCOPE, "openid", "email"] as const;
 
+/**
+ * Mejora 2 — ¿Se pide también la lista de calendarios? Solo con `GOOGLE_CALENDAR_LIST` encendida: es un
+ * permiso que Google tiene que aprobar en la pantalla de consentimiento antes de pedirlo en producción.
+ */
+export function calendarListEnabled(): boolean {
+  return ["on", "1", "true", "si", "sí", "yes"].includes((getEnv().GOOGLE_CALENDAR_LIST ?? "").trim().toLowerCase());
+}
+
+/** Los permisos que se piden ahora (los mínimos, más la lista de calendarios si la bandera está encendida). */
+export function oauthScopes(): string[] {
+  return calendarListEnabled() ? [...GOOGLE_OAUTH_SCOPES, CALENDAR_LIST_SCOPE] : [...GOOGLE_OAUTH_SCOPES];
+}
+
 export const OAUTH_COOKIE = "vocero_google_oauth";
 /** La cookie solo viaja a las rutas del flujo. */
 export const OAUTH_COOKIE_PATH = "/api/settings/google/oauth";
@@ -31,8 +45,9 @@ const b64url = (buf: Buffer) => buf.toString("base64url");
 
 export type OAuthState = { o: string; u: string; n: string; e: number };
 
-function sign(payload: string, secret: string): string {
-  return b64url(createHmac("sha256", secret).update(`google-oauth:${payload}`).digest());
+/** El contexto va dentro de la firma: un `state` de un flujo no sirve en el otro. */
+function sign(payload: string, secret: string, context = "google-oauth"): string {
+  return b64url(createHmac("sha256", secret).update(`${context}:${payload}`).digest());
 }
 
 /** `payload.firma`, con el payload en base64url. */
@@ -99,14 +114,21 @@ export function readCookie(header: string | null, name: string): string | null {
   return null;
 }
 
-export function buildAuthorizeUrl(input: { clientId: string; state: string; challenge: string; redirectUri?: string }): string {
+export function buildAuthorizeUrl(input: {
+  clientId: string;
+  state: string;
+  challenge: string;
+  redirectUri?: string;
+  /** Mejora 3: los permisos de otro flujo (el del profesional); por defecto, los del negocio. */
+  scopes?: readonly string[];
+}): string {
   // Concatenado y no `new URL("/o/…", base)`: eso descartaría el camino de una base con subruta (el mock).
   const url = new URL(`${getEnv().GOOGLE_ACCOUNTS_BASE_URL.replace(/\/+$/, "")}/o/oauth2/v2/auth`);
   url.search = new URLSearchParams({
     client_id: input.clientId,
     redirect_uri: input.redirectUri ?? oauthRedirectUri(),
     response_type: "code",
-    scope: GOOGLE_OAUTH_SCOPES.join(" "),
+    scope: (input.scopes ?? oauthScopes()).join(" "),
     // `offline` + `consent`: Google entrega SIEMPRE un refresh token (sin `consent` solo lo da la primera vez).
     access_type: "offline",
     prompt: "consent",
@@ -149,6 +171,8 @@ export async function exchangeCode(input: {
   clientId: string;
   clientSecret: string;
   redirectUri?: string;
+  /** Mejora 3: qué permiso hace falta (el del profesional es de solo lectura); por defecto, `calendar.events`. */
+  hasRequiredScope?: (scope: string | null | undefined) => boolean;
 }): Promise<CodeExchange> {
   let res: Response;
   try {
@@ -178,7 +202,7 @@ export async function exchangeCode(input: {
   if (!res.ok || !data) {
     return { ok: false, reason: "exchange_failed", detail: data?.error_description ?? data?.error ?? `HTTP ${res.status}` };
   }
-  if (!hasCalendarScope(data.scope)) return { ok: false, reason: "missing_scope" };
+  if (!(input.hasRequiredScope ?? hasCalendarScope)(data.scope)) return { ok: false, reason: "missing_scope" };
   if (!data.refresh_token) return { ok: false, reason: "no_refresh_token" };
   return { ok: true, refreshToken: data.refresh_token, scope: data.scope ?? "", email: emailFromIdToken(data.id_token) };
 }
@@ -196,4 +220,63 @@ export async function revokeToken(token: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/* ---------- Mejora 3: el profesional conecta SU calendario (solo lectura) ---------- */
+
+/** Solo leer eventos (y la identidad para mostrar la cuenta). Nunca escribe en el calendario del profesional. */
+export const STAFF_READ_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+export const STAFF_OAUTH_SCOPES = [STAFF_READ_SCOPE, "openid", "email"] as const;
+
+/** La cookie del flujo del profesional: otro nombre y solo viaja a sus rutas públicas. */
+export const STAFF_OAUTH_COOKIE = "vocero_staff_google_oauth";
+export const STAFF_OAUTH_COOKIE_PATH = "/api/calendar-invite";
+
+/** La URI de vuelta del profesional (hay que registrarla en Google Cloud). Pública: el profesional no tiene sesión. */
+export function staffOAuthRedirectUri(): string {
+  return `${getEnv().APP_BASE_URL.replace(/\/+$/, "")}/api/calendar-invite/oauth/callback`;
+}
+
+/** ¿Concedió leer el calendario? (vale también un permiso mayor: `calendar.events` o `calendar`). */
+export function hasStaffReadScope(scope: string | null | undefined): boolean {
+  const granted = (scope ?? "").split(/\s+/);
+  return [STAFF_READ_SCOPE, GOOGLE_SCOPE, "https://www.googleapis.com/auth/calendar"].some((s) => granted.includes(s));
+}
+
+/** El `state` del profesional: la invitación (no hay sesión que comprobar), un nonce y el vencimiento. */
+export type StaffOAuthState = { i: string; n: string; e: number };
+
+export function signStaffState(state: StaffOAuthState, secret: string): string {
+  const payload = b64url(Buffer.from(JSON.stringify(state)));
+  return `${payload}.${sign(payload, secret, "google-staff-oauth")}`;
+}
+
+export type StaffStateCheck =
+  | { ok: true; state: StaffOAuthState }
+  | { ok: false; reason: "malformed" | "bad_signature" | "expired" | "nonce_mismatch" };
+
+/** Firma (del flujo del profesional), vigencia y que el nonce sea el de la cookie. */
+export function verifyStaffState(
+  token: string | null | undefined,
+  input: { secret: string; cookieNonce: string | null; now?: number }
+): StaffStateCheck {
+  const [payload, signature, extra] = (token ?? "").split(".");
+  if (!payload || !signature || extra !== undefined) return { ok: false, reason: "malformed" };
+  const expected = Buffer.from(sign(payload, input.secret, "google-staff-oauth"));
+  const given = Buffer.from(signature);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+    return { ok: false, reason: "bad_signature" };
+  }
+  let state: StaffOAuthState;
+  try {
+    state = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as StaffOAuthState;
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+  if (typeof state?.e !== "number" || typeof state.n !== "string" || typeof state.i !== "string") {
+    return { ok: false, reason: "malformed" };
+  }
+  if (state.e < (input.now ?? Date.now())) return { ok: false, reason: "expired" };
+  if (!input.cookieNonce || input.cookieNonce !== state.n) return { ok: false, reason: "nonce_mismatch" };
+  return { ok: true, state };
 }

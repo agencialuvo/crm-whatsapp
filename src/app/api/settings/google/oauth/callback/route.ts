@@ -28,6 +28,9 @@ export const dynamic = "force-dynamic";
  *   2. Google canjea el código (con el `code_verifier` PKCE) y entrega refresh token y el permiso de eventos;
  *   3. se puede escribir de verdad en el calendario (la misma prueba que «Probar»).
  * Después vuelve a Ajustes → Agenda con `?google=conectado` o `?google=error&motivo=…`, y borra la cookie.
+ *
+ * Mejora 2: guarda los permisos concedidos. Si es la MISMA cuenta que ya estaba, se conservan los calendarios
+ * elegidos (publicar y leer); si es otra, vuelven al principal (los ids no sirven entre cuentas).
  */
 export const GET = withAuth(async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
@@ -78,6 +81,8 @@ export const GET = withAuth(async (session, req: Request) => {
     clientId: app.clientId,
     refreshToken: exchanged.refreshToken,
     accountEmail: exchanged.email,
+    // Mejora 2: lo concedido decide si se ofrece elegir calendarios (Google deja desmarcar la lista).
+    grantedScopes: exchanged.scope,
   });
   // Reconectar retoma lo que quedó sin publicar (si la sincronización está encendida).
   await resyncUpcomingBookings(session.organizationId);

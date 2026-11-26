@@ -19,6 +19,7 @@ import {
   orderStaffForAssignment,
   type CapacityMember,
   type CapacitySession,
+  type StaffBusy,
   type StaffShift,
 } from "@/lib/agenda/capacity";
 
@@ -124,6 +125,8 @@ export type AgendaSnapshot = {
   members: CapacityMember[];
   sessions: CapacitySession[];
   blocks: { startMs: number; endMs: number }[];
+  /** Mejora 3: bloqueos de UN profesional (su Google Calendar): lo sacan solo a él. */
+  staffBusy?: StaffBusy[];
   /** Quiénes dan el servicio u oferta pedido; `null` = todo el equipo. */
   providers: string[] | null;
 };
@@ -206,11 +209,15 @@ async function loadSnapshot(
 
   const sessions: CapacitySession[] = [];
   const blocks: AgendaSnapshot["blocks"] = [];
+  const staffBusy: StaffBusy[] = [];
   for (const r of rows) {
     const startMs = r.scheduledAt.getTime();
     const endMs = startMs + r.durationMinutes * 60_000;
-    if (r.kind === "block") blocks.push({ startMs, endMs });
-    else sessions.push({ id: r.id, staffId: r.staffId, startMs, endMs });
+    // Mejora 3: un bloqueo CON profesional (su Google Calendar) solo lo saca a él; sin profesional, a todos.
+    if (r.kind === "block") {
+      if (r.staffId) staffBusy.push({ staffId: r.staffId, startMs, endMs });
+      else blocks.push({ startMs, endMs });
+    } else sessions.push({ id: r.id, staffId: r.staffId, startMs, endMs });
   }
 
   return {
@@ -222,6 +229,7 @@ async function loadSnapshot(
     })),
     sessions,
     blocks,
+    staffBusy,
     providers: providerRows.length > 0 ? providerRows.map((r) => r.staffId) : null,
   };
 }
@@ -273,7 +281,12 @@ export function bookableSlots(input: {
     if (!input.open.some((o) => startMs >= o.startMs && endMs <= o.endMs)) continue;
     if (input.snapshot.blocks.some((b) => b.startMs < endMs && startMs < b.endMs)) continue;
     const verdict = evaluateSlot(
-      { members: input.snapshot.members, sessions: input.snapshot.sessions, timezone: input.timezone },
+      {
+        members: input.snapshot.members,
+        sessions: input.snapshot.sessions,
+        timezone: input.timezone,
+        staffBusy: input.snapshot.staffBusy,
+      },
       {
         startMs,
         endMs,

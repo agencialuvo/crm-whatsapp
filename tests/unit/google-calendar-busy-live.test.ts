@@ -12,6 +12,8 @@ import { readFileSync } from "node:fs";
  * Google caído y lectura a medias (se conserva lo último leído); token revocado y permiso insuficiente
  * (pausa, un aviso, el barrido no insiste, reconectar retoma); los bloqueos de Google no se tocan desde
  * Vocero; apagar o desconectar quita solo lo de Google; apagar a mitad de una lectura no escribe.
+ * Mejora 1: choques con citas ya agendadas (marca, un aviso por choque, agrupado, se limpia sola; el
+ * Laboratorio no cuenta; reprogramar la limpia).
  */
 const live = process.env.RUN_DB_TESTS === "1";
 
@@ -426,6 +428,88 @@ describe.skipIf(!live)("Google Calendar: lo ocupado como bloqueos, contra Postgr
     };
     expect(await busy.syncGoogleBusy(org)).toEqual({ outcome: "disabled" });
     expect(await googleBlocks()).toHaveLength(0);
+  });
+
+  /* ---------- Mejora 1: choques con citas ya agendadas ---------- */
+
+  it("un evento nuevo de Google encima de una cita: la marca, avisa UNA vez y la cita sigue en pie", async () => {
+    const d = nextDay();
+    const cita = await book(d.at("10:00"));
+    const title = "Una cita choca con tu Google Calendar";
+    const prev = (await avisos(title)).length;
+
+    external([ev("imprevisto", d.at("09:30"), d.at("10:15"))]);
+    expect(await busy.syncGoogleBusy(org)).toMatchObject({ outcome: "synced", conflicts: 1, newConflicts: 1 });
+    const row = await bookingRow(cita.booking.id);
+    expect(row).toMatchObject({ status: "agendada", busySource: null });
+    expect(row.googleConflictStart!.toISOString()).toBe(d.at("09:30"));
+    expect(row.googleConflictEnd!.toISOString()).toBe(d.at("10:15"));
+    const nuevos = (await avisos(title)).filter((n) => n.link?.includes(cita.booking.id));
+    expect(nuevos).toHaveLength(1);
+    expect(nuevos[0]!.message).toMatch(/Ana Pérez/);
+    expect(nuevos[0]!.message).toMatch(/09:30–10:15/);
+    expect(nuevos[0]!.link).toContain(`cita=${cita.booking.id}`);
+    expect(nuevos[0]!.category).toBe("cita");
+
+    // La misma lectura otra vez: el choque sigue, pero no se vuelve a avisar.
+    expect(await busy.syncGoogleBusy(org)).toMatchObject({ conflicts: 1, newConflicts: 0 });
+    expect((await avisos(title)).length).toBe(prev + 1);
+
+    // El evento se movió fuera: la marca se limpia sola.
+    external([ev("imprevisto", d.at("14:00"), d.at("15:00"))]);
+    expect(await busy.syncGoogleBusy(org)).toMatchObject({ conflicts: 0, newConflicts: 0 });
+    expect(await bookingRow(cita.booking.id)).toMatchObject({ googleConflictStart: null, googleConflictEnd: null });
+  });
+
+  it("varios choques en una lectura = UN aviso agrupado; el Laboratorio y las canceladas no cuentan", async () => {
+    const d = nextDay();
+    const a = await book(d.at("10:00"));
+    const b = await book(d.at("11:00"));
+    const c = await book(d.at("12:00"));
+    await agenda.cancelBooking({ organizationId: org, bookingId: c.booking.id });
+    const prueba = `bk_lab_${tag}_${dayOffset}`;
+    await db.insert(schema.booking).values({
+      id: prueba,
+      organizationId: org,
+      kind: "session",
+      contactId,
+      isTest: true,
+      scheduledAt: new Date(d.at("10:30")),
+      durationMinutes: 30,
+    });
+    const singlesBefore = (await avisos("Una cita choca con tu Google Calendar")).length;
+
+    external([ev("todo-el-dia", d.at("09:00"), d.at("13:00"))]);
+    expect(await busy.syncGoogleBusy(org)).toMatchObject({ newConflicts: 2 });
+    const grouped = await avisos("2 citas chocan con tu Google Calendar");
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.message).toMatch(/Ana Pérez/);
+    expect((await avisos("Una cita choca con tu Google Calendar")).length).toBe(singlesBefore);
+    expect((await bookingRow(a.booking.id)).googleConflictStart).not.toBeNull();
+    expect((await bookingRow(b.booking.id)).googleConflictStart).not.toBeNull();
+    expect((await bookingRow(c.booking.id)).googleConflictStart).toBeNull();
+    expect((await bookingRow(prueba)).googleConflictStart).toBeNull();
+  });
+
+  it("cancelar la cita o reprogramarla a un hueco libre limpia la marca; apagar la lectura también", async () => {
+    const d = nextDay();
+    const a = await book(d.at("10:00"));
+    const b = await book(d.at("11:00"));
+    const c = await book(d.at("12:00"));
+    external([ev("bloque", d.at("09:00"), d.at("13:00"))]);
+    await busy.syncGoogleBusy(org);
+
+    await agenda.rescheduleBooking({ organizationId: org, bookingId: a.booking.id, startUtc: d.at("15:00") });
+    expect(await bookingRow(a.booking.id)).toMatchObject({ googleConflictStart: null });
+    // Cancelada: la próxima lectura le quita la marca.
+    await agenda.cancelBooking({ organizationId: org, bookingId: b.booking.id });
+    await busy.syncGoogleBusy(org);
+    expect(await bookingRow(b.booking.id)).toMatchObject({ googleConflictStart: null });
+    expect((await bookingRow(c.booking.id)).googleConflictStart).not.toBeNull();
+
+    // Sin la lectura no hay con qué chocar.
+    await busy.clearGoogleBusyBlocks(org);
+    expect(await bookingRow(c.booking.id)).toMatchObject({ googleConflictStart: null, status: "agendada" });
   });
 
   it("dos «Leer ahora» seguidos comparten la misma lectura (una sola llamada al listado)", async () => {

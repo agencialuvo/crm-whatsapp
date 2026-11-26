@@ -97,6 +97,68 @@ infraestructura para eso, y el reintento manual entrega el 90% del valor con el
 - **Fallos**: 5xx/429 → reintento 1 min→60 min sin rendirse, conservando los bloqueos; una lectura incompleta
   no escribe; 401/`invalid_grant` → la conexión pasa a «se perdió» (un aviso) y se pausa; apagar la opción o
   desconectar quita lo traído de Google.
+- **Choques (Mejora 1)**: si un tramo ocupado de Google cae sobre una cita activa que viene, la cita se marca
+  (`booking.google_conflict_start/end`, migración 0096) y se avisa una vez por choque (varios en una lectura =
+  un aviso). Nunca se cancela ni se mueve la cita: decidirlo es del negocio. La marca se limpia sola cuando el
+  choque desaparece, al reprogramar, o al apagar la lectura / desconectar.
+
+### Enmienda — Mejora 2 (varios calendarios)
+
+- **Elegir dónde publicar y qué leer.** `google_credentials.calendar_id` (+ `calendar_summary`) es donde se
+  publican las citas (y nace el Meet); `busy_calendars` (hasta 10, null = el de publicar) es lo que se lee
+  como ocupado. La lista sale de `calendarList.list` en el momento (Ajustes), nunca en el camino caliente,
+  y lo elegido se valida contra la lista FRESCA (publicar exige escribir; «solo libre/ocupado» no se lee).
+- **Permiso nuevo detrás de bandera.** `calendar.calendarlist.readonly` solo se pide con
+  `GOOGLE_CALENDAR_LIST` encendida (apagada por defecto) para poder desplegar antes de que Google apruebe el
+  permiso. `granted_scopes` guarda lo concedido: sin el permiso, todo sigue en el principal (como antes) y la
+  pantalla ofrece reconectar, sin llamar a Google. Modo Avanzado: se prueba la lista; un 403 explica cómo
+  generar el token con ese permiso o escribir el ID a mano.
+- **Reconectar con la misma cuenta conserva lo elegido; otra cuenta lo reinicia** (los ids no sirven entre
+  cuentas).
+- **Cambiar el calendario de publicación MUEVE las citas que vienen** con `events.move` (mismo id, mismo Meet:
+  nada se duplica). Cada cita anota dónde vive su evento (`booking.calendar_event_calendar_id`, migración 0097
+  con relleno). Con la publicación apagada se mueven igual los eventos de Meet. Si el evento ya no estaba en
+  el calendario anterior, se crea en el nuevo (409 → actualizar).
+- **Leer varios calendarios es todo o nada**: si uno falla, no se aplica la lectura y el error lo nombra
+  («dejaron de compartirlo» con 404); se conservan los bloqueos.
+
+### Enmienda — Mejora 3 (calendario por profesional)
+
+- **Cada profesional conecta SU Google Calendar, solo lectura** (`calendar.events.readonly`), tras la bandera
+  `GOOGLE_STAFF_CALENDARS` (apagada; exige `AGENDA`, `SALON` y la app OAuth de la instancia). Conexión cifrada
+  en `staff_google_connection` (migración 0098). Nada se escribe en su calendario.
+- **Enlace de 24 h sin usuario en Vocero** (`staff_calendar_invite`): 256 bits aleatorios, en la base solo su
+  SHA-256, uso único (marcado condicional), generar otro anula el anterior. Página pública
+  `/conectar-calendario/<enlace>` y vuelta en una URI propia, `/api/calendar-invite/oauth/callback` (la del
+  negocio exige sesión); `state` firmado con OTRO contexto que el del negocio + PKCE en cookie propia.
+- **Anti-bucle**: las reglas del Paso 4 (marca de Vocero / id conocido) y además se RECHAZA conectar la cuenta
+  de Google del negocio como calendario de un profesional.
+- **Lo ocupado bloquea SOLO a ese profesional**: bloqueos `busy_source = 'google'` con `staff_id`. El motor de
+  cupos (`evaluateSlot`, `staffBusy`) lo saca a él del tramo; los demás siguen; el tablero lo pinta en su silla.
+  Los bloqueos del negocio (sin profesional) siguen apagando el tramo para todos. La disponibilidad sigue sin
+  llamar a Google.
+- **Conectado = cuenta**, sin interruptor extra. Desconectar, desactivar o borrar al profesional revoca el
+  permiso, borra su conexión y SUS bloqueos (antes de borrarlo: `booking.staff_id` pasa a null y quedarían
+  bloqueando a todos) y anula sus enlaces. Los choques (Mejora 1) se cruzan con lo del negocio y lo de SU
+  profesional.
+- **Publicación**: fuera de alcance; las citas se siguen publicando solo en el calendario del negocio.
+
+### Enmienda — Mejora 4 (avisos al instante, `events.watch`)
+
+- **Google avisa, Vocero lee**: un canal `events.watch` por cada calendario que se lee como ocupado (los del
+  negocio y el de cada profesional de la Mejora 3), tras la bandera `GOOGLE_CALENDAR_WATCH` (apagada; exige
+  `AGENDA` y que `APP_BASE_URL` sea https con un dominio público). El aviso NO es dato: solo dispara la lectura
+  de siempre (`events.list`), con el mismo candado y el mismo anti-bucle. El barrido de 5 min sigue de respaldo.
+- **Canales** en `google_watch_channel` (migración 0099): `pending` → `active` (con `resource_id` y vencimiento a
+  7 días) o `failed` (reintento 1 min → 6 h; un rechazo permanente, 6 h). Renovación con solapamiento: a menos
+  de 24 h se abre otro y el viejo se detiene cuando el nuevo responde. Apagar la lectura, desconectar (negocio o
+  profesional), desactivar o borrar al profesional detienen sus canales con `channels.stop` ANTES de revocar el
+  permiso. El temporizador de 60 s los mantiene (máx. 20 llamadas a Google por vuelta).
+- **Webhook público** `/api/webhooks/google-calendar`: el token del canal es un HMAC del `channel_id` con el
+  secreto de la instancia (contexto propio, no se guarda) y se verifica en tiempo constante ANTES de tocar la
+  base; luego canal existente, no fallido y con el mismo `resource_id`. Responde 200 enseguida; como mucho una
+  lectura por fuente cada 10 s (las ráfagas se juntan) y un aviso que llega con una lectura en curso provoca otra.
+- **Sin HTTPS público o con Google fallando**: no se crea nada (o se reintenta) y todo sigue cada 5 min.
 
 ## Lo que se descartó
 

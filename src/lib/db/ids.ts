@@ -43,6 +43,11 @@ const prefixes = {
   offeredSlot: "ofs",
   zoomCredentials: "zcred",
   googleCredentials: "gcred",
+  // Mejora 3 — calendario por profesional
+  staffGoogleConnection: "sgc",
+  staffCalendarInvite: "sci",
+  // Mejora 4 — canales de avisos (`watch`) de Google Calendar
+  googleWatchChannel: "gwc",
   // 016 — atribución de anuncios
   adAttribution: "att",
   conversionEvent: "cve",

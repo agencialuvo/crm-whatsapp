@@ -28,6 +28,8 @@ export type BookingListItem = {
   notes: string | null;
   /** Paso 4: `google` = bloqueo traído de Google Calendar (se cambia allí, no aquí); null = propio. */
   busySource: "google" | null;
+  /** Mejora 1: el tramo ocupado en Google Calendar que se pisa con esta cita (null = sin choque). */
+  googleConflict: { startUtc: string; endUtc: string } | null;
   /** Cuándo se confirmó la asistencia; null = sin confirmar. */
   confirmedAt: string | null;
   /**
@@ -153,6 +155,10 @@ function toListItem(r: Row, timezone: string): BookingListItem {
     isTest: r.booking.isTest,
     notes: r.booking.notes,
     busySource: r.booking.busySource ?? null,
+    googleConflict:
+      r.booking.googleConflictStart && r.booking.googleConflictEnd
+        ? { startUtc: r.booking.googleConflictStart.toISOString(), endUtc: r.booking.googleConflictEnd.toISOString() }
+        : null,
     confirmedAt: r.booking.confirmedAt ? r.booking.confirmedAt.toISOString() : null,
     calendarSync: r.booking.calendarSyncStatus
       ? {

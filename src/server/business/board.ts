@@ -69,7 +69,8 @@ export type { StaffShift };
  *  - `booked` cuenta las citas que ocupan la franja, estén asignadas o no; los cupos libres solo descuentan
  *    las que gastan un cupo: las sin asignar y las de quien suma capacidad. Es la regla del motor
  *    (`evaluateSlot`, `src/lib/agenda/capacity.ts`).
- *  - Un bloqueo apaga la franja entera.
+ *  - Un bloqueo del negocio apaga la franja entera. Mejora 3: un bloqueo CON profesional (su Google
+ *    Calendar) solo lo saca a él (`busyStaffIds`): no suma cupo y su celda se ve ocupada.
  *  - Sin ningún profesional dado de alta hay una silla (como el motor).
  */
 export function buildBoardSlots(input: {
@@ -77,7 +78,7 @@ export function buildBoardSlots(input: {
   members: { id: string; acceptsBookings?: boolean }[];
   shifts: Map<string, StaffShift>;
   sessions: (Pick<BoardBooking, "startUtc" | "endUtc"> & { staffId?: string | null })[];
-  blocks: Pick<BoardBooking, "startUtc" | "endUtc">[];
+  blocks: (Pick<BoardBooking, "startUtc" | "endUtc"> & { staffId?: string | null })[];
   date: string;
   timezone: string;
   now: Date;
@@ -91,7 +92,17 @@ export function buildBoardSlots(input: {
     // Sin fila ese día: sigue el horario del negocio; día libre: no trabaja.
     const workingMembers = members.filter((m) => shiftCovers(shifts.get(m.id), startMin, endMin));
     const working = workingMembers.map((m) => m.id);
-    const seats = new Set(workingMembers.filter((m) => m.acceptsBookings !== false).map((m) => m.id));
+    // Mejora 3: quién está ocupado en su Google Calendar en esta franja.
+    const busyStaffIds = [
+      ...new Set(
+        input.blocks
+          .filter((b) => b.staffId && overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc))
+          .map((b) => b.staffId!)
+      ),
+    ];
+    const seats = new Set(
+      workingMembers.filter((m) => m.acceptsBookings !== false && !busyStaffIds.includes(m.id)).map((m) => m.id)
+    );
 
     const crossing = input.sessions.filter((b) =>
       overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc)
@@ -100,15 +111,20 @@ export function buildBoardSlots(input: {
     const consumed =
       members.length === 0 ? booked : crossing.filter((b) => !b.staffId || seats.has(b.staffId)).length;
     const blocked = input.blocks.some((b) =>
-      overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc)
+      !b.staffId && overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc)
     );
-    const capacity = members.length === 0 ? 1 : seats.size;
+    // Los cupos de la franja son los de quienes pueden atender (sin contar a quien su calendario ocupa).
+    const capacity =
+      members.length === 0
+        ? 1
+        : workingMembers.filter((m) => m.acceptsBookings !== false && !busyStaffIds.includes(m.id)).length;
 
     return {
       startUtc: c.startUtc,
       endUtc: c.endUtc,
       time: timeInTz(c.startUtc, tz),
       workingStaffIds: working,
+      busyStaffIds,
       capacity,
       booked,
       free: blocked ? 0 : Math.max(0, capacity - consumed),
@@ -218,6 +234,7 @@ export async function getBoard(
         notes: r.booking.notes,
         itemName: r.comboName ?? r.serviceName ?? null,
         sold: r.saleId !== null,
+        googleConflict: r.booking.status === "agendada" && r.booking.googleConflictStart !== null,
       };
     });
 
@@ -444,6 +461,11 @@ export async function createBoardBooking(
     staffIds: (input.serviceId ? staffBy.services : staffBy.combos).get(item.id) ?? [],
   };
   const worksAll = (chairId: string) => span.every((s) => s.workingStaffIds.includes(chairId));
+  // Mejora 3: ocupado en su Google Calendar en algún momento del servicio.
+  const googleBusyIn = (chairId: string) =>
+    board.bookings.some(
+      (b) => b.kind === "block" && b.staffId === chairId && overlaps(startIso, endIso, b.startUtc, b.endUtc)
+    );
 
   if (staffId) {
     const chair = chosen;
@@ -454,13 +476,21 @@ export async function createBoardBooking(
       throw new SalonError("staff_off_shift", 409, `${chair.name} no atiende durante todo ese servicio.`);
     }
     if (busyIn(chair.id)) throw new SalonError("staff_busy", 409, `${chair.name} ya tiene una cita en ese tramo.`);
+    if (googleBusyIn(chair.id)) {
+      throw new SalonError("staff_busy", 409, `${chair.name} está ocupado en su Google Calendar en ese tramo.`);
+    }
     if (!staffCanGive(providerItem, { id: chair.id, active: true })) {
       throw new SalonError("staff_not_assigned", 409, `${chair.name} no da ${item.name}.`);
     }
   } else if (board.chairs.length > 0) {
     // «Cualquiera disponible»: el motor elige; aquí solo se explica con claridad si no hay nadie.
     const someone = board.chairs.some(
-      (c) => c.acceptsBookings && worksAll(c.id) && !busyIn(c.id) && staffCanGive(providerItem, { id: c.id, active: true })
+      (c) =>
+        c.acceptsBookings &&
+        worksAll(c.id) &&
+        !busyIn(c.id) &&
+        !googleBusyIn(c.id) &&
+        staffCanGive(providerItem, { id: c.id, active: true })
     );
     if (!someone) {
       throw new SalonError(

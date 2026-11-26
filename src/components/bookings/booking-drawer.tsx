@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { CalendarClock, MessageSquareText, Sparkles, Video, X } from "lucide-react";
-import { addDaysISO } from "@/lib/time/slots";
+import { addDaysISO, timeInTz } from "@/lib/time/slots";
 import {
   bookingSegments,
   dayHeading,
@@ -20,6 +20,7 @@ import {
   bookingTone,
   calendarSyncLine,
   canRetrySync,
+  googleConflictOf,
   isConfirmed,
   statusLabel,
   type Booking,
@@ -275,6 +276,23 @@ export function BookingDrawer({
               }}
             />
           )}
+
+          {/* Mejora 1: un evento de Google cae encima de esta cita. Solo se avisa: la cita sigue en pie. */}
+          {(() => {
+            const conflict = googleConflictOf(b);
+            if (!conflict) return null;
+            return (
+              <section className="border-b p-4">
+                <div role="status" className="space-y-1 rounded-sm border border-warning-soft bg-warning-tint p-3 text-sm text-warning-text">
+                  <p className="font-medium">Choca con tu Google Calendar</p>
+                  <p>
+                    Tienes un horario ocupado en Google de {timeInTz(conflict.startUtc, timezone)} a{" "}
+                    {timeInTz(conflict.endUtc, timezone)}. La cita sigue en pie: reprográmala o libera ese horario en Google.
+                  </p>
+                </div>
+              </section>
+            );
+          })()}
 
           {fromGoogle && (
             <section className="border-b p-4">

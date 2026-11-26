@@ -4,6 +4,7 @@ import { newId } from "@/lib/db/ids";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getEnv } from "@/lib/env";
 import { scoped } from "@/lib/db/tenant";
+import { effectiveBusyCalendars, type CalendarRef } from "@/lib/google-calendar";
 
 /**
  * 015 — Las credenciales de Google Calendar de un negocio (una cuenta y un calendario por organización).
@@ -15,14 +16,25 @@ import { scoped } from "@/lib/db/tenant";
  *  - `manual` (Avanzado): el negocio pega Client ID, Client Secret y refresh token de su propia app.
  *
  * Secretos con AES-256-GCM, como el resto. Hacia fuera nunca sale un secreto.
+ *
+ * Mejora 2 — Varios calendarios: `calendar_id` es donde se PUBLICA (con su nombre) y `busy_calendars` lo que
+ * se LEE como ocupado (null = el mismo de publicar). Reconectar con la MISMA cuenta conserva lo elegido;
+ * con otra cuenta (o pegando credenciales) vuelve al principal, porque los ids no sirven entre cuentas.
  */
 
 export type GoogleCreds = {
   clientId: string;
   clientSecret: string;
   refreshToken: string;
+  /** Donde se publican las citas (y se crea el Meet). */
   calendarId: string;
   status: "connected" | "error";
+  /** Mejora 2: nombre del calendario de publicación (null = el principal / sin elegir). */
+  calendarSummary?: string | null;
+  /** Mejora 2: lo que se lee como ocupado, ya resuelto (nunca vacío: por defecto, el de publicar). */
+  busyCalendars?: CalendarRef[];
+  source?: "oauth" | "manual";
+  grantedScopes?: string | null;
 };
 
 export type GoogleConnectionInfo = {
@@ -38,6 +50,10 @@ export type GoogleConnectionInfo = {
   secretLast4: string | null;
   /** `oauth` sin la app de la instancia configurada: no hay con qué renovar el token. */
   appMissing: boolean;
+  /** Mejora 2. */
+  calendarSummary: string | null;
+  busyCalendars: CalendarRef[] | null;
+  grantedScopes: string | null;
 };
 
 /** La app OAuth de la instancia, si quien opera el servidor la configuró. */
@@ -76,14 +92,30 @@ export async function getGoogleCredentials(organizationId: string): Promise<Goog
     iv: row.refreshTokenIv,
     tag: row.refreshTokenTag,
   });
+  const extra = {
+    calendarId: row.calendarId,
+    status: row.status,
+    calendarSummary: row.calendarSummary,
+    busyCalendars: effectiveBusyCalendars(
+      { id: row.calendarId, summary: row.calendarSummary ?? defaultSummary(row.calendarId) },
+      row.busyCalendars
+    ),
+    source: row.source,
+    grantedScopes: row.grantedScopes,
+  };
   if (row.source === "oauth") {
     const app = instanceOAuthApp();
     if (!app) return null;
-    return { clientId: app.clientId, clientSecret: app.clientSecret, refreshToken, calendarId: row.calendarId, status: row.status };
+    return { clientId: app.clientId, clientSecret: app.clientSecret, refreshToken, ...extra };
   }
   const clientSecret = storedSecret(row);
   if (!clientSecret) return null;
-  return { clientId: row.clientId, clientSecret, refreshToken, calendarId: row.calendarId, status: row.status };
+  return { clientId: row.clientId, clientSecret, refreshToken, ...extra };
+}
+
+/** El nombre a mostrar de un calendario sin nombre guardado. */
+function defaultSummary(calendarId: string): string {
+  return calendarId === "primary" ? "Calendario principal" : calendarId;
 }
 
 /** Lo que Ajustes puede mostrar (sin secretos). */
@@ -102,7 +134,34 @@ export async function getGoogleConnectionInfo(organizationId: string): Promise<G
     lastOkAt: row.lastOkAt,
     secretLast4: secret ? secretLast4(secret) : null,
     appMissing: row.source === "oauth" && !instanceOAuthApp(),
+    calendarSummary: row.calendarSummary,
+    busyCalendars: row.busyCalendars ?? null,
+    grantedScopes: row.grantedScopes,
   };
+}
+
+/**
+ * Mejora 2 — Guarda dónde se publica y qué se lee (ya validado contra la lista de la cuenta). Devuelve el
+ * calendario de publicación ANTERIOR, para mover las citas que vienen si cambió.
+ */
+export async function saveGoogleCalendarSelection(
+  organizationId: string,
+  input: { publish: CalendarRef; busy: CalendarRef[] }
+): Promise<{ previousCalendarId: string } | null> {
+  const row = await readRow(organizationId);
+  if (!row) return null;
+  // Leer solo el de publicar es lo de siempre: se guarda como null para que siga al de publicar.
+  const onlyPublish = input.busy.length === 1 && input.busy[0]!.id === input.publish.id;
+  await getDb()
+    .update(schema.googleCredentials)
+    .set({
+      calendarId: input.publish.id,
+      calendarSummary: input.publish.id === "primary" ? null : input.publish.summary,
+      busyCalendars: onlyPublish ? null : input.busy,
+      updatedAt: new Date(),
+    })
+    .where(scoped(schema.googleCredentials.organizationId, organizationId));
+  return { previousCalendarId: row.calendarId };
 }
 
 /** Modo Avanzado: el negocio pega las credenciales de su propia app. */
@@ -123,6 +182,7 @@ export async function saveGoogleCredentials(input: {
     refreshToken: input.refreshToken,
     calendarId: input.calendarId,
     accountEmail: null,
+    grantedScopes: null,
   });
 }
 
@@ -133,6 +193,8 @@ export async function saveGoogleOAuthConnection(input: {
   refreshToken: string;
   accountEmail: string | null;
   calendarId?: string | null;
+  /** Mejora 2: los permisos que concedió Google (separados por espacio). */
+  grantedScopes?: string | null;
 }): Promise<void> {
   await upsertRow(input.organizationId, {
     source: "oauth",
@@ -143,6 +205,7 @@ export async function saveGoogleOAuthConnection(input: {
     refreshToken: input.refreshToken,
     calendarId: input.calendarId,
     accountEmail: input.accountEmail,
+    grantedScopes: input.grantedScopes ?? null,
   });
 }
 
@@ -157,10 +220,22 @@ async function upsertRow(
     refreshToken: string;
     calendarId?: string | null;
     accountEmail: string | null;
+    grantedScopes: string | null;
   }
 ): Promise<void> {
   const refresh = encryptSecret(input.refreshToken);
   const now = new Date();
+  // Mejora 2: la MISMA cuenta (OAuth, mismo correo) conserva los calendarios elegidos; si no, se reinician.
+  const existing = await readRow(organizationId);
+  const sameAccount =
+    input.source === "oauth" &&
+    existing?.source === "oauth" &&
+    !!existing.accountEmail &&
+    !!input.accountEmail &&
+    existing.accountEmail.toLowerCase() === input.accountEmail.toLowerCase();
+  const calendars = sameAccount
+    ? { calendarId: existing.calendarId, calendarSummary: existing.calendarSummary, busyCalendars: existing.busyCalendars }
+    : { calendarId: input.calendarId?.trim() || "primary", calendarSummary: null, busyCalendars: null };
   const values = {
     source: input.source,
     clientId: input.clientId,
@@ -170,7 +245,8 @@ async function upsertRow(
     refreshTokenCipher: refresh.cipher,
     refreshTokenIv: refresh.iv,
     refreshTokenTag: refresh.tag,
-    calendarId: input.calendarId?.trim() || "primary",
+    ...calendars,
+    grantedScopes: input.grantedScopes,
     status: "connected" as const,
     accountEmail: input.accountEmail,
     connectedAt: now,

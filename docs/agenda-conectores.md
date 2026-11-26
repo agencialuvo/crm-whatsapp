@@ -93,12 +93,62 @@ eventos «Ocupado» bloqueen esos horarios: ni la IA ni el equipo los ofrecen, y
   invitaciones que rechazaste, la «Ubicación de trabajo» y los eventos que publica Vocero (no hay bucle).
 - **Tus citas y bloqueos no se tocan**. Un bloqueo de Google no se quita desde Vocero: muévelo o bórralo en
   Google y se actualiza solo.
+- **Choques**: si agregas en Google un evento encima de una cita que ya estaba agendada, la cita NO se
+  cancela: queda marcada «Choca con tu Google Calendar» (lista, calendario, tablero y panel de la cita, con
+  el horario de Google) y recibes un aviso (uno por choque; varios a la vez llegan juntos). Reprográmala o
+  libera el horario en Google y la marca se va sola.
 - **Sin permiso extra**: usa el mismo permiso de «Conectar con Google». Si Google dice que falta permiso,
   Ajustes muestra «Falta permiso para leer tu calendario» con «Reconectar con Google».
 - **Si Google falla**: la agenda sigue con lo último que se leyó, Ajustes lo avisa con la hora de la última
   lectura y se reintenta sola. Apagar la opción o desconectar quita lo traído de Google.
-- **Límites**: solo el calendario conectado (el principal) y lo ocupa para TODO el negocio (no por
-  profesional).
+- **Límites**: lo ocupado bloquea a TODO el negocio (no por profesional).
+
+#### El calendario de cada profesional (lo ocupado bloquea solo a esa persona)
+
+Si quien opera el servidor encendió `GOOGLE_STAFF_CALENDARS` (con el permiso `calendar.events.readonly`
+aprobado y la URI `${APP_BASE_URL}/api/calendar-invite/oauth/callback` registrada en Google Cloud), **Equipo**
+muestra la columna «Google Calendar»:
+
+- En cada profesional, **«Generar enlace (24 h)»**: cópialo o mándalo por WhatsApp. Lo abre en su teléfono
+  (no necesita usuario en Vocero), ve qué negocio lo pide y que solo se leen sus horarios ocupados, y pulsa
+  «Conectar con Google». El enlace sirve una vez; generar otro anula el anterior.
+- Desde entonces, lo ocupado en SU calendario lo saca **solo a él** de la agenda: la IA y el bot ofrecen y
+  asignan a otro del equipo, pedirlo a él en ese tramo se rechaza, y en el tablero su silla dice «Ocupado en
+  Google». Si un evento suyo cae sobre una cita que ya tenía, la cita se marca (choque) y te llega un aviso.
+- No se puede conectar la cuenta de Google del negocio como calendario de un profesional.
+- **Desconectar** (o desactivar / borrar al profesional) revoca el permiso y quita sus bloqueos. Si el
+  profesional quita el acceso en Google, recibes un aviso y la agenda sigue con lo último leído hasta que le
+  envíes un enlace nuevo.
+
+#### Avisos al instante (los cambios llegan en segundos)
+
+Si quien opera el servidor encendió `GOOGLE_CALENDAR_WATCH` y Vocero está en **https con un dominio público**
+(`APP_BASE_URL`), Google avisa a Vocero cada vez que cambia un calendario que se lee como ocupado (el del
+negocio y el de cada profesional conectado) y la agenda se pone al día en segundos, sin pulsar «Leer ahora».
+
+- No hay que registrar nada en Google Cloud ni aceptar permisos nuevos. Los avisos llegan a
+  `${APP_BASE_URL}/api/webhooks/google-calendar`.
+- Ajustes → Agenda y el diálogo de cada profesional en Equipo dicen cómo llegan los cambios: «Avisos al
+  instante activos», o «cada 5 min» con el motivo (sin https, o Google no aceptó los avisos y se reintenta).
+- La lectura cada 5 minutos sigue siempre de respaldo: si un aviso se pierde, nada se queda sin leer.
+- `pnpm doctor` avisa si la bandera está encendida pero `APP_BASE_URL` no sirve para recibir avisos.
+
+#### Elegir calendarios (publicar en uno, leer varios)
+
+Si quien opera el servidor encendió `GOOGLE_CALENDAR_LIST` (después de que Google aprobara el permiso
+«Ver la lista de tus calendarios»), la tarjeta de Google Calendar muestra:
+
+- **«Publicar las citas en»**: los calendarios donde tu cuenta puede escribir (el principal, uno del
+  equipo…). Al cambiarlo, las citas que vienen se **mueven** al nuevo con su enlace de Meet, sin duplicarse;
+  las nuevas nacen ahí.
+- **«Tener en cuenta lo ocupado en»**: hasta 10 calendarios que tu cuenta pueda ver (uno compartido como
+  «solo libre/ocupado» no sirve). Lo ocupado de todos se suma. Si alguno deja de estar compartido, Ajustes
+  lo dice con su nombre y la agenda sigue con lo último leído.
+
+**Si conectaste antes**, verás «Nuevo: elige tus calendarios» con **«Reconectar con Google»**: acepta el
+permiso de la lista en la pantalla de Google. Reconectar con la misma cuenta conserva lo que elijas; con otra
+cuenta, todo vuelve al calendario principal. En **Avanzado**, genera el refresh token con el permiso
+`calendar.calendarlist.readonly` (o escribe el ID del calendario donde publicar).
 
 **Qué necesitas**: un proyecto en Google Cloud **del propio negocio** con la
 API de Calendar activada, y de ahí *Client ID*, *Client Secret* y un *refresh

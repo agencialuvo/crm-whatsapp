@@ -4,6 +4,7 @@ import type { ZodIssue } from "zod";
 import { getDb, PG_CONNECTION_OPTIONS, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { envSchema, safeParseEnv, type Env } from "@/lib/env";
+import { watchUrlOk } from "@/lib/google-watch";
 import { leerConfigDespacho } from "@/server/brains/config";
 import { GENERATED_SECRETS, PLACEHOLDER_PREFIX } from "@/server/doctor/init-env";
 import { probeMediaDir } from "@/server/media-dir";
@@ -640,5 +641,33 @@ export async function checkMercadoPago(source: Record<string, string | undefined
   } catch (err) {
     out.push({ status: "fail", label: "Mercado Pago", detail: `no se pudo validar el token: ${err instanceof Error ? err.message : "error"}`, fix: "revisa MP_ACCESS_TOKEN (¿de prueba o de producción?) y MP_API_BASE" });
   }
+  return out;
+}
+
+/**
+ * Mejora 4 — Avisos al instante de Google Calendar (`GOOGLE_CALENDAR_WATCH`). Google solo avisa a https con un
+ * dominio público: si `APP_BASE_URL` no lo es, no se rompe nada (la lectura sigue cada 5 min), pero se avisa.
+ */
+export function checkGoogleWatch(source: Record<string, string | undefined>): CheckResult[] {
+  const flag = (v: string | undefined) => ["on", "1", "true", "si", "sí", "yes"].includes((v ?? "").trim().toLowerCase());
+  if (!flag(source.GOOGLE_CALENDAR_WATCH)) {
+    return [{ status: "skip", label: "GOOGLE_CALENDAR_WATCH", detail: "apagado: lo ocupado en Google Calendar se lee cada 5 min" }];
+  }
+  const out: CheckResult[] = [];
+  if (!flag(source.AGENDA)) {
+    out.push({ status: "warn", label: "GOOGLE_CALENDAR_WATCH", detail: "encendido pero AGENDA está apagada: no hace nada", fix: "AGENDA=on, o quita GOOGLE_CALENDAR_WATCH" });
+    return out;
+  }
+  const address = watchUrlOk(source.APP_BASE_URL);
+  if (!address) {
+    out.push({
+      status: "warn",
+      label: "GOOGLE_CALENDAR_WATCH",
+      detail: `APP_BASE_URL (${source.APP_BASE_URL ?? "sin definir"}) no es https con un dominio público: Google no puede avisar y se seguirá leyendo cada 5 min`,
+      fix: "pon APP_BASE_URL=https://tu-dominio (con certificado válido: Caddy o Coolify lo dan)",
+    });
+    return out;
+  }
+  out.push({ status: "ok", label: "GOOGLE_CALENDAR_WATCH", detail: `Google avisará a ${address}` });
   return out;
 }

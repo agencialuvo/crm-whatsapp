@@ -12,6 +12,15 @@ import type { StaffDto } from "@/lib/salon/types";
 import { existingServiceIds } from "@/server/business/catalog";
 import { assertImageOwned } from "@/server/business/refs";
 import { FOREIGN_KEY_VIOLATION, isPgError, SalonError } from "@/server/business/http";
+import { lockAgenda } from "@/server/agenda/service";
+import { reconcileConflicts } from "@/server/agenda/calendar-busy/sync";
+import {
+  deleteStaffBusyBlocks,
+  disconnectStaffCalendar,
+  getStaffCreds,
+} from "@/server/agenda/staff-calendar/connection";
+import { revokeToken } from "@/server/agenda/google-oauth";
+import { listChannels, stopChannelRows } from "@/server/agenda/calendar-watch/channels";
 
 /**
  * Módulo SALON — equipo: profesionales, su horario semanal (días libres
@@ -142,16 +151,29 @@ export async function updateStaff(
         : await tx.select({ id: schema.staff.id }).from(schema.staff).where(where).limit(1);
     if (rows.length === 0) throw new SalonError("not_found", 404, "El profesional no existe");
   });
+  // Mejora 3: desactivado deja de recibir citas; su Google Calendar se desconecta y sus bloqueos se van.
+  if (patch.active === false) await disconnectStaffCalendar(organizationId, id, { revoke: true });
   return getStaffDto(organizationId, id);
 }
 
 export async function deleteStaff(organizationId: string, id: string): Promise<void> {
+  // Mejora 3: el permiso de su Google Calendar (si lo conectó) se revoca DESPUÉS de borrarlo bien.
+  const calendar = await getStaffCreds(organizationId, id).catch(() => null);
+  // Mejora 4: sus canales de avisos se van en cascada con él; se guardan para detenerlos en Google después.
+  const channels = await listChannels(organizationId, id).catch(() => []);
   try {
-    const rows = await getDb()
-      .delete(schema.staff)
-      .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, id)))
-      .returning({ id: schema.staff.id });
-    if (rows.length === 0) throw new SalonError("not_found", 404, "El profesional no existe");
+    await getDb().transaction(async (tx) => {
+      await lockAgenda(tx, organizationId);
+      // ANTES de borrarlo: `booking.staff_id` pasa a null al borrar al profesional y sus bloqueos de Google
+      // quedarían bloqueando a todo el negocio. (Su conexión y sus enlaces se van en cascada.)
+      await deleteStaffBusyBlocks(tx, organizationId, id);
+      const rows = await tx
+        .delete(schema.staff)
+        .where(scoped(schema.staff.organizationId, organizationId, eq(schema.staff.id, id)))
+        .returning({ id: schema.staff.id });
+      if (rows.length === 0) throw new SalonError("not_found", 404, "El profesional no existe");
+      await reconcileConflicts(tx, organizationId, new Date());
+    });
   } catch (err) {
     if (isPgError(err, FOREIGN_KEY_VIOLATION)) {
       throw new SalonError(
@@ -162,6 +184,8 @@ export async function deleteStaff(organizationId: string, id: string): Promise<v
     }
     throw err;
   }
+  if (channels.length > 0) await stopChannelRows(calendar, channels);
+  if (calendar) await revokeToken(calendar.refreshToken);
 }
 
 async function assertStaffExists(organizationId: string, id: string): Promise<void> {

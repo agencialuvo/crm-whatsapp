@@ -193,13 +193,99 @@ function meetLinkOf(event: GoogleEvent | null): string | null {
   return video?.uri ?? event.hangoutLink ?? null;
 }
 
-export function eventsPath(creds: GoogleCreds, suffix = ""): string {
-  return `/calendars/${encodeURIComponent(creds.calendarId)}/events${suffix}`;
+/**
+ * Los eventos de un calendario: por defecto, el de PUBLICAR (`creds.calendarId`); Mejora 2: `calendarId`
+ * para leer otro o tocar un evento que todavía vive en el calendario anterior.
+ */
+export function eventsPath(creds: GoogleCreds, suffix = "", calendarId = creds.calendarId): string {
+  return `/calendars/${encodeURIComponent(calendarId)}/events${suffix}`;
 }
 
 /** El camino de UN evento. */
-export function eventPath(creds: GoogleCreds, eventId: string, query = ""): string {
-  return eventsPath(creds, `/${encodeURIComponent(eventId)}${query}`);
+export function eventPath(creds: GoogleCreds, eventId: string, query = "", calendarId = creds.calendarId): string {
+  return eventsPath(creds, `/${encodeURIComponent(eventId)}${query}`, calendarId);
+}
+
+/** Una entrada de `calendarList.list` (lo que se usa). */
+export type GoogleCalendarListItem = {
+  id?: string;
+  summary?: string;
+  summaryOverride?: string;
+  primary?: boolean;
+  accessRole?: string;
+};
+
+/**
+ * Mejora 2 — Los calendarios de la cuenta (`calendarList.list`, permiso `calendar.calendarlist.readonly`).
+ * Sin ese permiso Google responde 403 y esto lanza `ConnectorError` con `status: 403`.
+ */
+export async function listCalendars(creds: GoogleCreds): Promise<GoogleCalendarListItem[]> {
+  const out: GoogleCalendarListItem[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const params = new URLSearchParams({ maxResults: "250", showHidden: "false", ...(pageToken ? { pageToken } : {}) });
+    const res = await googleRequest(creds, `/users/me/calendarList?${params.toString()}`);
+    const body = (res.body ?? {}) as { items?: GoogleCalendarListItem[]; nextPageToken?: string };
+    out.push(...(body.items ?? []));
+    if (!body.nextPageToken) break;
+    pageToken = body.nextPageToken;
+  }
+  return out;
+}
+
+/**
+ * Mejora 2 — Mueve un evento de un calendario a otro (`events.move`): conserva su id y su Meet, así que no se
+ * duplica nada. Devuelve `false` si el evento ya no está en el calendario de origen (404/410).
+ */
+export async function moveEvent(
+  creds: GoogleCreds,
+  eventId: string,
+  fromCalendarId: string,
+  toCalendarId: string
+): Promise<boolean> {
+  const query = `?destination=${encodeURIComponent(toCalendarId)}&sendUpdates=none`;
+  const res = await googleRequest(creds, `${eventPath(creds, eventId, "", fromCalendarId)}/move${query}`, {
+    method: "POST",
+    accept: [404, 410],
+  });
+  return res.status !== 404 && res.status !== 410;
+}
+
+/**
+ * Mejora 4 — Pide a Google que avise de los cambios de un calendario (`events.watch`). Devuelve el
+ * `resourceId` (hace falta para detenerlo) y cuándo vence. Lanza `ConnectorError` si Google lo rechaza.
+ */
+export async function watchEvents(
+  creds: GoogleCreds,
+  calendarId: string,
+  channel: { id: string; token: string; address: string; ttlSeconds: number }
+): Promise<{ resourceId: string; expiresAt: Date }> {
+  const res = await googleRequest(creds, eventsPath(creds, "/watch", calendarId), {
+    method: "POST",
+    body: JSON.stringify({
+      id: channel.id,
+      type: "web_hook",
+      address: channel.address,
+      token: channel.token,
+      params: { ttl: String(channel.ttlSeconds) },
+    }),
+  });
+  const body = (res.body ?? {}) as { resourceId?: string; expiration?: string | number };
+  if (!body.resourceId) throw new ConnectorError("google", "Google no devolvió el canal de avisos.");
+  const exp = Number(body.expiration);
+  return {
+    resourceId: body.resourceId,
+    expiresAt: new Date(Number.isFinite(exp) && exp > 0 ? exp : Date.now() + channel.ttlSeconds * 1000),
+  };
+}
+
+/** Mejora 4 — Detiene un canal de avisos (`channels.stop`). Un canal que Google ya no conoce (404) cuenta como detenido. */
+export async function stopChannel(creds: GoogleCreds, channelId: string, resourceId: string): Promise<void> {
+  await googleRequest(creds, "/channels/stop", {
+    method: "POST",
+    body: JSON.stringify({ id: channelId, resourceId }),
+    accept: [404, 410],
+  });
 }
 
 /** ¿La conferencia ya existe o se está creando? (para no pedir otra encima). */

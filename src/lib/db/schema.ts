@@ -2073,6 +2073,12 @@ export const booking = pgTable(
      * termina un intento solo escribe si sigue siendo la misma (un cambio a mitad vuelve a pedir).
      */
     calendarEventId: text("calendar_event_id"),
+    /**
+     * Mejora 2 — En QUÉ calendario de Google vive el evento de la cita (el de la publicación o el de Meet).
+     * Al cambiar el calendario de publicación, la sincronización lo mueve (`events.move`) del que dice aquí
+     * al nuevo. null = la cita no tiene evento.
+     */
+    calendarEventCalendarId: text("calendar_event_calendar_id"),
     calendarSyncStatus: text("calendar_sync_status", { enum: ["pending", "synced", "error"] }),
     calendarSyncAttempts: integer("calendar_sync_attempts").notNull().default(0),
     calendarSyncNextAt: timestamp("calendar_sync_next_at"),
@@ -2084,6 +2090,13 @@ export const booking = pgTable(
      * `src/server/agenda/calendar-busy/`; desde Vocero no se mueven ni se quitan (se cambian en Google).
      */
     busySource: text("busy_source", { enum: ["google"] }),
+    /**
+     * Mejora 1 — La cita choca con lo ocupado en el Google Calendar conectado: el tramo de Google que se le
+     * pisa (null = sin choque). Lo escribe SOLO la lectura de lo ocupado (`calendar-busy/sync.ts`); la cita
+     * nunca se cancela ni se mueve por esto. Reprogramar la limpia (la hora nueva ya se validó libre).
+     */
+    googleConflictStart: timestamp("google_conflict_start"),
+    googleConflictEnd: timestamp("google_conflict_end"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -2197,7 +2210,20 @@ export const googleCredentials = pgTable(
     refreshTokenCipher: text("refresh_token_cipher").notNull(),
     refreshTokenIv: text("refresh_token_iv").notNull(),
     refreshTokenTag: text("refresh_token_tag").notNull(),
+    /** Mejora 2 — El calendario donde se PUBLICAN las citas (y se crea el Meet). `primary` = el principal. */
     calendarId: text("calendar_id").notNull().default("primary"),
+    /** Su nombre, para mostrarlo sin preguntarle a Google. null = el principal / sin elegir. */
+    calendarSummary: text("calendar_summary"),
+    /**
+     * Mejora 2 — Los calendarios que se LEEN como ocupado (hasta 10), `[{ id, summary }]`. null = el mismo
+     * calendario donde se publica (lo de siempre).
+     */
+    busyCalendars: jsonb("busy_calendars").$type<{ id: string; summary: string }[]>(),
+    /**
+     * Mejora 2 — Los permisos que Google concedió en la última conexión OAuth (separados por espacio). null =
+     * se desconoce (conexión anterior a la Mejora 2 o modo Avanzado). Decide si se puede ofrecer el selector.
+     */
+    grantedScopes: text("granted_scopes"),
     status: text("status", { enum: ["connected", "error"] })
       .notNull()
       .default("connected"),
@@ -2223,6 +2249,107 @@ export const googleCredentials = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [uniqueIndex("google_credentials_org_uq").on(t.organizationId)]
+);
+
+/**
+ * Mejora 3 — El Google Calendar de UN profesional (solo LECTURA: `calendar.events.readonly`), conectado con
+ * el enlace de 24 h (`staff_calendar_invite`) sin necesidad de usuario en Vocero. Lo ocupado en su calendario
+ * bloquea SOLO a ese profesional (`booking.busy_source = 'google'` con `staff_id`). Siempre con la app OAuth
+ * de la instancia: aquí solo va el refresh token cifrado. Una fila por profesional; se va con él.
+ */
+export const staffGoogleConnection = pgTable(
+  "staff_google_connection",
+  {
+    id: text("id").primaryKey(), // prefix: 'sgc'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    staffId: text("staff_id")
+      .notNull()
+      .references(() => staff.id, { onDelete: "cascade" }),
+    refreshTokenCipher: text("refresh_token_cipher").notNull(),
+    refreshTokenIv: text("refresh_token_iv").notNull(),
+    refreshTokenTag: text("refresh_token_tag").notNull(),
+    accountEmail: text("account_email"),
+    grantedScopes: text("granted_scopes"),
+    status: text("status", { enum: ["connected", "error"] }).notNull().default("connected"),
+    connectedAt: timestamp("connected_at"),
+    lastError: text("last_error"),
+    lastOkAt: timestamp("last_ok_at"),
+    /** La lectura de lo ocupado, como en `google_credentials` (Paso 4). */
+    busyStatus: text("busy_status", { enum: ["ok", "error", "needs_reconnect"] }),
+    busySyncedAt: timestamp("busy_synced_at"),
+    busyError: text("busy_error"),
+    busyAttempts: integer("busy_attempts").notNull().default(0),
+    busyNextAt: timestamp("busy_next_at"),
+    busyBlocks: integer("busy_blocks").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("staff_google_connection_staff_uq").on(t.organizationId, t.staffId)]
+);
+
+/**
+ * Mejora 3 — El enlace de 24 h para que un profesional conecte su Google Calendar. Se guarda SOLO el hash
+ * (SHA-256) del enlace: quien lee la base no puede usarlo. Uso único; generar otro revoca el anterior.
+ */
+export const staffCalendarInvite = pgTable(
+  "staff_calendar_invite",
+  {
+    id: text("id").primaryKey(), // prefix: 'sci'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    staffId: text("staff_id")
+      .notNull()
+      .references(() => staff.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    usedAt: timestamp("used_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("staff_calendar_invite_token_uq").on(t.tokenHash),
+    index("staff_calendar_invite_staff_idx").on(t.organizationId, t.staffId),
+  ]
+);
+
+/**
+ * Mejora 4 — Un canal de avisos (`events.watch`) de Google sobre UN calendario que Vocero lee: el del negocio
+ * (`staff_id` null; uno por calendario de `busy_calendars`) o el de un profesional (Mejora 3). El aviso solo
+ * DISPARA la lectura de siempre (Paso 4 / Mejora 3); el barrido de 5 min sigue de respaldo.
+ *
+ * `status`: `pending` (pedido a Google, sin respuesta aún), `active` (Google lo confirmó: `resource_id` y
+ * `expires_at`) o `failed` (Google lo rechazó: se reintenta en `next_attempt_at`). El token del canal NO se
+ * guarda: es un HMAC del `channel_id` (`src/lib/google-watch.ts`).
+ */
+export const googleWatchChannel = pgTable(
+  "google_watch_channel",
+  {
+    id: text("id").primaryKey(), // prefix: 'gwc'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    staffId: text("staff_id").references(() => staff.id, { onDelete: "cascade" }),
+    calendarId: text("calendar_id").notNull(),
+    channelId: text("channel_id").notNull(),
+    resourceId: text("resource_id"),
+    status: text("status", { enum: ["pending", "active", "failed"] }).notNull().default("pending"),
+    expiresAt: timestamp("expires_at"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at"),
+    lastError: text("last_error"),
+    lastNotifiedAt: timestamp("last_notified_at"),
+    lastMessageNumber: text("last_message_number"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("google_watch_channel_channel_uq").on(t.channelId),
+    index("google_watch_channel_source_idx").on(t.organizationId, t.staffId),
+  ]
 );
 
 export const agentTestCase = pgTable(

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { BadgeCheck, Bot, CalendarOff, ChevronLeft, ChevronRight, Plus, RefreshCw } from "lucide-react";
+import { BadgeCheck, Bot, CalendarOff, CalendarX2, ChevronLeft, ChevronRight, Plus, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -132,7 +132,8 @@ export function BoardClient({
   const unassigned = useMemo(() => sessions.filter((b) => !b.staffId), [sessions]);
   const showUnassigned = !!board && (unassigned.length > 0 || board.chairs.length === 0);
 
-  const blocks = useMemo(() => board?.bookings.filter((b) => b.kind === "block") ?? [], [board]);
+  // Los bloqueos del negocio (sin profesional); los de un profesional (su Google Calendar) van en su silla.
+  const blocks = useMemo(() => board?.bookings.filter((b) => b.kind === "block" && !b.staffId) ?? [], [board]);
 
   // Qué pinta cada columna en cada franja (las citas largas abarcan varias).
   const plans = useMemo(() => {
@@ -501,6 +502,8 @@ function SlotRow({
         if (plan?.covered.has(rowIndex)) return null;
         const entries = plan?.starts.get(rowIndex) ?? [];
         const offShift = !slot.workingStaffIds.includes(chair.id);
+        // Mejora 3: ocupado en su Google Calendar (solo él; las demás sillas siguen libres).
+        const googleBusy = slot.busyStaffIds?.includes(chair.id) ?? false;
         const span = rowSpanOf(entries);
         return (
           <td
@@ -509,7 +512,7 @@ function SlotRow({
             className={cn(
               "border-l px-2 py-1.5 align-top",
               span > 1 && "h-px",
-              entries.length === 0 && (slot.blocked || offShift) && "booking-hatch"
+              entries.length === 0 && (slot.blocked || offShift || googleBusy) && "booking-hatch"
             )}
           >
             {entries.length > 0 ? (
@@ -527,6 +530,10 @@ function SlotRow({
               </div>
             ) : slot.blocked ? (
               <span className="text-xs text-text-3">Bloqueado</span>
+            ) : googleBusy && !offShift ? (
+              <span className="text-xs text-text-3" title={`${chair.name} está ocupado en su Google Calendar`}>
+                Ocupado en Google
+              </span>
             ) : offShift ? (
               <span className="text-xs text-text-3">Fuera de turno</span>
             ) : (
@@ -653,7 +660,7 @@ function Chip({
     <button
       type="button"
       onClick={() => onOpen(booking.id)}
-      aria-label={`${name}, ${booking.time} a ${endTime}, ${durationLabel(booking.durationMinutes)}${booking.itemName ? `, ${booking.itemName}` : ""}${booking.sold ? ", cobrada" : ""}`}
+      aria-label={`${name}, ${booking.time} a ${endTime}, ${durationLabel(booking.durationMinutes)}${booking.itemName ? `, ${booking.itemName}` : ""}${booking.sold ? ", cobrada" : ""}${booking.googleConflict ? ", choca con tu Google Calendar" : ""}`}
       className={cn(
         "flex w-full items-start gap-1.5 rounded-sm border px-2 text-left transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -677,6 +684,9 @@ function Chip({
           </span>
           {booking.source === "ai" && <Bot className="h-3.5 w-3.5 shrink-0" aria-label="Agendada por el agente" />}
           {booking.sold && <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-label="Cobrada" />}
+          {booking.googleConflict && (
+            <CalendarX2 className="h-3.5 w-3.5 shrink-0 text-warning-text" aria-label="Choca con tu Google Calendar" />
+          )}
         </>
       )}
     </button>

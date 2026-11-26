@@ -16,6 +16,7 @@ import { getSql } from "@/lib/db";
 import {
   checkAi,
   checkDispatch,
+  checkGoogleWatch,
   checkDatabase,
   checkMediaDir,
   checkMercadoPago,
@@ -86,6 +87,7 @@ if (!env) {
   section("IA (opcional)", [checkAi(env)]);
   section("Cerebro externo (opcional)", [checkDispatch(process.env)]);
   section("Cobro con Mercado Pago (opcional)", await checkMercadoPago(process.env));
+  section("Avisos al instante de Google Calendar (opcional)", checkGoogleWatch(process.env));
 }
 
 const s = summarize(all);

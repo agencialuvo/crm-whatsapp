@@ -11,7 +11,10 @@ import { weekdayKeyOf, type WeekdayKey } from "@/lib/time/slots";
  *   - está activo (quien llama solo pasa activos) y tiene «Recibe citas» encendido,
  *   - da ese servicio u oferta (sin lista en el servicio = lo da todo el equipo),
  *   - su turno de ese día cubre TODO el tramo y no es su día libre (sin turno guardado = horario del negocio),
- *   - no tiene una cita propia que se cruce con el tramo.
+ *   - no tiene una cita propia que se cruce con el tramo,
+ *   - Mejora 3: no está ocupado en SU Google Calendar (`staffBusy`: bloqueos con profesional). Un bloqueo
+ *     así lo saca solo a él; los bloqueos del negocio (sin profesional) apagan el tramo para todos y se
+ *     aplican antes, fuera de este módulo.
  *
  *   cupos libres = profesionales que pueden − citas SIN asignar que se cruzan con el tramo
  *
@@ -35,6 +38,14 @@ export type CapacityMember = {
 };
 
 export type CapacitySession = { id: string; staffId: string | null; startMs: number; endMs: number };
+
+/** Mejora 3: un tramo en que UN profesional está ocupado (su Google Calendar). */
+export type StaffBusy = { staffId: string; startMs: number; endMs: number };
+
+/** ¿Ese profesional está ocupado (por su calendario) en algún momento de [startMs, endMs)? */
+export function staffIsBusy(busy: readonly StaffBusy[] | undefined, staffId: string, startMs: number, endMs: number): boolean {
+  return !!busy?.some((b) => b.staffId === staffId && b.startMs < endMs && startMs < b.endMs);
+}
 
 export type SlotQuery = {
   startMs: number;
@@ -86,7 +97,13 @@ const gives = (providers: readonly string[] | null, id: string): boolean =>
 
 /** ¿Quién puede atender el tramo y cuántos cupos quedan? */
 export function evaluateSlot(
-  ctx: { members: readonly CapacityMember[]; sessions: readonly CapacitySession[]; timezone: string },
+  ctx: {
+    members: readonly CapacityMember[];
+    sessions: readonly CapacitySession[];
+    timezone: string;
+    /** Mejora 3: lo ocupado en el Google Calendar de cada profesional. */
+    staffBusy?: readonly StaffBusy[];
+  },
   q: SlotQuery
 ): SlotVerdict {
   const crossing = ctx.sessions.filter(
@@ -102,7 +119,10 @@ export function evaluateSlot(
   const busy = new Set(crossing.flatMap((s) => (s.staffId ? [s.staffId] : [])));
   const unassigned = crossing.filter((s) => s.staffId === null).length;
   const canServe = (m: CapacityMember): boolean =>
-    gives(q.providers, m.id) && !busy.has(m.id) && memberWorks(m, q.startMs, q.endMs, ctx.timezone);
+    gives(q.providers, m.id) &&
+    !busy.has(m.id) &&
+    !staffIsBusy(ctx.staffBusy, m.id, q.startMs, q.endMs) &&
+    memberWorks(m, q.startMs, q.endMs, ctx.timezone);
 
   const pool = ctx.members.filter((m) => m.acceptsBookings && canServe(m));
   const free = Math.max(0, pool.length - unassigned);

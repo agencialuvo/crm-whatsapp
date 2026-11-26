@@ -191,6 +191,8 @@ export type BoardBooking = {
   itemName: string | null;
   /** Ya se cobró: no se vuelve a cobrar. */
   sold: boolean;
+  /** Mejora 1: choca con lo ocupado en el Google Calendar conectado. */
+  googleConflict: boolean;
 };
 
 export type BoardSlot = {
@@ -199,6 +201,8 @@ export type BoardSlot = {
   time: string;
   /** Profesionales que atienden en esta franja (activos, de turno). */
   workingStaffIds: string[];
+  /** Mejora 3: de turno pero ocupados en su Google Calendar (no suman cupo; su celda se ve ocupada). */
+  busyStaffIds: string[];
   /**
    * Cupos de la franja: los profesionales de turno que reciben citas. Sin ningún
    * profesional dado de alta vale 1, igual que el motor de disponibilidad.

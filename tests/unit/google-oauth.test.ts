@@ -236,6 +236,8 @@ describe("GET /api/settings/google/oauth/callback", () => {
       clientId: "cid.apps.googleusercontent.com",
       refreshToken: "rt_1",
       accountEmail: "dueno@negocio.com",
+      // Mejora 2: lo concedido decide si se ofrece elegir calendarios.
+      grantedScopes: `openid ${CAL} email`,
     });
     expect(resyncUpcomingBookings).toHaveBeenCalledWith("org_1");
     // El canje usó el verifier de la cookie; la prueba de conexión, el token recién emitido.

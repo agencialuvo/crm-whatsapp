@@ -12,12 +12,18 @@
  *  5. Paso 4 — Lo ocupado en Google: encender «Tener en cuenta lo ocupado» desde la pantalla; un evento del
  *     dueño bloquea ese horario (ni se ofrece ni se puede reservar, y no se quita desde Vocero); Google
  *     caído → aviso y se conserva lo último leído; borrarlo en Google + «Leer ahora» lo libera; sin permiso
- *     de lectura → «Falta permiso…» con «Reconectar con Google».
- *  6. Desconectar desde la pantalla revoca el permiso, deja «Sin conectar» y quita lo traído de Google.
+ *     de lectura → «Falta permiso…» con «Reconectar con Google». Mejora 1: un evento nuevo encima de una cita
+ *     ya agendada la marca «Choca con tu Google Calendar» (lista y panel), avisa una vez y la cita sigue en
+ *     pie; al quitarlo en Google la marca se va.
+ *  6. Mejora 2 — Varios calendarios (con GOOGLE_CALENDAR_LIST=on): la primera conexión NO concedió la lista
+ *     (como una conexión antigua) → la tarjeta dice «Nuevo: elige tus calendarios» con «Reconectar con
+ *     Google»; al reconectar aparece el selector; publicar en «Equipo» MUEVE la cita que venía (mismo evento)
+ *     y las nuevas nacen ahí; leer también «Personal» bloquea su horario.
+ *  7. Desconectar desde la pantalla revoca el permiso, deja «Sin conectar» y quita lo traído de Google.
  *
  * Uso: node --env-file=.env scripts/e2e-google-calendar.mjs
  * Requiere la app corriendo con: AGENDA=on, WA_MOCK_ENABLED=true, GOOGLE_OAUTH_CLIENT_ID/SECRET (cualquier
- * valor), y GOOGLE_CAL_BASE_URL, GOOGLE_OAUTH_BASE_URL y GOOGLE_ACCOUNTS_BASE_URL apuntando a
+ * valor), GOOGLE_CALENDAR_LIST=on (sección 6; sin ella se salta), y GOOGLE_CAL_BASE_URL, GOOGLE_OAUTH_BASE_URL y GOOGLE_ACCOUNTS_BASE_URL apuntando a
  * ${APP_BASE_URL}/api/dev/google-mock. Usuario: E2E_EMAIL / E2E_PASSWORD (se registra si no existe).
  */
 import { chromium } from "playwright";
@@ -79,6 +85,8 @@ console.log("\n== Preparación ==");
 // demás guiones.
 await req.put(`${BASE}/api/organization/sector`, { data: { action: "skip" } });
 ok("mock de Google disponible", (await mock("_reset")).ok());
+// Mejora 2: la primera conexión NO concede la lista de calendarios (como una conexión de antes).
+await mock("_calendars", { grantCalendarList: false });
 await req.delete(`${BASE}/api/settings/google`);
 const all = [{ start: "09:00", end: "18:00" }];
 const cfg = await req.put(`${BASE}/api/calendar/settings`, {
@@ -205,6 +213,40 @@ const quitar = await req.patch(`${BASE}/api/bookings/${bloqueoGoogle?.id}`, { da
 ok("no se puede quitar desde Vocero (409 external_block)", quitar.status() === 409 && (await quitar.json()).error?.code === "external_block", `status ${quitar.status()}`);
 ok("las citas publicadas por Vocero no se leen como ocupado (sin bucle)", (await lista()).filter((b) => b.busySource === "google").length === 1);
 
+// Mejora 1: un evento NUEVO de Google cae encima de una cita ya agendada.
+const conChoque = await req.post(`${BASE}/api/bookings`, { data: { kind: "session", contactId, startUtc: huecos[12].startUtc } });
+const choqueId = (await conChoque.json()).booking?.id;
+ok("cita agendada antes del evento (201)", conChoque.status() === 201 && !!choqueId, `status ${conChoque.status()}`);
+const finChoque = new Date(Date.parse(huecos[12].startUtc) + 45 * 60_000).toISOString();
+await mock("_external", {
+  replace: true,
+  events: [
+    { id: "dentista", start: { dateTime: ocupado.startUtc }, end: { dateTime: finOcupado } },
+    { id: "libre", transparency: "transparent", start: { dateTime: huecos[8].startUtc }, end: { dateTime: huecos[9].endUtc } },
+    { id: "imprevisto", summary: "Imprevisto", start: { dateTime: huecos[12].startUtc }, end: { dateTime: finChoque } },
+  ],
+});
+await page.getByRole("button", { name: "Leer ahora" }).click();
+await page.getByText(/2 tramos ocupados/).waitFor({ timeout: 15000 }).catch(() => {});
+const marcada = await hasta(async () => (await lista()).find((b) => b.id === choqueId && b.googleConflict) ?? null);
+ok("la cita queda marcada con el tramo de Google", !!marcada && marcada.status === "agendada" && Date.parse(marcada.googleConflict.endUtc) === Date.parse(finChoque), JSON.stringify(marcada?.googleConflict));
+const avisosChoque = async () =>
+  (JSON.stringify(await (await req.get(`${BASE}/api/notificaciones?limit=50`)).json()).match(/Una cita choca con tu Google Calendar/g) ?? []).length;
+ok("llega UN aviso del choque", (await avisosChoque()) === 1);
+await page.getByRole("button", { name: "Leer ahora" }).click();
+await page.getByText("Calendario leído.").waitFor({ timeout: 15000 }).catch(() => {});
+ok("leer otra vez no repite el aviso", (await avisosChoque()) === 1);
+const diaChoque = marcada?.date ?? huecos[12].startUtc.slice(0, 10);
+await page.goto(`${BASE}/citas?vista=lista&fecha=${diaChoque}&hasta=${diaChoque}`);
+const icono = page.getByLabel("Choca con tu Google Calendar").first();
+ok("la Lista de citas muestra la marca de choque", await icono.waitFor({ timeout: 20000 }).then(() => true).catch(() => false));
+await icono.click();
+const panel = await page.getByText("La cita sigue en pie: reprográmala o libera ese horario en Google.").waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
+ok("el panel de la cita explica el choque y que la cita sigue en pie", panel);
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/google-7-choque.png` });
+await page.goto(`${BASE}/ajustes/calendario`);
+await page.getByRole("button", { name: "Leer ahora" }).waitFor({ timeout: 30000 });
+
 await mock("_fail", { status: 503, count: 1 });
 await page.getByRole("button", { name: "Leer ahora" }).click();
 const avisoCaida = await page.getByText(/No se pudo leer tu calendario/).waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
@@ -217,6 +259,7 @@ await page.getByRole("button", { name: "Leer ahora" }).click();
 await page.getByText("Calendario leído.").waitFor({ timeout: 15000 }).catch(() => {});
 ok("borrado en Google + «Leer ahora»: el horario vuelve a ofrecerse", (await ofrecidos()).includes(ocupado.startUtc));
 ok("…y ya no hay bloqueos de Google", (await lista()).every((b) => b.busySource !== "google"));
+ok("…y la marca de choque se fue sola (la cita sigue agendada)", (await lista()).some((b) => b.id === choqueId && b.status === "agendada" && !b.googleConflict));
 
 await mock("_external", { replace: true, events: [{ id: "otra", start: { dateTime: ocupado.startUtc }, end: { dateTime: finOcupado } }] });
 await page.getByRole("button", { name: "Leer ahora" }).click();
@@ -229,14 +272,68 @@ ok("…y se conserva lo último leído", !(await ofrecidos()).includes(ocupado.s
 await shot("google-6-ocupado-sin-permiso");
 await mock("_fail", { status: 503, count: 0 });
 
-console.log("\n== 6. Desconectar desde la pantalla ==");
+console.log("\n== 6. Varios calendarios (Mejora 2) ==");
+const EQUIPO = "equipo@group.calendar.mock";
+const PERSONAL = "personal@group.calendar.mock";
+const elegir = await (await req.get(`${BASE}/api/settings/google/calendars`)).json();
+if (elegir.reason === "flag_off") {
+  console.log("  (GOOGLE_CALENDAR_LIST apagada: se salta)");
+} else {
+  ok("una conexión sin el permiso de la lista pide reconectar (y sigue en el principal)", elegir.reason === "needs_reconnect" && elegir.selection?.publish?.id === "primary", JSON.stringify(elegir));
+  await page.reload();
+  const aviso = await page.getByText("Nuevo: elige tus calendarios").waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+  ok("la tarjeta muestra «Nuevo: elige tus calendarios» con «Reconectar con Google»", aviso && (await page.getByRole("link", { name: "Reconectar con Google" }).count()) >= 1);
+
+  // Una cita que viene, publicada todavía en el principal.
+  const previa = await req.post(`${BASE}/api/bookings`, { data: { kind: "session", contactId, startUtc: huecos[14].startUtc } });
+  const previaId = (await previa.json()).booking?.id;
+  const evPrevia = await hasta(() => eventOf(previaId));
+  ok("la cita que viene está en el calendario principal", evPrevia?.calendarId === "agenda@negocio.mock", JSON.stringify(evPrevia?.calendarId));
+
+  await mock("_calendars", { grantCalendarList: true });
+  await page.getByRole("link", { name: "Reconectar con Google" }).first().click();
+  await page.getByText("Google Calendar conectado.").waitFor({ timeout: 20000 });
+  const selector = page.getByRole("combobox", { name: "Publicar las citas en" });
+  ok("al reconectar aparece el selector de calendarios", await selector.waitFor({ timeout: 15000 }).then(() => true).catch(() => false));
+  await selector.click();
+  const opciones = await page.getByRole("option").allTextContents();
+  ok("solo ofrece para publicar los calendarios donde se puede escribir", opciones.some((o) => o.includes("Equipo")) && !opciones.some((o) => o.includes("Personal")) && !opciones.some((o) => o.includes("Socio")), JSON.stringify(opciones));
+  ok("«Socio» (solo libre/ocupado) no se puede marcar para leer", await page.getByLabel("Socio").isDisabled());
+  await page.getByRole("option", { name: "Equipo" }).click();
+  await page.getByLabel("Personal").check();
+  await page.getByRole("button", { name: "Guardar calendarios" }).click();
+  const guardado = await page.getByText("Las citas que vienen se moverán a «Equipo».", { exact: false }).waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+  ok("guarda y avisa que las citas que vienen se moverán a «Equipo»", guardado);
+  const movida = await hasta(async () => {
+    const e = await eventOf(previaId);
+    return e?.calendarId === EQUIPO ? e : null;
+  });
+  ok("la cita que venía se MOVIÓ a «Equipo» (mismo evento, sin duplicar)", !!movida && movida.id === evPrevia?.id && (await mockState()).events.filter((e) => e.privateProps?.voceroBookingId === previaId).length === 1);
+  ok("la tarjeta dice dónde se publica", await page.getByText("publica en «Equipo»").waitFor({ timeout: 10000 }).then(() => true).catch(() => false));
+  await shot("google-8-calendarios");
+
+  const nueva = await req.post(`${BASE}/api/bookings`, { data: { kind: "session", contactId, startUtc: huecos[18].startUtc } });
+  const nuevaId = (await nueva.json()).booking?.id;
+  const evNueva = await hasta(() => eventOf(nuevaId));
+  ok("una cita nueva nace en «Equipo»", evNueva?.calendarId === EQUIPO, JSON.stringify(evNueva?.calendarId));
+
+  const finPersonal = new Date(Date.parse(huecos[16].startUtc) + 60 * 60_000).toISOString();
+  await mock("_external", { replace: true, events: [{ id: "gimnasio", calendarId: PERSONAL, start: { dateTime: huecos[16].startUtc }, end: { dateTime: finPersonal } }] });
+  ok("antes de leer, ese horario se ofrece", (await ofrecidos()).includes(huecos[16].startUtc));
+  await page.getByRole("button", { name: "Leer ahora" }).click();
+  await page.getByText("Calendario leído.").waitFor({ timeout: 15000 }).catch(() => {});
+  ok("lo ocupado en «Personal» también bloquea la agenda", !(await ofrecidos()).includes(huecos[16].startUtc));
+  for (const id of [previaId, nuevaId]) await req.patch(`${BASE}/api/bookings/${id}`, { data: { action: "cancel" } });
+}
+
+console.log("\n== 7. Desconectar desde la pantalla ==");
 await page.reload();
 await page.getByRole("button", { name: "Desconectar" }).first().click();
 await page.getByText("Google Calendar desconectado.").waitFor({ timeout: 15000 });
 ok("la pantalla confirma la desconexión", true);
 const tras = await (await req.get(`${BASE}/api/settings/google`)).json();
 ok("ya no hay conexión", tras.connection === null);
-ok("el permiso se revocó en Google", (await mockState()).revoked.includes("mock-refresh-oauth"));
+ok("el permiso se revocó en Google", (await mockState()).revoked.some((t) => t.startsWith("mock-refresh-oauth")));
 ok("desconectar quita lo traído de Google y el horario vuelve a ofrecerse", (await lista()).every((b) => b.busySource !== "google") && (await ofrecidos()).includes(ocupado.startUtc));
 await shot("google-3-desconectado");
 
