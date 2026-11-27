@@ -1080,7 +1080,7 @@ export function StepDialog({
               label="Mensaje"
               htmlFor="step-content"
               error={errors.content}
-              hint="Escribe {{name}} para poner el nombre del cliente. En un flujo de premio de fidelidad también {{premio}}, {{descuento}} (el número, sin %) y {{sellos}}."
+              hint="Escribe {{name}} para poner el nombre del cliente. En un flujo de premio de fidelidad también {{premio}}, {{descuento}} (el número, sin %) y {{sellos}}. En el rescate de cumpleaños, {{beneficio}}, {{cierre_mes}}, {{plazo}} y {{cumple}}."
             >
               <Textarea
                 id="step-content"

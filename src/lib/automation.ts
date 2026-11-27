@@ -769,6 +769,8 @@ export function renderVars(
     loyalty?: LoyaltyRunContext | null;
     /** `context.sale` de un flujo `sale_completed` (ver `readSaleContext`); sin él, `{{monto}}` sale vacío. */
     sale?: SaleRunContext | null;
+    /** `context.birthday` del rescate de cumpleaños (ver `readBirthdayContext`); sin él, esas variables salen vacías. */
+    birthday?: BirthdayRunContext | null;
   }
 ): string {
   return text
@@ -781,6 +783,16 @@ export function renderVars(
       // Fidelidad: el premio y el hito que activó el flujo. Fuera de un flujo de premio quedan vacías (nunca «undefined»).
       // Venta cobrada: el monto, sin símbolo de moneda («1250» o «1250.50»); quien escribe el mensaje pone el suyo.
       if (key === "monto") return vars.sale ? formatSaleAmount(vars.sale.amountCents) : "";
+      // Rescate de cumpleaños: el beneficio y el plazo, para recordar la promoción sin felicitar fuera de fecha.
+      if (key === "beneficio") return vars.birthday?.benefit?.trim() || "";
+      if (key === "cierre_mes") return vars.birthday?.monthEnd?.trim() || "";
+      if (key === "cumple") return vars.birthday?.birthday?.trim() || "";
+      if (key === "dias_restantes") return vars.birthday ? String(vars.birthday.daysLeft) : "";
+      if (key === "plazo") {
+        if (!vars.birthday) return "";
+        const d = vars.birthday.daysLeft;
+        return d <= 0 ? "hoy es el último día" : d === 1 ? "queda 1 día" : `quedan ${d} días`;
+      }
       if (key === "premio") return vars.loyalty?.title?.trim() || "";
       if (key === "descuento") return vars.loyalty?.discountPercentage != null ? String(vars.loyalty.discountPercentage) : "";
       // Disparador de cada sello: cuánto falta y cuál es el próximo premio (vacías en un flujo de premio o de otro tipo).
@@ -799,6 +811,38 @@ export function renderVars(
     })
     .replace(/[ 	]{2,}/g, " ")
     .trim();
+}
+
+/* ─── Rescate de cumpleaños en el contexto de la ejecución ─── */
+
+/** Lo que el rescate de fin de mes deja en `automation_run.context.birthday`. */
+export type BirthdayRunContext = {
+  /** El beneficio en palabras del negocio («20% de descuento»). */
+  benefit: string;
+  /** Último día del mes («30 de noviembre»). */
+  monthEnd: string;
+  /** Días que quedan del mes después de hoy (0 = hoy es el último). */
+  daysLeft: number;
+  /** Fecha del cumpleaños («6 de noviembre»), si se conoce. */
+  birthday: string | null;
+  /** ¿El cumpleaños ya pasó cuando salió el rescate? */
+  birthdayPassed: boolean | null;
+};
+
+/** `context.birthday` de una ejecución, o `null` si no nació de un rescate. Ignora lo que no tenga la forma esperada. */
+export function readBirthdayContext(ctx: Record<string, unknown> | null | undefined): BirthdayRunContext | null {
+  const raw = ctx?.birthday;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.benefit !== "string" || typeof o.monthEnd !== "string") return null;
+  if (typeof o.daysLeft !== "number" || !Number.isFinite(o.daysLeft)) return null;
+  return {
+    benefit: o.benefit,
+    monthEnd: o.monthEnd,
+    daysLeft: o.daysLeft,
+    birthday: typeof o.birthday === "string" ? o.birthday : null,
+    birthdayPassed: typeof o.birthdayPassed === "boolean" ? o.birthdayPassed : null,
+  };
 }
 
 /* ─── Venta cobrada en el contexto de la ejecución ─── */

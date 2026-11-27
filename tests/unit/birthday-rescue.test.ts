@@ -144,15 +144,16 @@ describe("launchBirthdayRescue", () => {
     const claimed = new Set<string>();
     const enqueued: string[] = [];
     const released: string[] = [];
-    const audience: { id: string; rescueBlock: RescueBlock | null }[] = [
-      { id: "ct_a", rescueBlock: null },
-      { id: "ct_b", rescueBlock: null },
-      { id: "ct_cita", rescueBlock: "booked" },
-      { id: "ct_baja", rescueBlock: "opted_out" },
+    const audience: { id: string; day: number; rescueBlock: RescueBlock | null }[] = [
+      { id: "ct_a", day: 6, rescueBlock: null },
+      { id: "ct_b", day: 29, rescueBlock: null },
+      { id: "ct_cita", day: 10, rescueBlock: "booked" },
+      { id: "ct_baja", day: 12, rescueBlock: "opted_out" },
     ];
     const d: import("@/server/business/birthday-rescue").RescueDeps = {
       loadFlow: async () => ({ id: "aut_m", triggerType: "manual", active: true }),
-      audience: async () => ({ today: "2026-11-27", clients: audience }),
+      flowGreets: async () => false,
+      audience: async () => ({ today: "2026-11-27", windowDays: 7, benefit: "20% de descuento", clients: audience }),
       claim: async ({ contactId, period }) => {
         const k = `${contactId}|${period}`;
         if (claimed.has(k)) return false;
@@ -248,8 +249,8 @@ describe("launchBirthdayRescue", () => {
   });
 
   it("tope por lanzamiento: lo que no entra queda como pendiente", async () => {
-    const many = Array.from({ length: mod.RESCUE_MAX_PER_LAUNCH + 5 }, (_, i) => ({ id: `ct_${i}`, rescueBlock: null }));
-    const { d } = deps({ audience: async () => ({ today: "2026-11-27", clients: many }) });
+    const many = Array.from({ length: mod.RESCUE_MAX_PER_LAUNCH + 5 }, (_, i) => ({ id: `ct_${i}`, day: 5, rescueBlock: null }));
+    const { d } = deps({ audience: async () => ({ today: "2026-11-27", windowDays: 7, benefit: "x", clients: many }) });
     const r = await mod.launchBirthdayRescue({ organizationId: "org_1", flowId: "aut_m", triggeredBy: "usr_1" }, d);
     expect(r.attempted).toBe(mod.RESCUE_MAX_PER_LAUNCH);
     expect(r.remaining).toBe(5);
@@ -291,7 +292,9 @@ describe("tarjeta: bloque del rescate", () => {
     daysLeft: 3,
     suggested: true,
     eligible: 4,
-    excluded: { opted_out: 1, no_conversation: 2 },
+    windowDays: 7,
+    windowStartDay: 24,
+    excluded: { opted_out: 1, no_conversation: 2, recent_visit: 0 },
     launched: 1,
     pending: 1,
     delivered: 0,
@@ -301,7 +304,11 @@ describe("tarjeta: bloque del rescate", () => {
     conversionRate: null,
     revenueCents: 0,
     available: true,
-    flows: [{ id: "aut_m", name: "Última oportunidad" }],
+    flows: [{ id: "aut_m", name: "Última oportunidad", greetingCopy: false }],
+    benefit: "20% de descuento",
+    monthEnd: "30 de noviembre",
+    settings: { autoEnabled: false, flowId: null, windowDays: 7, minGapDays: 7, sendHour: 10, benefitText: null },
+    lastAutoRunOn: null,
     ...over,
   });
 
@@ -309,7 +316,7 @@ describe("tarjeta: bloque del rescate", () => {
     const html = await render(summary());
     expect(html).toContain("Rescate de última oportunidad");
     expect(html).toContain("Quedan 3 días del mes");
-    expect(html).toContain("Quedan fuera 1 por baja y 2 sin chat de WhatsApp");
+    expect(html).toContain("Quedan fuera: 1 por baja, 2 sin chat de WhatsApp");
     expect(html).toContain("Enviar rescate a 4");
     expect(html).toContain("Lanzados 1");
     expect(html).toContain('data-rescate="pending"');

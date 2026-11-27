@@ -21,6 +21,7 @@ import {
   removeTagConfigSchema,
   endFlowConfigSchema,
   humanHandoffConfigSchema,
+  readBirthdayContext,
   readLoyaltyContext,
   readSaleContext,
   renderVars,
@@ -475,7 +476,7 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       else if (target.isTest) result = "sandbox"; // el Laboratorio nunca se toca
       else {
         const ctx = row.runId && deps.runContext ? await deps.runContext(row.organizationId, row.runId) : {};
-        const note = cfg.data.note ? renderVars(cfg.data.note, { name: target.contactName, vars: readVars(ctx), loyalty: readLoyaltyContext(ctx), sale: readSaleContext(ctx) }) : "";
+        const note = cfg.data.note ? renderVars(cfg.data.note, { name: target.contactName, vars: readVars(ctx), loyalty: readLoyaltyContext(ctx), sale: readSaleContext(ctx), birthday: readBirthdayContext(ctx) }) : "";
         result = (await deps.handoff({ organizationId: row.organizationId, conversationId: target.conversationId, ...(note ? { note } : {}) })).status;
       }
       await deps.writeLog({
@@ -591,6 +592,7 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
         vars: current,
         loyalty: readLoyaltyContext(ctx),
         sale: readSaleContext(ctx),
+        birthday: readBirthdayContext(ctx),
       });
       const merged = mergeVars(current, { [cfg.data.key]: value });
       if (!merged.ok) return await fail(merged.code, { detail: merged.message, key: cfg.data.key });
@@ -772,6 +774,8 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       loyalty: readLoyaltyContext(ctx),
       // Venta cobrada: `{{monto}}` (y `{{servicio}}`, que viaja en `context.serviceName`).
       sale: readSaleContext(ctx),
+      // Rescate de cumpleaños: `{{beneficio}}`, `{{cierre_mes}}`, `{{plazo}}`, `{{cumple}}`, `{{dias_restantes}}`.
+      birthday: readBirthdayContext(ctx),
       name: target.contactName,
       fecha: bookingIso && tz ? dayLabelInTz(bookingIso, tz, now) : null,
       hora: bookingIso && tz ? timeInTz(bookingIso, tz) : null,

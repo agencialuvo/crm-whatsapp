@@ -38,6 +38,8 @@ describe.skipIf(!live)("rescate de cumpleaños contra Postgres", () => {
   let month = 0;
   let period = "";
   let inWindow = new Date();
+  /** Un instante del ÚLTIMO día del mes real: dentro de la ventana de cierre, donde el rescate puede salir. */
+  let late = new Date();
   let flowManual = "";
   let flowManual2 = "";
   let flowBirthday = "";
@@ -90,6 +92,8 @@ describe.skipIf(!live)("rescate de cumpleaños contra Postgres", () => {
     month = Number(today.slice(5, 7));
     period = today.slice(0, 7);
     inWindow = new Date(campaign.birthdayWindow(year, month, tz).start.getTime() + 12 * 3_600_000);
+    late = new Date(campaign.birthdayWindow(year, month, tz).end.getTime() - 6 * 3_600_000);
+    today = todayInTz(late, tz);
 
     const makeFlow = async (name: string, triggerType: string) => {
       const f = await flows.createFlow(org, schemas.flowCreateSchema.parse({ name, triggerType }));
@@ -150,7 +154,7 @@ describe.skipIf(!live)("rescate de cumpleaños contra Postgres", () => {
   });
 
   it("lanzar encola por el motor con la llave del mes, sin tocar el saludo del año", async () => {
-    const r = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual, triggeredBy: USER });
+    const r = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual, triggeredBy: USER, now: late });
     expect(r).toMatchObject({ period, attempted: 3, enqueued: 3, skipped: [], remaining: 0 });
     const runs = await rescueRuns();
     expect(runs.map((x) => x.contactId).sort()).toEqual([ct("citaTest"), ct("libre"), ct("saludado")].sort());
@@ -167,11 +171,11 @@ describe.skipIf(!live)("rescate de cumpleaños contra Postgres", () => {
   });
 
   it("no hay reenvío en el mes: relanzar, otro flujo o pedir a esos clientes no crea más ejecuciones", async () => {
-    const again = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual, triggeredBy: USER });
+    const again = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual, triggeredBy: USER, now: late });
     expect(again.enqueued).toBe(0);
-    const otherFlow = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual2, triggeredBy: USER });
+    const otherFlow = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual2, triggeredBy: USER, now: late });
     expect(otherFlow.enqueued).toBe(0);
-    const explicit = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual2, contactIds: [ct("libre"), ct("cita")], triggeredBy: USER });
+    const explicit = await rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual2, contactIds: [ct("libre"), ct("cita")], triggeredBy: USER, now: late });
     expect(explicit.enqueued).toBe(0);
     expect(explicit.skipped).toEqual(
       expect.arrayContaining([
@@ -186,8 +190,8 @@ describe.skipIf(!live)("rescate de cumpleaños contra Postgres", () => {
     await contact("nuevo");
     await chat("nuevo");
     const [a, b] = await Promise.all([
-      rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual, triggeredBy: USER }),
-      rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual2, triggeredBy: USER }),
+      rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual, triggeredBy: USER, now: late }),
+      rescue.launchBirthdayRescue({ organizationId: org, flowId: flowManual2, triggeredBy: USER, now: late }),
     ]);
     expect(a.enqueued + b.enqueued).toBe(1);
     const runs = (await rescueRuns()).filter((x) => x.contactId === ct("nuevo"));
@@ -220,11 +224,11 @@ describe.skipIf(!live)("rescate de cumpleaños contra Postgres", () => {
   });
 
   it("el flujo de cumpleaños (no manual) no sirve para el rescate; la otra organización queda intacta", async () => {
-    await expect(rescue.launchBirthdayRescue({ organizationId: org, flowId: flowBirthday, triggeredBy: USER })).rejects.toMatchObject({
+    await expect(rescue.launchBirthdayRescue({ organizationId: org, flowId: flowBirthday, triggeredBy: USER, now: late })).rejects.toMatchObject({
       code: "not_manual_flow",
     });
     // Un flujo de OTRA organización no existe para esta.
-    await expect(rescue.launchBirthdayRescue({ organizationId: other, flowId: flowManual, triggeredBy: USER })).rejects.toMatchObject({
+    await expect(rescue.launchBirthdayRescue({ organizationId: other, flowId: flowManual, triggeredBy: USER, now: late })).rejects.toMatchObject({
       code: "not_found",
     });
     const ajenos = await db.select().from(schema.birthdayRescue).where(eq(schema.birthdayRescue.organizationId, other));

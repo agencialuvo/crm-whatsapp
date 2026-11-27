@@ -9,6 +9,7 @@ import type {
   RescueBlock,
   RescueSummary,
 } from "@/lib/salon/birthday-campaign";
+import type { RescueSettings } from "@/lib/salon/birthday-rescue";
 import type { RepurchaseDto } from "@/lib/salon/insights";
 import type { PaymentMethod, PriceMode, ScheduleDay } from "@/lib/salon/schemas";
 
@@ -307,7 +308,20 @@ export type BirthdayRescueDto = RescueSummary & {
   /** ¿Se puede lanzar en esta instancia? (necesita el módulo de Automatizaciones). */
   available: boolean;
   /** Flujos MANUALES encendidos con que se puede enviar (el mensaje y la plantilla los define el flujo). */
-  flows: { id: string; name: string }[];
+  flows: {
+    id: string;
+    name: string;
+    /** Su mensaje felicita como si fuera el día del cumpleaños: no sirve para el rescate. */
+    greetingCopy: boolean;
+  }[];
+  /** El beneficio en palabras («20% de descuento»): lo que pone `{{beneficio}}`. */
+  benefit: string;
+  /** Último día del mes («30 de noviembre»): lo que pone `{{cierre_mes}}`. */
+  monthEnd: string;
+  /** Ajustes del rescate (ventana, margen, automático). */
+  settings: RescueSettings;
+  /** Último día en que corrió el rescate automático (AAAA-MM-DD), o `null`. */
+  lastAutoRunOn: string | null;
 };
 
 /** Un punto de la serie del Panel: ingresos y, con ellos, comisiones, gastos y ganancia neta. */

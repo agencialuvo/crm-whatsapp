@@ -245,7 +245,15 @@ describe("tarjeta del Panel", () => {
     year: 2026,
     ...built,
     // Sin el módulo de Automatizaciones el bloque del rescate no se dibuja.
-    rescue: { ...computeRescueSummary(built.clients, "2026-11-05"), available: false, flows: [] },
+    rescue: {
+      ...computeRescueSummary(built.clients, "2026-11-05"),
+      available: false,
+      flows: [],
+      benefit: "20% de descuento",
+      monthEnd: "30 de noviembre",
+      settings: { autoEnabled: false, flowId: null, windowDays: 7, minGapDays: 7, sendHour: 10, benefitText: null },
+      lastAutoRunOn: null,
+    },
   };
 
   it("muestra KPIs, desglose, buscador, filtros con conteo, estado por fila y la acción de cada estado", async () => {
@@ -259,9 +267,10 @@ describe("tarjeta del Panel", () => {
     expect(html).toContain("Enviados sin cita");
     expect(html).toContain('data-estado="enviado"');
     expect(html).toContain('data-estado="sin_enviar"');
-    // Ana ya saludada: «Invitar» a reservar. Beto sin celular: «Marcar saludado».
+    // Ana ya saludada: «Invitar» a reservar. Beto cumple más adelante y hay automatización activa: ella lo envía (sin botón manual).
     expect(html).toContain("Invitar");
-    expect(html).toContain("Marcar saludado");
+    expect(html).toContain("Lo envía la automatización");
+    expect(html).not.toContain("Marcar saludado");
     // Paginación estándar.
     expect(html).toContain("Paginación de cumpleaños");
   });

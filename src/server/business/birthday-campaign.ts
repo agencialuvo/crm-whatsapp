@@ -9,16 +9,19 @@ import {
   birthdayRescueDedupeKey,
   buildBirthdayCampaign,
   computeRescueSummary,
+  daysLeftInMonth,
   rescuePeriodOf,
   type BirthdayContactRow,
   type BirthdayFlowRef,
   type BirthdayRescueRows,
 } from "@/lib/salon/birthday-campaign";
+import { dateLabel } from "@/lib/salon/birthday-rescue";
 import { sortBirthdaysByProximity } from "@/lib/salon/insights";
 import type { SalonDashboardDto } from "@/lib/salon/types";
-import { addDaysISO } from "@/lib/time/slots";
+import { addDaysISO, todayInTz } from "@/lib/time/slots";
 import { resolvePeriod } from "@/server/analytics/period";
 import { automationsEnabled } from "@/server/automation/flag";
+import { getRescueSettings, listRescueFlows, resolveBenefit } from "@/server/business/birthday-rescue-settings";
 
 /**
  * Módulo SALON — cumpleaños del mes en el Panel: quién cumple, a quién se saludó (automatización o a mano), quién
@@ -41,7 +44,7 @@ function birthdayContactJoin(organizationId: string, month: number, contactIdCol
   );
 }
 
-async function listContacts(organizationId: string, month: number): Promise<BirthdayContactRow[]> {
+async function listContacts(organizationId: string, month: number, timezone: string): Promise<BirthdayContactRow[]> {
   const sale = schema.serviceSale;
   const rows = await getDb()
     .select({
@@ -54,6 +57,19 @@ async function listContacts(organizationId: string, month: number): Promise<Birt
       optedOut: sql<boolean>`(${schema.contact.optedOutAt} is not null)`,
       // Un chat REAL de WhatsApp (lo mismo que exige el disparo manual): ni del Laboratorio ni de otro canal.
       reachable: sql<boolean>`exists (select 1 from ${schema.conversation} cv where cv.contact_id = ${schema.contact.id} and cv.organization_id = ${organizationId} and cv.channel = 'whatsapp' and cv.is_test = false)`,
+      // Última atención de SIEMPRE (no solo del mes): cita realizada o venta en Caja, nada del Laboratorio. En segundos
+      // UTC; el día del negocio se saca abajo con su zona.
+      lastVisitEpoch: sql<number | null>`extract(epoch from greatest(
+        (select max(bk.scheduled_at) from ${schema.booking} bk
+          where bk.organization_id = ${organizationId} and bk.contact_id = ${schema.contact.id}
+            and bk.kind = 'session' and bk.is_test = false and bk.status = 'realizada' and bk.scheduled_at <= now()),
+        (select max(ss.created_at) from ${schema.serviceSale} ss
+          left join ${schema.booking} sb on sb.id = ss.booking_id
+          where ss.organization_id = ${organizationId} and ss.contact_id = ${schema.contact.id}
+            and (sb.id is null or sb.is_test = false))
+      ))::float8`,
+      // Cita vigente: reservada de ahora en adelante, aunque caiga fuera del mes del cumpleaños.
+      upcomingBooking: sql<boolean>`exists (select 1 from ${schema.booking} ub where ub.organization_id = ${organizationId} and ub.contact_id = ${schema.contact.id} and ub.kind = 'session' and ub.is_test = false and ub.status = 'agendada' and ub.scheduled_at >= now())`,
     })
     .from(schema.contact)
     .leftJoin(sale, and(eq(sale.contactId, schema.contact.id), eq(sale.organizationId, organizationId)))
@@ -67,7 +83,17 @@ async function listContacts(organizationId: string, month: number): Promise<Birt
     )
     .groupBy(schema.contact.id)
     .orderBy(asc(schema.contact.birthdayDay), asc(schema.contact.name));
-  return rows.flatMap((r) => (r.day == null ? [] : [{ ...r, day: r.day }]));
+  return rows.flatMap(({ lastVisitEpoch, ...r }) =>
+    r.day == null
+      ? []
+      : [
+          {
+            ...r,
+            day: r.day,
+            lastVisit: lastVisitEpoch == null ? null : todayInTz(new Date(Number(lastVisitEpoch) * 1000), timezone),
+          },
+        ]
+  );
 }
 
 async function listBirthdayFlows(organizationId: string): Promise<BirthdayFlowRef[]> {
@@ -140,16 +166,6 @@ async function listRescue(organizationId: string, month: number, period: string)
   return { claimed: new Set(claims.map((c) => c.contactId)), runs, sends };
 }
 
-/** Paso 3 — flujos MANUALES encendidos: con ellos se envía el rescate (ellos definen el mensaje o la plantilla). */
-export async function listRescueFlows(organizationId: string): Promise<{ id: string; name: string }[]> {
-  const f = schema.automationFlow;
-  return getDb()
-    .select({ id: f.id, name: f.name })
-    .from(f)
-    .where(scoped(f.organizationId, organizationId, eq(f.triggerType, "manual"), eq(f.active, true)))
-    .orderBy(asc(f.name));
-}
-
 /** Citas reales (ni bloqueos, ni de prueba, ni canceladas) dentro de la ventana. */
 async function listBookings(organizationId: string, month: number, start: Date, end: Date) {
   const b = schema.booking;
@@ -214,11 +230,13 @@ export async function getBirthdayCampaign(
   const { start, end } = birthdayWindow(year, month, timezone);
   const period = rescuePeriodOf(today);
   const rescueAvailable = automationsEnabled();
-  const [contacts, flows, rescueFlows] = await Promise.all([
-    listContacts(organizationId, month),
+  const [contacts, flows, rescueFlows, settings] = await Promise.all([
+    listContacts(organizationId, month, timezone),
     listBirthdayFlows(organizationId),
     rescueAvailable ? listRescueFlows(organizationId) : Promise.resolve([]),
+    getRescueSettings(organizationId),
   ]);
+  const benefit = await resolveBenefit(organizationId, settings.benefitText);
   const noRescue: BirthdayRescueRows = { claimed: new Set(), runs: [], sends: [] };
   const [sends, manual, bookings, sales, rescue] =
     contacts.length === 0
@@ -230,7 +248,17 @@ export async function getBirthdayCampaign(
           listSales(organizationId, month, start, end),
           listRescue(organizationId, month, period),
         ]);
-  const built = buildBirthdayCampaign({ contacts, flows, sends, manual, bookings, sales, rescue });
+  const built = buildBirthdayCampaign({
+    contacts,
+    flows,
+    sends,
+    manual,
+    bookings,
+    sales,
+    rescue,
+    rescueRules: { today, minGapDays: settings.minGapDays },
+  });
+  const monthEnd = dateLabel(todayDay + daysLeftInMonth(today), month);
   return {
     month,
     today: todayDay,
@@ -239,7 +267,22 @@ export async function getBirthdayCampaign(
     clients: sortBirthdaysByProximity(built.clients, todayDay),
     kpis: built.kpis,
     flows: built.flows,
-    rescue: { ...computeRescueSummary(built.clients, today), available: rescueAvailable, flows: rescueFlows },
+    rescue: {
+      ...computeRescueSummary(built.clients, today, settings.windowDays),
+      available: rescueAvailable,
+      flows: rescueFlows,
+      benefit,
+      monthEnd,
+      settings: {
+        autoEnabled: settings.autoEnabled,
+        flowId: settings.flowId,
+        windowDays: settings.windowDays,
+        minGapDays: settings.minGapDays,
+        sendHour: settings.sendHour,
+        benefitText: settings.benefitText,
+      },
+      lastAutoRunOn: settings.lastAutoRunOn,
+    },
   };
 }
 

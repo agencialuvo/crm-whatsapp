@@ -722,6 +722,13 @@
       "when": 1795800184193,
       "tag": "0102_birthday_rescue",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1795808232147,
+      "tag": "0103_birthday_rescue_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,8 @@ import { processRow, type Deps, type Row } from "@/server/automation/engine";
 import * as queue from "@/server/automation/queue";
 import { applyTag, contactFacts, moveContactToStage } from "@/server/automation/actions";
 import { runBirthdayTrigger } from "@/server/automation/triggers";
+import { runBirthdayMonitor } from "@/server/business/birthday-monitor";
+import { salonEnabled } from "@/server/business/flag";
 import { loadMediaFile } from "@/server/automation/media";
 import { handoffConversation } from "@/server/automation/handoff";
 import { isOptedOut } from "@/server/automation/opt-out";
@@ -138,6 +140,13 @@ export async function tickTriggers(now: Date = new Date()): Promise<void> {
     const run = await runBirthdayTrigger(now);
     if (run.enqueued > 0) {
       console.log(`[automatizaciones] cumpleaños: ${run.enqueued} saludo(s) en cola`);
+    }
+    // Cumpleaños del Panel (módulo SALON): rescate automático de fin de mes y avisos de fallos en la campanita.
+    if (salonEnabled()) {
+      const watch = await runBirthdayMonitor(now);
+      if (watch.autoLaunched > 0 || watch.alerts > 0) {
+        console.log(`[cumpleaños] rescate automático: ${watch.autoLaunched} en cola · ${watch.alerts} aviso(s)`);
+      }
     }
   } catch (err) {
     console.error("[automatizaciones] el barrido de disparadores falló:", err);

@@ -1084,6 +1084,58 @@ export const birthdayRescue = pgTable(
   (t) => [uniqueIndex("birthday_rescue_org_contact_period_uq").on(t.organizationId, t.contactId, t.period)]
 );
 
+/**
+ * Cumpleaños — ajustes del rescate de fin de mes (uno por organización). Sin fila valen los de fábrica
+ * (`RESCUE_SETTINGS_DEFAULTS` en `lib/salon/birthday-rescue.ts`): rescate solo a mano, ventana de cierre de 7 días y
+ * margen de 7 días sin atención reciente.
+ */
+export const birthdayRescueSettings = pgTable(
+  "birthday_rescue_settings",
+  {
+    id: text("id").primaryKey(), // prefix: 'brt'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** El barrido lanza el rescate solo, una vez al día dentro de la ventana de cierre. */
+    autoEnabled: boolean("auto_enabled").notNull().default(false),
+    /** El flujo MANUAL con que sale el rescate automático (si se borra, el automático avisa que no pudo salir). */
+    flowId: text("flow_id").references(() => automationFlow.id, { onDelete: "set null" }),
+    /** Ventana de cierre: el rescate sale cuando quedan estos días del mes o menos. */
+    windowDays: integer("window_days").notNull().default(7),
+    /** Margen: no se rescata a quien se atendió hace menos de estos días. */
+    minGapDays: integer("min_gap_days").notNull().default(7),
+    /** Hora local del negocio desde la que sale el rescate automático. */
+    sendHour: integer("send_hour").notNull().default(10),
+    /** Beneficio en palabras del negocio («20% de descuento», «un postre de cortesía»); vacío = el de Caja. */
+    benefitText: text("benefit_text"),
+    /** Último día (del negocio, AAAA-MM-DD) en que corrió el rescate automático: una pasada por día. */
+    lastAutoRunOn: text("last_auto_run_on"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("birthday_rescue_settings_org_uq").on(t.organizationId)]
+);
+
+/**
+ * Cumpleaños — control de los avisos de la campanita por envíos que fallaron o no salieron. Una fila por
+ * organización + llave (`tipo:flujo:periodo`); `count` es a cuántos clientes cubrió el último aviso: solo se vuelve
+ * a avisar si el número CRECE (nuevos afectados), nunca en cada pasada del barrido.
+ */
+export const birthdayAlert = pgTable(
+  "birthday_alert",
+  {
+    id: text("id").primaryKey(), // prefix: 'bra'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    count: integer("count").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("birthday_alert_org_key_uq").on(t.organizationId, t.key)]
+);
+
 
 
 /* ============================================================

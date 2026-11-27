@@ -1,3 +1,4 @@
+import { calendarDaysBetween } from "@/lib/automation";
 import type { automationStep } from "@/lib/db/schema";
 import { matchesQuery } from "@/lib/search";
 
@@ -299,6 +300,10 @@ export type BirthdayContactRow = {
   optedOut?: boolean;
   /** Paso 3 — tiene un chat REAL de WhatsApp (no del Laboratorio) al que enviar. Sin dato: no. */
   reachable?: boolean;
+  /** Rescate — última atención (cita `realizada` o venta), día del negocio `AAAA-MM-DD`. Sin dato: ninguna. */
+  lastVisit?: string | null;
+  /** Rescate — tiene una cita vigente (agendada, de hoy en adelante), aunque sea del mes que viene. */
+  upcomingBooking?: boolean;
 };
 
 /** Paso 3 — lo que se sabe del rescate del mes de un cliente, tal como sale de la base. */
@@ -340,6 +345,8 @@ export function buildBirthdayCampaign(input: {
   sales: readonly { contactId: string; count: number; cents: number }[];
   /** Paso 3 — el rescate del mes (sin él, nadie fue rescatado). */
   rescue?: BirthdayRescueRows;
+  /** Rescate — el día del negocio y el margen sin atención reciente (sin él, no hay margen). */
+  rescueRules?: { today: string; minGapDays: number };
 }): {
   clients: (BirthdayContactRow &
     BirthdayRowState & { optedOut: boolean; reachable: boolean; rescueBlock: RescueBlock | null })[];
@@ -394,7 +401,15 @@ export function buildBirthdayCampaign(input: {
     clients: joined.map(({ contact, state }) => {
       const optedOut = contact.optedOut ?? false;
       const reachable = contact.reachable ?? false;
-      return { ...contact, ...state, optedOut, reachable, rescueBlock: rescueBlock({ ...state, optedOut, reachable }) };
+      const rules = input.rescueRules;
+      const block = rescueBlock({
+        ...state,
+        optedOut,
+        reachable,
+        upcomingBooking: contact.upcomingBooking ?? false,
+        recentVisit: rules ? visitedRecently(contact.lastVisit ?? null, rules.today, rules.minGapDays) : false,
+      });
+      return { ...contact, ...state, optedOut, reachable, rescueBlock: block };
     }),
     kpis: computeBirthdayKpis(joined.map((j) => j.state)),
     flows: computeFlowBreakdown(input.flows, joined),
@@ -417,24 +432,47 @@ export function daysLeftInMonth(today: string): number {
   return last - Number(today.slice(8, 10));
 }
 
-/** Desde cuántos días antes del fin de mes se recomienda el rescate («Última oportunidad»). */
+/** Ventana de cierre por defecto: los últimos 7 días del mes (configurable por negocio). */
 export const RESCUE_SUGGESTED_DAYS_LEFT = 7;
 
+/** ¿Hoy está dentro de la ventana de cierre? Los últimos `windowDays` días del mes, contando hoy. */
+export function inClosingWindow(today: string, windowDays: number): boolean {
+  return daysLeftInMonth(today) < windowDays;
+}
+
+/** El día del mes en que abre la ventana de cierre. */
+export function closingWindowStartDay(today: string, windowDays: number): number {
+  const day = Number(today.slice(8, 10));
+  return Math.max(1, day + daysLeftInMonth(today) - windowDays + 1);
+}
+
+/**
+ * ¿Se atendió hace muy poco? Con la última atención (`AAAA-MM-DD`, día del negocio) a menos de `minGapDays` días de
+ * hoy, un «se te acaba el beneficio» sobra: acaba de venir. Sin atenciones o con margen 0, no.
+ */
+export function visitedRecently(lastVisit: string | null, today: string, minGapDays: number): boolean {
+  if (!lastVisit || minGapDays <= 0) return false;
+  const days = calendarDaysBetween(lastVisit, today);
+  return days >= 0 && days < minGapDays;
+}
+
 /** Por qué un cumpleañero NO entra al rescate (en orden de prioridad). */
-export const RESCUE_BLOCKS = ["converted", "booked", "already_rescued", "opted_out", "no_conversation"] as const;
+export const RESCUE_BLOCKS = ["converted", "booked", "already_rescued", "recent_visit", "opted_out", "no_conversation"] as const;
 export type RescueBlock = (typeof RESCUE_BLOCKS)[number];
 
 export const RESCUE_BLOCK_LABEL: Record<RescueBlock, string> = {
   converted: "Ya aprovechó",
   booked: "Ya tiene cita",
   already_rescued: "Ya recibió el rescate",
+  recent_visit: "Se atendió hace poco",
   opted_out: "Se dio de baja",
   no_conversation: "Sin chat de WhatsApp",
 };
 
 /**
- * ¿Entra al rescate del mes? Solo quien no reservó ni aprovechó, no recibió ya el rescate (aunque haya fallado:
- * nunca se reenvía en el mes), no se dio de baja y tiene un chat REAL de WhatsApp. `null` = entra.
+ * ¿Entra al rescate del mes? Solo quien no aprovechó, no tiene cita (en su mes ni una vigente más adelante), no
+ * recibió ya el rescate (aunque haya fallado: nunca se reenvía en el mes), no se atendió dentro del margen, no se dio
+ * de baja y tiene un chat REAL de WhatsApp. `null` = entra.
  */
 export function rescueBlock(r: {
   converted: boolean;
@@ -442,10 +480,15 @@ export function rescueBlock(r: {
   rescue: RescueState | null;
   optedOut: boolean;
   reachable: boolean;
+  /** Cita vigente fuera de la ventana (p. ej. reservó para el mes que viene). */
+  upcomingBooking?: boolean;
+  /** Se atendió dentro del margen mínimo. */
+  recentVisit?: boolean;
 }): RescueBlock | null {
   if (r.converted) return "converted";
-  if (r.booked) return "booked";
+  if (r.booked || r.upcomingBooking) return "booked";
   if (r.rescue !== null) return "already_rescued";
+  if (r.recentVisit) return "recent_visit";
   if (r.optedOut) return "opted_out";
   if (!r.reachable) return "no_conversation";
   return null;
@@ -455,12 +498,15 @@ export type RescueSummary = {
   /** `AAAA-MM`. */
   period: string;
   daysLeft: number;
-  /** ¿Ya conviene lanzarlo? (quedan `RESCUE_SUGGESTED_DAYS_LEFT` días o menos). */
+  /** ¿Hoy está dentro de la ventana de cierre? (solo entonces se puede lanzar). */
   suggested: boolean;
+  /** Ventana de cierre usada (días) y el día del mes en que abre. */
+  windowDays: number;
+  windowStartDay: number;
   /** Cumpleañeros a los que se les puede lanzar ahora. */
   eligible: number;
   /** De los que no reservaron ni aprovecharon ni fueron rescatados: cuántos quedan fuera y por qué. */
-  excluded: { opted_out: number; no_conversation: number };
+  excluded: { opted_out: number; no_conversation: number; recent_visit: number };
   /** Rescates lanzados este mes y cómo van. */
   launched: number;
   pending: number;
@@ -478,14 +524,20 @@ type RescueRowLike = Pick<BirthdayRowState, "rescue" | "booked" | "converted" | 
   rescueBlock: RescueBlock | null;
 };
 
-export function computeRescueSummary(rows: readonly RescueRowLike[], today: string): RescueSummary {
+export function computeRescueSummary(
+  rows: readonly RescueRowLike[],
+  today: string,
+  windowDays: number = RESCUE_SUGGESTED_DAYS_LEFT
+): RescueSummary {
   const daysLeft = daysLeftInMonth(today);
   const s: RescueSummary = {
     period: rescuePeriodOf(today),
     daysLeft,
-    suggested: daysLeft <= RESCUE_SUGGESTED_DAYS_LEFT,
+    suggested: inClosingWindow(today, windowDays),
+    windowDays,
+    windowStartDay: closingWindowStartDay(today, windowDays),
     eligible: 0,
-    excluded: { opted_out: 0, no_conversation: 0 },
+    excluded: { opted_out: 0, no_conversation: 0, recent_visit: 0 },
     launched: 0,
     pending: 0,
     delivered: 0,
@@ -497,7 +549,9 @@ export function computeRescueSummary(rows: readonly RescueRowLike[], today: stri
   };
   for (const r of rows) {
     if (r.rescueBlock === null) s.eligible += 1;
-    if (r.rescueBlock === "opted_out" || r.rescueBlock === "no_conversation") s.excluded[r.rescueBlock] += 1;
+    if (r.rescueBlock === "opted_out" || r.rescueBlock === "no_conversation" || r.rescueBlock === "recent_visit") {
+      s.excluded[r.rescueBlock] += 1;
+    }
     if (r.rescue === null) continue;
     s.launched += 1;
     s[r.rescue] += 1;

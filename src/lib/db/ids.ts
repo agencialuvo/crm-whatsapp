@@ -85,6 +85,9 @@ const prefixes = {
   birthdayGreeting: "bgr",
   // Cumpleaños: rescate de fin de mes («Última oportunidad»), uno por cliente y mes
   birthdayRescue: "brs",
+  // Cumpleaños: ajustes del rescate y control de avisos de la campanita
+  birthdayRescueSettings: "brt",
+  birthdayAlert: "bra",
   // Cuadre de caja y preferencias de vista
   cashRegisterShift: "shf",
   userUiPreferences: "pref",
