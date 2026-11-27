@@ -91,7 +91,7 @@ describe("un miembro del equipo (sin rol de configuración) → 403", () => {
     ["POST /api/kb", () => kb.POST(json("POST", { kind: "qa", question: "¿Envíos?", answer: "Sí" }))],
     ["PATCH /api/kb/[id]", () => kbId.PATCH(json("PATCH", { answer: "No" }), params)],
     ["DELETE /api/kb/[id]", () => kbId.DELETE(json("DELETE"), params)],
-    ["POST /api/lab/runs", () => runs.POST()],
+    ["POST /api/lab/runs", () => runs.POST(json("POST"))],
     ["POST /api/lab/suggestions/apply", () => apply.POST(json("POST", sugerencia))],
   ])("%s", async (_ruta, llamar) => {
     const res = await (llamar as () => Promise<Response>)();
@@ -142,7 +142,7 @@ describe("dueño o administrador: pasa el permiso y aplica los topes", () => {
   it("Laboratorio sin cupo → 429 lab_daily_limit con el mensaje", async () => {
     const { RunLimitError } = await import("@/server/lab/runner");
     startRun.mockRejectedValueOnce(new RunLimitError(5));
-    const res = await runs.POST();
+    const res = await runs.POST(json("POST"));
     expect(res.status).toBe(429);
     const body = await res.json();
     expect(body.error.code).toBe("lab_daily_limit");
@@ -151,7 +151,7 @@ describe("dueño o administrador: pasa el permiso y aplica los topes", () => {
 
   it("Laboratorio con cupo → 202", async () => {
     startRun.mockResolvedValueOnce("run_1");
-    const res = await runs.POST();
+    const res = await runs.POST(json("POST"));
     expect(res.status).toBe(202);
   });
 });

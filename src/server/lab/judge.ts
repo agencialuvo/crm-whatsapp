@@ -7,7 +7,8 @@ export const Verdict = z.object({
   veredicto: z.enum(["verde", "amarillo", "rojo"]),
   hallazgos: z.array(
     z.object({
-      tipo: z.enum(["alucinacion", "fuera_de_kb", "debio_escalar", "tono"]),
+      // Bloque 2 — `fuera_del_anuncio`: en una corrida de anuncio, se salió del servicio del anuncio.
+      tipo: z.enum(["alucinacion", "fuera_de_kb", "debio_escalar", "tono", "fuera_del_anuncio"]),
       evidencia: z.string(),
       sugerencia: z
         .object({ pregunta: z.string(), respuesta: z.string() })
@@ -34,12 +35,15 @@ export async function judgeCase(input: {
   transcript: { role: "cliente" | "agente"; text: string }[];
   kbText: string;
   behaviorText: string;
+  /** Bloque 2 — Corrida de anuncio: qué anuncio y qué flujo se simularon (`describirAnuncioParaJuez`). */
+  anuncioText?: string | null;
 }): Promise<JudgeOutcome> {
   const { system, user } = buildJudgePrompt({
     persona: input.personaKey,
     transcript: input.transcript,
     kbText: input.kbText,
     behaviorText: input.behaviorText,
+    anuncioText: input.anuncioText ?? null,
   });
   const result = await chatJson(
     Verdict,

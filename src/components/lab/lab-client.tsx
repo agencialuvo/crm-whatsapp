@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   FlaskConical,
+  Megaphone,
   Play,
   Sparkles,
   TrendingDown,
@@ -22,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { SearchSelect } from "@/components/ui/search-select";
 
 type Run = {
   id: string;
@@ -31,10 +33,24 @@ type Run = {
   startedAt: string;
   finishedAt: string | null;
   delta: number | null;
+  /** Bloque 2 — Corrida de anuncio: qué anuncio se simuló. */
+  ad?: { flowId: string | null; sourceId: string; headline: string | null } | null;
+};
+
+/** Bloque 2 — Un flujo de anuncio activo que se puede simular. */
+type AdFlowOption = { id: string; label: string };
+
+type AdFlowRows = {
+  items: {
+    sourceId: string;
+    headline: string | null;
+    adName?: string | null;
+    flow: { id: string; active: boolean; targetName: string | null; exclusive: boolean } | null;
+  }[];
 };
 
 type Hallazgo = {
-  tipo: "alucinacion" | "fuera_de_kb" | "debio_escalar" | "tono";
+  tipo: "alucinacion" | "fuera_de_kb" | "debio_escalar" | "tono" | "fuera_del_anuncio";
   evidencia: string;
   sugerencia?: { pregunta: string; respuesta: string };
 };
@@ -53,6 +69,7 @@ const TIPO_LABELS: Record<Hallazgo["tipo"], string> = {
   alucinacion: "Alucinación",
   fuera_de_kb: "Fuera del conocimiento",
   debio_escalar: "Debió escalar",
+  fuera_del_anuncio: "Se salió del anuncio",
   tono: "Tono",
 };
 
@@ -64,6 +81,25 @@ export function LabClient() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bloque 2 — Flujos de anuncio activos (vacío con la atribución apagada o sin flujos: no hay selector).
+  const [adFlows, setAdFlows] = useState<AdFlowOption[]>([]);
+  const [adFlowId, setAdFlowId] = useState("");
+
+  useEffect(() => {
+    void fetch("/api/settings/ad-flows")
+      .then((r) => (r.ok ? (r.json() as Promise<AdFlowRows>) : null))
+      .then((data) => {
+        const opciones = (data?.items ?? [])
+          .filter((i) => i.flow?.active)
+          .map((i) => {
+            const anuncio = i.adName || i.headline || i.sourceId;
+            const objetivo = i.flow!.targetName ? ` → ${i.flow!.targetName}` : "";
+            return { id: i.flow!.id, label: `${anuncio}${objetivo}${i.flow!.exclusive ? " (exclusivo)" : ""}` };
+          });
+        setAdFlows(opciones);
+      })
+      .catch(() => setAdFlows([]));
+  }, []);
 
   const refetchRuns = useCallback(async () => {
     const res = await fetch("/api/lab/runs").catch(() => null);
@@ -102,9 +138,16 @@ export function LabClient() {
   async function launch() {
     setLaunching(true);
     setError(null);
-    const res = await fetch("/api/lab/runs", { method: "POST" }).catch(() => null);
+    const res = await fetch("/api/lab/runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(adFlowId ? { adFlowId } : {}),
+    }).catch(() => null);
     setLaunching(false);
-    if (!res) return;
+    if (!res) {
+      setError("No hay conexión con el servidor. Inténtalo de nuevo.");
+      return;
+    }
     if (!res.ok) {
       const data = (await res.json().catch(() => null)) as {
         error?: { message?: string };
@@ -114,7 +157,7 @@ export function LabClient() {
     }
     const data = (await res.json()) as { runId: string };
     setSelectedRunId(data.runId);
-    setProgress({ done: 0, total: 6 });
+    setProgress({ done: 0, total: adFlowId ? 8 : 6 });
     void refetchRuns();
   }
 
@@ -152,6 +195,32 @@ export function LabClient() {
         onLaunch={() => void launch()}
         disabled={false}
       />
+      {adFlows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pt-3 sm:px-6">
+          <Label htmlFor="lab-ad-flow" className="flex items-center gap-1.5 text-sm">
+            <Megaphone className="h-4 w-4 text-primary" /> Simular llegada por anuncio
+          </Label>
+          <div className="w-full max-w-sm">
+            <SearchSelect
+              id="lab-ad-flow"
+              value={adFlowId}
+              onChange={setAdFlowId}
+              options={adFlows.map((f) => ({ value: f.id, label: f.label }))}
+              placeholder="Sin anuncio (corrida normal)"
+              emptyLabel="Sin anuncio (corrida normal)"
+              searchPlaceholder="Buscar anuncio…"
+              triggerClassName="bg-card"
+              disabled={running || launching}
+            />
+          </div>
+          {adFlowId && (
+            <p className="w-full text-xs text-muted-foreground">
+              Las conversaciones simuladas se portan como si hubieran llegado por ese anuncio, y se suman dos
+              clientes que vienen del anuncio. Nada se envía ni se registra como anuncio real.
+            </p>
+          )}
+        </div>
+      )}
       {error && <p className="px-4 pt-3 text-sm text-destructive sm:px-6">{error}</p>}
 
       {running && progress && (
@@ -268,6 +337,12 @@ function HistoryList({
               </span>
             )}
           </div>
+          {run.ad && (
+            <p className="mt-1 flex items-center gap-1 truncate text-[11px] font-medium text-brand-text">
+              <Megaphone className="h-3 w-3 shrink-0" />
+              <span className="truncate">Anuncio: {run.ad.headline || run.ad.sourceId}</span>
+            </p>
+          )}
           <p className="mt-1 text-[11px] text-muted-foreground">
             {new Date(run.startedAt).toLocaleString("es-MX", {
               day: "numeric",

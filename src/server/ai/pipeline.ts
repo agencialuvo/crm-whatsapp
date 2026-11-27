@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import type { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { getAttributionForConversation } from "@/server/attribution/store";
@@ -47,6 +48,7 @@ import { textoParaModelo } from "@/lib/agent/history";
 import { partirParaCanal } from "@/lib/agent/split";
 import { renderKbForPrompt } from "@/lib/kb-budget";
 import { revalidarTurno } from "@/server/ai/turn-guard";
+import { reforzarExclusivo } from "@/server/ai/exclusive-guard";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -155,6 +157,13 @@ async function executeTurn(conversationId: string): Promise<void> {
 export type TurnoLeido = { vistos: string[] };
 
 /**
+ * Bloque 2 — El anuncio por el que «llegó» una conversación del Laboratorio. Solo vale con `is_test`: el
+ * Laboratorio no escribe filas de `ad_attribution` (las leen Ajustes → Anuncios, las automatizaciones por
+ * anuncio y el catálogo de Meta, y una simulación no debe tocar nada de eso).
+ */
+export type AnuncioSimulado = { sourceId: string; headline: string | null; body: string | null };
+
+/**
  * Ejecuta UN turno del agente ahora (el Laboratorio lo llama directo, con
  * debounce 0 y sin pasar por el coalesce).
  *
@@ -164,7 +173,7 @@ export type TurnoLeido = { vistos: string[] };
  */
 export async function runAgentTurn(
   conversationId: string,
-  opciones: { debidos?: readonly string[] } = {}
+  opciones: { debidos?: readonly string[]; anuncioSimulado?: AnuncioSimulado | null } = {}
 ): Promise<TurnoLeido | undefined> {
   const db = getDb();
   const convRows = await db
@@ -204,12 +213,14 @@ export async function runAgentTurn(
   if (!conversation.isTest && (await isConversationSilenced(organizationId, conversationId))) return;
 
   // De qué anuncio llegó (si llegó de uno). Es contexto: si la consulta falla, el turno sigue sin él.
-  const attribution = await getAttributionForConversation(organizationId, conversationId).catch(
-    (err) => {
-      console.error("[agente] no se pudo leer el anuncio de origen:", err);
-      return null;
-    }
-  );
+  // Bloque 2 — En el Laboratorio, el anuncio simulado de la corrida; en producción nunca (no es `is_test`).
+  const attribution =
+    conversation.isTest && opciones.anuncioSimulado
+      ? opciones.anuncioSimulado
+      : await getAttributionForConversation(organizationId, conversationId).catch((err) => {
+          console.error("[agente] no se pudo leer el anuncio de origen:", err);
+          return null;
+        });
 
   // Enrutamiento por anuncio: si ese anuncio tiene un flujo activo, el agente persigue SU servicio u oferta.
   // Apagada `ATRIBUCION` no consulta nada; y un fallo degrada al comportamiento genérico del anuncio.
@@ -410,7 +421,8 @@ export async function runAgentTurn(
   });
   if (meter.blocked) return leido;
 
-  const result = await chatJson(agentActionSchema(agenda), messages, {
+  const esquemaTurno = agentActionSchema(agenda) as z.ZodType<AgentActionType>;
+  const result = await chatJson(esquemaTurno, messages, {
     organizationId,
     usage: meter.usage,
   });
@@ -423,6 +435,19 @@ export async function runAgentTurn(
     await applyHandoff(conversationId, organizationId, "error");
     return leido;
   }
+
+  // Bloque 2 — Anuncio EXCLUSIVO: la directiva del prompt no basta como garantía. Se revisa lo que saldría
+  // (otro servicio ofrecido o cotizado), con un reintento corregido y, si no basta, una respuesta segura.
+  const turno = await reforzarExclusivo({
+    organizationId,
+    conversationId,
+    adFlow,
+    result,
+    schema: esquemaTurno,
+    messages,
+    ultimoDelCliente: lastInbound.text,
+    usage: meter.usage,
+  });
 
   // Mejora 11 — La llamada al modelo (con reintentos) puede tardar minutos. Antes de actuar se relee el estado:
   // si apagaron la IA, la traspasaron, se apagó el agente o una persona contestó desde la Bandeja, el agente no
@@ -441,7 +466,7 @@ export async function runAgentTurn(
 
   const entrega: EstadoEntrega = { fallo: false };
   await ejecutarAccion(
-    { conversation, action: result.data, agenda, equipoAgenda, adFlow, stages },
+    { conversation, action: turno.data, agenda, equipoAgenda, adFlow, stages },
     entrega
   );
   // Mejora 7 — Se cobra lo que llegó al cliente. Si el envío falló (y ya se traspasó y avisó al equipo), el

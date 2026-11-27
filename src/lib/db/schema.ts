@@ -1899,6 +1899,14 @@ export const agentTestRun = pgTable(
       .default("running"),
     score: integer("score"),
     error: text("error"),
+    /**
+     * Bloque 2 — Corrida «de anuncio»: el flujo de anuncio que se simuló (sus conversaciones `is_test` se
+     * comportan como si hubieran llegado por ese anuncio). Se copia el `source_id` y el titular por si el flujo
+     * se borra después: el historial sigue diciendo qué se probó. NULL = corrida normal.
+     */
+    adFlowId: text("ad_flow_id"),
+    adSourceId: text("ad_source_id"),
+    adHeadline: text("ad_headline"),
     startedAt: timestamp("started_at").notNull().defaultNow(),
     finishedAt: timestamp("finished_at"),
   },

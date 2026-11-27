@@ -7,6 +7,7 @@ import { findContactByIdentity } from "@/server/inbox/identity";
 import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
 import { windowMsFor } from "@/server/channels/capabilities";
 import { citasParaContexto } from "@/server/agenda/context";
+import { adParaBot } from "@/server/bot/anuncio";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,10 @@ export const dynamic = "force-dynamic";
  * conversación. Lo que aquí sale es lo que solo el CRM sabe — quién es la
  * persona, si un humano tomó el control y si la ventana de 24 h sigue abierta
  * (y, con la agenda encendida, qué citas tiene: `booking`).
+ *
+ * Bloque 2 — Con `ATRIBUCION` encendida, `ad`: de qué anuncio llegó la conversación y el flujo activo de ese
+ * anuncio (servicio u oferta objetivo con sus datos oficiales, `exclusive` y reglas), para que el cerebro
+ * externo enrute igual que el agente incluido. Ver `server/bot/anuncio.ts`.
  */
 export async function GET(req: Request) {
   const denied = requireBotKey(req);
@@ -90,7 +95,7 @@ export async function GET(req: Request) {
     return apiError(404, "not_found", "Conversación no encontrada");
   }
 
-  const [leadRows, booking] = await Promise.all([
+  const [leadRows, booking, ad] = await Promise.all([
     db
       .select({ lead: schema.lead, stage: schema.pipelineStage })
       .from(schema.lead)
@@ -106,6 +111,7 @@ export async function GET(req: Request) {
       )
       .limit(1),
     citasParaContexto(organizationId, contact.id),
+    adParaBot(organizationId, conversation.id),
   ]);
 
   return Response.json({
@@ -147,5 +153,10 @@ export async function GET(req: Request) {
      * y uno que no lo lee no cambia. Aditivo.
      */
     ...(booking ? { booking } : {}),
+    /**
+     * Bloque 2 — El anuncio de origen y su flujo activo. FALTA con la atribución apagada (o si no se pudo
+     * leer); `null` = no llegó por un anuncio. Aditivo.
+     */
+    ...(ad !== undefined ? { ad } : {}),
   });
 }

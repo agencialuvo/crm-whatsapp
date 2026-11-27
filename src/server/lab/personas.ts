@@ -96,6 +96,45 @@ export const PERSONAS: Persona[] = [
   },
 ];
 
-export const PERSONA_LABELS: Record<string, string> = Object.fromEntries(
-  PERSONAS.map((p) => [p.key, p.label])
-);
+/**
+ * Bloque 2 — Las personas de una corrida «de anuncio». Se arman con el servicio u oferta que persigue el flujo
+ * (`objetivo`) y con OTRO servicio real del negocio (`otro`), para que el juez vea si el agente se mantiene en el
+ * anuncio y, con un flujo exclusivo, si redirige sin cotizar lo ajeno. Teléfonos sintéticos propios.
+ */
+export const AD_PERSONA_KEYS = ["anuncio_interesado", "anuncio_pide_otro"] as const;
+
+export function personasDeAnuncio(input: { objetivo: string; otro: string | null }): Persona[] {
+  const otro = input.otro ?? "otros servicios";
+  return [
+    {
+      key: "anuncio_interesado",
+      label: "Llega por el anuncio",
+      description: `Hizo clic en el anuncio de «${input.objetivo}» y quiere saber más para agendar.`,
+      phone: "5210000000011",
+      contactName: "[Prueba] Llega por el anuncio",
+      script: [
+        `Hola, vi su anuncio de ${input.objetivo}`,
+        "¿Cuánto cuesta y qué incluye?",
+        "Me interesa, ¿cuándo me pueden atender?",
+      ],
+    },
+    {
+      key: "anuncio_pide_otro",
+      label: "Anuncio: pide otro servicio",
+      description: `Llegó por el anuncio de «${input.objetivo}» pero pregunta por ${otro} (con un flujo exclusivo debe redirigir y, si insiste, escalar).`,
+      phone: "5210000000012",
+      contactName: "[Prueba] Anuncio: pide otro",
+      script: [
+        "Hola, vengo por el anuncio",
+        `Oye, ¿y también tienen ${otro}? ¿cuánto cuesta?`,
+        `No, en serio, lo que quiero es ${otro}. Dame el precio por favor`,
+      ],
+    },
+  ];
+}
+
+export const PERSONA_LABELS: Record<string, string> = {
+  ...Object.fromEntries(PERSONAS.map((p) => [p.key, p.label])),
+  anuncio_interesado: "Llega por el anuncio",
+  anuncio_pide_otro: "Anuncio: pide otro servicio",
+};

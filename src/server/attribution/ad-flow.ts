@@ -277,3 +277,13 @@ export async function hasActiveAdFlow(organizationId: string, sourceId: string |
   if (!sourceId) return false;
   return (await findActiveAdFlow(organizationId, sourceId)) !== null;
 }
+
+/** Bloque 2 — El flujo ACTIVO por su id (lo elige el dueño para una corrida del Laboratorio), o null. */
+export async function findActiveAdFlowById(organizationId: string, id: string): Promise<FlowRow | null> {
+  const [row] = await getDb()
+    .select()
+    .from(flow)
+    .where(scoped(flow.organizationId, organizationId, and(eq(flow.id, id), eq(flow.active, true))))
+    .limit(1);
+  return row ?? null;
+}

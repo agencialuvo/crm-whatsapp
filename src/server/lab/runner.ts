@@ -2,10 +2,11 @@ import { and, asc, count, eq, gte } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
-import { runAgentTurn } from "@/server/ai/pipeline";
-import { renderKb } from "@/server/ai/prompts";
+import { runAgentTurn, type AnuncioSimulado } from "@/server/ai/pipeline";
+import { describirAnuncioParaJuez, renderKb } from "@/server/ai/prompts";
+import { getAdFlowContext, loadRivalOfferNames } from "@/server/ai/ad-flow-context";
 import { computeScore, judgeCase } from "@/server/lab/judge";
-import { PERSONAS, type Persona } from "@/server/lab/personas";
+import { AD_PERSONA_KEYS, PERSONAS, personasDeAnuncio, type Persona } from "@/server/lab/personas";
 import { scoped } from "@/lib/db/tenant";
 import {
   LAB_MAX_CASES,
@@ -73,8 +74,15 @@ async function runsInWindow(organizationId: string, now: Date): Promise<number> 
   return row?.n ?? 0;
 }
 
-export async function startRun(organizationId: string): Promise<string> {
+/** Bloque 2 — El flujo de anuncio que simula una corrida (lo valida la ruta: activo y de esta organización). */
+export type AnuncioDeCorrida = { flowId: string; sourceId: string; headline: string | null };
+
+export async function startRun(
+  organizationId: string,
+  opts: { anuncio?: AnuncioDeCorrida | null } = {}
+): Promise<string> {
   const db = getDb();
+  const anuncio = opts.anuncio ?? null;
   // Mejora 8 — Cupo diario. La corrida en curso ya está limitada a una por el índice parcial UNIQUE.
   const limite = await labRunLimitFor(organizationId);
   if ((await runsInWindow(organizationId, new Date())) >= limite) {
@@ -84,7 +92,14 @@ export async function startRun(organizationId: string): Promise<string> {
   try {
     const inserted = await db
       .insert(schema.agentTestRun)
-      .values({ id: newId("testRun"), organizationId, status: "running" })
+      .values({
+        id: newId("testRun"),
+        organizationId,
+        status: "running",
+        adFlowId: anuncio?.flowId ?? null,
+        adSourceId: anuncio?.sourceId ?? null,
+        adHeadline: anuncio?.headline ?? null,
+      })
       .returning();
     runId = inserted[0]!.id;
   } catch (err) {
@@ -95,13 +110,15 @@ export async function startRun(organizationId: string): Promise<string> {
     throw err;
   }
 
-  // Mejora 8 — Tope de casos por corrida.
+  // Mejora 8 — Tope de casos por corrida. Bloque 2 — En una corrida de anuncio, primero las personas que
+  // llegan por el anuncio (sus guiones se arman al correr, con el servicio del flujo).
+  const claves = [...(anuncio ? AD_PERSONA_KEYS : []), ...PERSONAS.map((p) => p.key)];
   await db.insert(schema.agentTestCase).values(
-    PERSONAS.slice(0, LAB_MAX_CASES).map((p) => ({
+    claves.slice(0, LAB_MAX_CASES).map((key) => ({
       id: newId("testCase"),
       organizationId,
       runId,
-      persona: p.key,
+      persona: key,
       status: "pending" as const,
     }))
   );
@@ -166,12 +183,34 @@ async function runAllCases(
         .join("\n")
     : "";
 
+  // Bloque 2 — ¿Corrida de anuncio? El anuncio simulado viaja al turno (solo `is_test`) y al juez.
+  const [run] = await db
+    .select({ adSourceId: schema.agentTestRun.adSourceId, adHeadline: schema.agentTestRun.adHeadline })
+    .from(schema.agentTestRun)
+    .where(scoped(schema.agentTestRun.organizationId, organizationId, eq(schema.agentTestRun.id, runId)))
+    .limit(1);
+  const anuncio: AnuncioSimulado | null = run?.adSourceId
+    ? { sourceId: run.adSourceId, headline: run.adHeadline, body: null }
+    : null;
+  let personasAnuncio: Persona[] = [];
+  let anuncioText: string | null = null;
+  if (anuncio) {
+    // El flujo pudo cambiar o desactivarse desde que se lanzó: se lee AHORA, igual que el agente.
+    const adFlow = await getAdFlowContext(organizationId, anuncio.sourceId).catch(() => null);
+    const otro = (await loadRivalOfferNames(organizationId, adFlow?.target ?? null).catch(() => []))[0] ?? null;
+    personasAnuncio = personasDeAnuncio({
+      objetivo: adFlow?.target?.name ?? anuncio.headline ?? "su servicio",
+      otro,
+    });
+    anuncioText = describirAnuncioParaJuez({ headline: anuncio.headline, sourceId: anuncio.sourceId, adFlow });
+  }
+
   let done = 0;
   const total = cases.length;
   publishProgress(organizationId, runId, "running", done, total);
 
   for (const testCase of cases) {
-    const persona = PERSONAS.find((p) => p.key === testCase.persona);
+    const persona = [...personasAnuncio, ...PERSONAS].find((p) => p.key === testCase.persona);
     if (!persona) continue;
 
     await db
@@ -181,7 +220,8 @@ async function runAllCases(
 
     const { transcript, conversationId } = await runConversation(
       organizationId,
-      persona
+      persona,
+      anuncio
     );
 
     const outcome = await judgeCase({
@@ -190,6 +230,7 @@ async function runAllCases(
       transcript,
       kbText,
       behaviorText,
+      anuncioText,
     });
 
     await db
@@ -226,7 +267,8 @@ async function runAllCases(
 /** Conversa el guion completo contra el agente real; corta al primer handoff. */
 async function runConversation(
   organizationId: string,
-  persona: Persona
+  persona: Persona,
+  anuncio: AnuncioSimulado | null = null
 ): Promise<{
   transcript: { role: "cliente" | "agente"; text: string }[];
   conversationId: string;
@@ -264,7 +306,7 @@ async function runConversation(
       .where(eq(schema.conversation.id, convId));
 
     // Turno REAL del agente, secuencial y sin debounce (FR-030).
-    await runAgentTurn(convId);
+    await runAgentTurn(convId, { anuncioSimulado: anuncio });
 
     const convRows = await db
       .select({ handoffAt: schema.conversation.handoffAt })

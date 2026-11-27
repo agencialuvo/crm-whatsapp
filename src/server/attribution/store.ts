@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { shouldReplaceAttribution } from "@/lib/ad-flow";
 import { hasActiveAdFlow } from "@/server/attribution/ad-flow";
 import { emitAdReferral } from "@/server/automation/ad-referral";
@@ -185,8 +185,9 @@ export async function getAttributionForConversation(
     .select()
     .from(schema.adAttribution)
     .where(
-      and(
-        eq(schema.adAttribution.organizationId, organizationId),
+      scoped(
+        schema.adAttribution.organizationId,
+        organizationId,
         eq(schema.adAttribution.conversationId, conversationId)
       )
     )

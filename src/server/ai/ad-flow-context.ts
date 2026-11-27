@@ -118,3 +118,40 @@ async function loadTarget(
     providers: providers && providers.length > 0 ? providers : null,
   };
 }
+
+/**
+ * Bloque 2 — Los nombres de los OTROS servicios y ofertas activos del negocio (todo menos el objetivo del
+ * anuncio): lo que un flujo exclusivo no debe ofrecer ni cotizar. Lo usa la validación de salida del agente
+ * (`exclusive-guard.ts`) y el Laboratorio (para la persona que pide otro servicio).
+ */
+export async function loadRivalOfferNames(
+  organizationId: string,
+  target: Pick<AdFlowTarget, "kind" | "id"> | null
+): Promise<string[]> {
+  const db = getDb();
+  const [services, combos] = await Promise.all([
+    db
+      .select({ id: schema.service.id, name: schema.service.name })
+      .from(schema.service)
+      // «Otro» es el comodín de Caja, no una oferta: su nombre es una palabra común y daría falsos positivos.
+      .where(
+        scoped(
+          schema.service.organizationId,
+          organizationId,
+          eq(schema.service.active, true),
+          eq(schema.service.isOther, false)
+        )
+      ),
+    db
+      .select({ id: schema.combo.id, name: schema.combo.name })
+      .from(schema.combo)
+      .where(scoped(schema.combo.organizationId, organizationId, eq(schema.combo.active, true))),
+  ]);
+  const fuera = (kind: "service" | "combo", id: string) => target?.kind === kind && target.id === id;
+  return [
+    ...services.filter((s) => !fuera("service", s.id)).map((s) => s.name),
+    ...combos.filter((c) => !fuera("combo", c.id)).map((c) => c.name),
+  ]
+    .map((n) => n.trim())
+    .filter(Boolean);
+}

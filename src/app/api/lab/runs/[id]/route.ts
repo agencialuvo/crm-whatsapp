@@ -39,6 +39,8 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
       error: run.error,
       startedAt: run.startedAt.toISOString(),
       finishedAt: run.finishedAt?.toISOString() ?? null,
+      // Bloque 2 — Corrida de anuncio: qué anuncio se simuló.
+      ad: run.adSourceId ? { flowId: run.adFlowId, sourceId: run.adSourceId, headline: run.adHeadline } : null,
     },
     cases: cases.map((c) => ({
       id: c.id,
