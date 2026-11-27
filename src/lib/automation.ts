@@ -210,6 +210,37 @@ export function bookingGuard(triggerType: string, booking: { status: string } | 
   return booking.status === "agendada" ? null : "booking_not_active";
 }
 
+/**
+ * Bloque 3 — La hora de la cita a la que quedó anclada una ejecución (`automation_run.context.bookingAt`, ISO).
+ * La escribe el disparador de cita al encolar.
+ */
+export const BOOKING_ANCHOR_KEY = "bookingAt";
+
+/**
+ * Bloque 3 — ¿La cita se movió desde que arrancó esta ejecución? Pura.
+ *
+ * `bookingGuard` mira solo el ESTADO, y una cita reprogramada sigue «agendada». Al reprogramar se cancela lo
+ * pendiente y se rearma el flujo con la hora nueva (`onBookingRescheduled`), pero si esa cancelación falla, la
+ * ejecución vieja seguiría viva: dos recordatorios, y uno a destiempo. Esta es la red de seguridad: si la hora
+ * anclada ya no es la de la cita, la tarea se cancela como `booking_rescheduled`.
+ *
+ * Solo aplica a lo que depende de la hora (`booking_created`, `booking_confirmed`). Sin ancla (una ejecución
+ * anterior a este cambio) o con un ancla ilegible, no decide nada: queda la regla de siempre.
+ */
+export function bookingAnchorGuard(
+  triggerType: string,
+  context: Record<string, unknown> | null | undefined,
+  booking: { scheduledAt: Date } | null
+): "booking_rescheduled" | null {
+  if (triggerType !== "booking_created" && triggerType !== "booking_confirmed") return null;
+  if (!booking) return null;
+  const anclada = context?.[BOOKING_ANCHOR_KEY];
+  if (typeof anclada !== "string") return null;
+  const ms = Date.parse(anclada);
+  if (Number.isNaN(ms)) return null;
+  return ms === booking.scheduledAt.getTime() ? null : "booking_rescheduled";
+}
+
 /* ─── Acciones de CRM: etiquetas y etapa ─── */
 
 const entityId = z.string().trim().min(1).max(64);

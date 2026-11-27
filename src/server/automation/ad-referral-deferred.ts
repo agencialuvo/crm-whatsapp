@@ -1,4 +1,4 @@
-import { gte, inArray } from "drizzle-orm";
+import { eq, gte, inArray } from "drizzle-orm";
 import { adReferralDedupeKey, adReferralDedupeKeyFor, adScopeOf, matchesAdTrigger, parseAdReferralConfig, type AdHierarchy } from "@/lib/automation";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
@@ -44,10 +44,20 @@ export async function emitDeferredAdReferrals(
     const hierarchies = new Map<string, AdHierarchy>();
     for (const lote of chunk([...new Set(adIds)], 500)) {
       if (lote.length === 0) continue;
+      // Bloque 3 — Solo atribuciones de conversaciones REALES: una del Laboratorio (`is_test`) jamás arranca flujos.
       const rows = await getDb()
         .select({ contactId: a.contactId, sourceId: a.sourceId, headline: a.headline })
         .from(a)
-        .where(scoped(a.organizationId, organizationId, inArray(a.sourceId, lote), gte(a.createdAt, cutoff)));
+        .innerJoin(schema.conversation, eq(schema.conversation.id, a.conversationId))
+        .where(
+          scoped(
+            a.organizationId,
+            organizationId,
+            inArray(a.sourceId, lote),
+            gte(a.createdAt, cutoff),
+            eq(schema.conversation.isTest, false)
+          )
+        );
       for (const r of rows) {
         if (!r.sourceId) continue;
         let h = hierarchies.get(r.sourceId);

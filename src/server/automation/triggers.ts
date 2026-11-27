@@ -19,6 +19,7 @@ import {
   stampFlowMatches,
   tagAddedDedupeKey,
   tagFlowMatches,
+  BOOKING_ANCHOR_KEY,
 } from "@/lib/automation";
 import type { LoyaltyMilestone } from "@/lib/db/schema";
 import { todayInTz } from "@/lib/time/slots";
@@ -331,6 +332,9 @@ async function enqueueBookingFlows(
       contactId: input.contactId,
       dedupeKey,
       bookingId: input.bookingId,
+      // Bloque 3 — La hora a la que queda anclada la ejecución: el motor la compara antes de cada paso
+      // (`bookingAnchorGuard`) y cancela si la cita se movió y la cancelación inmediata no alcanzó.
+      context: { [BOOKING_ANCHOR_KEY]: input.scheduledAt.toISOString() },
     },
     store,
     now

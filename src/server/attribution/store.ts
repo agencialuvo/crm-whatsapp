@@ -47,7 +47,13 @@ export async function registrarAnuncioDeOrigen(input: {
   contactId: string;
   conversationId: string;
   anuncio: AnuncioDeOrigen;
+  /**
+   * Bloque 3 — Conversación del Laboratorio: no se registra NADA (ni la fila, ni la cola de la Marketing API, ni
+   * los flujos `ad_referral`). Hoy la ingesta solo usa conversaciones reales; esto lo garantiza aunque cambie.
+   */
+  isTest?: boolean;
 }): Promise<void> {
+  if (input.isTest) return;
   const db = getDb();
   const a = anuncioParaGuardar(input.anuncio);
   const creadas = await db

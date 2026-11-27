@@ -481,6 +481,7 @@ export async function ingestInboundMessage(input: {
         contactId: contact.id,
         conversationId: conversation.id,
         anuncio: input.anuncio,
+        isTest: conversation.isTest,
       });
     } catch (err) {
       console.warn(

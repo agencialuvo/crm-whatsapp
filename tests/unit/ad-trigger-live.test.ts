@@ -368,4 +368,29 @@ describe.skipIf(!live)("Disparador por campaña/conjunto/anuncio contra Postgres
       await db.delete(schema.organization).where(eq(schema.organization.id, vacia));
     }
   });
+
+  it("17. Bloque 3 — el Laboratorio (is_test) jamás arranca flujos de anuncio: ni al registrar ni en la re-evaluación diferida", async () => {
+    const ad = { adId: `T1${uid}`, adsetId: `TS1${uid}`, campaignId: `TC1${uid}`, adName: "Lab", campaignName: "Camp lab" };
+    await seedAd({ adId: `T0${uid}`, adsetId: `TS0${uid}`, campaignId: ad.campaignId, campaignName: "Camp lab" });
+    const porCampania = await mkFlow({ campaignId: ad.campaignId });
+    const cualquiera = await mkFlow();
+    // El contacto TIENE conversación real (así `hasRealConversation` no lo frena): lo que se prueba es el filtro
+    // por la conversación de la atribución.
+    const { contactId } = await mkContact();
+    const convLab = `cv_adtlab${uid}`;
+    await db.insert(schema.conversation).values({ id: convLab, organizationId: org, contactId, isTest: true, lastInboundAt: new Date() });
+    created.convs.push(convLab);
+
+    // a) registrar desde una conversación del Laboratorio: no deja fila ni arranca nada
+    await attribution.registrarAnuncioDeOrigen({ organizationId: org, contactId, conversationId: convLab, anuncio: anuncio(ad.adId), isTest: true });
+    const filas = await db.select().from(schema.adAttribution).where(eq(schema.adAttribution.conversationId, convLab));
+    expect(filas).toHaveLength(0);
+    expect((await runsOf(cualquiera.id, contactId)).length).toBe(0);
+
+    // b) una fila de atribución de una conversación is_test (escrita por otro camino) no se re-evalúa al sincronizar
+    await db.insert(schema.adAttribution).values({ id: `ada_lab${uid}`, organizationId: org, contactId, conversationId: convLab, sourceId: ad.adId, sourceType: "ad", raw: {} });
+    await catalog.markSynced(org, [nodeOf(ad)], new Date());
+    expect(await deferred.emitDeferredAdReferrals(org, [ad.adId])).toBe(0);
+    expect((await runsOf(porCampania.id, contactId)).length).toBe(0);
+  });
 });

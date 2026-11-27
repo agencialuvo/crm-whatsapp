@@ -230,6 +230,35 @@ describe.skipIf(!live)("automatizaciones de citas contra Postgres", () => {
     expect((await rowsOf(flowId))[0]).toMatchObject({ status: "cancelled", error: "booking_not_active" });
   });
 
+  it("Bloque 3 — la ejecución queda anclada a la hora de la cita (context.bookingAt)", async () => {
+    const flowId = await makeFlow("booking_created", [SEND()]);
+    const startsAt = new Date(Date.now() + 9 * 3_600_000);
+    const bookingId = await makeBooking(startsAt);
+    const { onBookingCreated } = await import("@/server/automation/triggers");
+    await onBookingCreated({ organizationId: org, bookingId, contactId, scheduledAt: startsAt });
+    const [run] = await db.select().from(schema.automationRun).where(eq(schema.automationRun.flowId, flowId));
+    expect(run?.context).toMatchObject({ bookingId, bookingAt: startsAt.toISOString() });
+  });
+
+  it("Bloque 3 — red de seguridad: si la cita se MOVIÓ sin cancelar lo pendiente, la tarea vieja se cancela (booking_rescheduled) y no envía", async () => {
+    const flowId = await makeFlow("booking_created", [SEND()]);
+    const startsAt = new Date(Date.now() + 10 * 3_600_000);
+    const bookingId = await makeBooking(startsAt);
+    const { onBookingCreated } = await import("@/server/automation/triggers");
+    await onBookingCreated({ organizationId: org, bookingId, contactId, scheduledAt: startsAt });
+    // Se mueve directo en la base: la cancelación inmediata de `onBookingRescheduled` nunca corrió.
+    await db
+      .update(schema.booking)
+      .set({ scheduledAt: new Date(startsAt.getTime() + 2 * 3_600_000) })
+      .where(eq(schema.booking.id, bookingId));
+
+    const [row] = await rowsOf(flowId);
+    const t = deps();
+    expect(await engine.processRow(row as never, t.d)).toBe("cancelled");
+    expect(t.sendText).not.toHaveBeenCalled();
+    expect((await rowsOf(flowId))[0]).toMatchObject({ status: "cancelled", error: "booking_rescheduled" });
+  });
+
   it("crear la cita desde la agenda dispara el flujo (camino real: createSessionBooking)", async () => {
     const flowId = await makeFlow("booking_created", [{ stepType: "wait_until", config: WAIT }, SEND()]);
     const startsAt = await freeSlot();

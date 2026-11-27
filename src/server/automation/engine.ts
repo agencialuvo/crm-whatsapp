@@ -4,6 +4,7 @@ import {
   addTagConfigSchema,
   applySendWindow,
   backoffMs,
+  bookingAnchorGuard,
   bookingGuard,
   codeJsConfigSchema,
   conditionConfigSchema,
@@ -259,6 +260,15 @@ export async function processRow(row: Row, deps: Deps): Promise<Outcome> {
       if (stale) {
         await deps.markCancelled(row, stale);
         return "cancelled";
+      }
+      // Bloque 3 — Sigue «agendada», pero ¿a la misma hora? Si se movió, esta ejecución quedó anclada a la hora
+      // vieja (la reprogramación ya arrancó otra con la nueva): se cancela en vez de enviar a destiempo.
+      if (row.runId && deps.runContext) {
+        const movida = bookingAnchorGuard(trigger ?? "", await deps.runContext(row.organizationId, row.runId), booking);
+        if (movida) {
+          await deps.markCancelled(row, movida);
+          return "cancelled";
+        }
       }
     }
 
