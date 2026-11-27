@@ -12,7 +12,7 @@ import { chatJson, type ChatMessage } from "@/lib/ai";
 import { isAiConfiguredFor } from "@/lib/ai/provider";
 import { publish } from "@/server/events/bus";
 import { isWindowOpen } from "@/server/inbox/window";
-import { windowMsFor } from "@/server/channels/capabilities";
+import { textFits, windowMsFor } from "@/server/channels/capabilities";
 import { SendError, sendText } from "@/server/inbox/send";
 import {
   agentActionSchema,
@@ -41,6 +41,12 @@ import { notifyHandoff } from "@/server/notifications/service";
 import { getComboTriggerInstruction } from "@/server/ai/barbershop-context";
 import { isConversationSilenced } from "@/server/ai/ignored";
 import { beginAiTurnMeter } from "@/server/ai/metering";
+import { loadTemporalContext } from "@/server/ai/turn-context";
+import { appendAiNote } from "@/lib/agent/notes";
+import { textoParaModelo } from "@/lib/agent/history";
+import { partirParaCanal } from "@/lib/agent/split";
+import { renderKbForPrompt } from "@/lib/kb-budget";
+import { revalidarTurno } from "@/server/ai/turn-guard";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -49,6 +55,12 @@ import { beginAiTurnMeter } from "@/server/ai/metering";
  * respuesta; nunca dos turnos simultáneos; lo que llega durante un turno
  * re-encola exactamente un turno más. Suficiente para el monolito de una
  * instancia (sin colas externas — Constitución II).
+ *
+ * LIMITACIÓN CONOCIDA: el agrupado vive en memoria. Si el proceso se reinicia
+ * durante la espera del debounce (`AGENT_COALESCE_MS`) o a mitad de un turno,
+ * ese turno se pierde y el mensaje queda en la Bandeja sin respuesta de la IA
+ * (no se reintenta al arrancar). Tampoco sirve con varias réplicas: cada una
+ * tendría su propio mapa. Es una decisión de diseño del monolito, no un error.
  *
  * 025 — La entrada lleva además qué entrantes DEBE el siguiente turno. Lo que
  * el cliente escribe mientras el modelo piensa queda, por hora, antes de la
@@ -177,7 +189,7 @@ export async function runAgentTurn(
   const profileRows = await db
     .select()
     .from(schema.agentProfile)
-    .where(eq(schema.agentProfile.organizationId, organizationId))
+    .where(scoped(schema.agentProfile.organizationId, organizationId))
     .limit(1);
   const profile = profileRows[0];
   if (!profile) return;
@@ -212,7 +224,13 @@ export async function runAgentTurn(
   const recientes = await db
     .select()
     .from(schema.message)
-    .where(eq(schema.message.conversationId, conversationId))
+    .where(
+      scoped(
+        schema.message.organizationId,
+        organizationId,
+        eq(schema.message.conversationId, conversationId)
+      )
+    )
     .orderBy(desc(schema.message.createdAt))
     .limit(20);
   recientes.reverse();
@@ -274,13 +292,21 @@ export async function runAgentTurn(
   const kb = await db
     .select()
     .from(schema.kbEntry)
-    .where(eq(schema.kbEntry.organizationId, organizationId))
+    .where(scoped(schema.kbEntry.organizationId, organizationId))
     .orderBy(asc(schema.kbEntry.createdAt));
   const stages = await db
     .select({ id: schema.pipelineStage.id, name: schema.pipelineStage.name })
     .from(schema.pipelineStage)
-    .where(eq(schema.pipelineStage.organizationId, organizationId))
+    .where(scoped(schema.pipelineStage.organizationId, organizationId))
     .orderBy(asc(schema.pipelineStage.position));
+
+  // Mejora 5 — Un conocimiento por encima del tope se recorta en el prompt: que quede registrado.
+  const kbOmitidas = renderKbForPrompt(kb).omitted;
+  if (kbOmitidas > 0) {
+    console.warn(
+      `[agente] ${organizationId}: el conocimiento pasa del tope; ${kbOmitidas} entrada(s) no entran al prompt.`
+    );
+  }
 
   // La agenda del agente exige la bandera Y que el plan la incluya (sin plan, sin restricción).
   const agenda = agendaEnabled() && (await getPlanAccess(organizationId).then((a) => a.unrestricted || a.modules.includes("agenda")));
@@ -330,6 +356,11 @@ export async function runAgentTurn(
       })
     : null;
 
+  // Mejora 1 — El «ahora» del negocio (fecha, hora, zona y, con agenda, su horario). Nunca lanza.
+  const temporal = await loadTemporalContext(organizationId, { agenda });
+  // Mejora 10 — Los pies de foto de los adjuntos del historial (solo si hay adjuntos).
+  const captions = await captionsDe(organizationId, history);
+
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -341,14 +372,22 @@ export async function runAgentTurn(
         agendaStaff: equipoAgenda,
         anuncio: attribution ? { headline: attribution.headline, body: attribution.body } : null,
         adFlow,
+        contextoTemporal: temporal,
       }),
     },
-    ...history
-      .filter((m) => m.text)
-      .map((m) => ({
-        role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
-        content: m.text!,
-      })),
+    // Mejora 10 — Ningún mensaje se descarta por no tener texto: una nota de voz o una foto llegan como un
+    // marcador («[El cliente envió una imagen con este texto: …]») que el prompt enseña a manejar.
+    ...history.flatMap((m) => {
+      const content = textoParaModelo({
+        direction: m.direction,
+        type: m.type,
+        text: m.text,
+        caption: m.mediaAssetId ? (captions.get(m.mediaAssetId) ?? null) : null,
+      });
+      return content
+        ? [{ role: m.direction === "in" ? ("user" as const) : ("assistant" as const), content }]
+        : [];
+    }),
     /**
      * Va AL FINAL, después del historial: es el estado de AHORA, y ponerlo
      * antes lo dejaría enterrado bajo la conversación en cuanto esta crezca.
@@ -375,10 +414,9 @@ export async function runAgentTurn(
     organizationId,
     usage: meter.usage,
   });
-  // El cobro va tras una respuesta VÁLIDA y antes de entregarla: lo que el modelo ya gastó se registra aunque la
-  // entrega falle después. Idempotente: repetir el turno no cobra dos veces.
-  await meter.settle(result);
   if (!result.ok) {
+    // Sin respuesta válida no hay cobro (`settle` solo cobra un `ok`); se asienta igual para la medición.
+    await meter.settle(result);
     if (result.error === "not_configured") return leido;
     // Fallo persistente del proveedor o salida imposible → escalar (FR-022).
     console.error(`[agente] fallo del proveedor (raw): ${result.detail}`);
@@ -386,7 +424,77 @@ export async function runAgentTurn(
     return leido;
   }
 
-  let action: AgentActionType = result.data;
+  // Mejora 11 — La llamada al modelo (con reintentos) puede tardar minutos. Antes de actuar se relee el estado:
+  // si apagaron la IA, la traspasaron, se apagó el agente o una persona contestó desde la Bandeja, el agente no
+  // habla encima. Tampoco se cobra: no se entregó nada.
+  const vigencia = await revalidarTurno({
+    organizationId,
+    conversationId,
+    desde: lastInbound.createdAt,
+  });
+  if (!vigencia.ok) {
+    console.info(
+      `[agente] ${conversationId}: turno cancelado antes de enviar (${vigencia.motivo}); no se envía ni se cobra.`
+    );
+    return leido;
+  }
+
+  const entrega: EstadoEntrega = { fallo: false };
+  await ejecutarAccion(
+    { conversation, action: result.data, agenda, equipoAgenda, adFlow, stages },
+    entrega
+  );
+  // Mejora 7 — Se cobra lo que llegó al cliente. Si el envío falló (y ya se traspasó y avisó al equipo), el
+  // turno no se cobra; lo que el modelo gastó queda medido en `credit_usage` igual.
+  if (entrega.fallo) {
+    console.warn(`[agente] ${conversationId}: la respuesta no se entregó; el turno no se cobra.`);
+  } else {
+    await meter.settle(result);
+  }
+  return leido;
+}
+
+type Conversation = typeof schema.conversation.$inferSelect;
+type EstadoEntrega = { fallo: boolean };
+
+/** Mejora 10 — Pie de foto por adjunto. Contexto: un fallo deja los marcadores sin pie, nunca tumba el turno. */
+async function captionsDe(
+  organizationId: string,
+  mensajes: readonly { mediaAssetId: string | null }[]
+): Promise<Map<string, string>> {
+  const ids = [...new Set(mensajes.map((m) => m.mediaAssetId).filter((id): id is string => !!id))];
+  if (ids.length === 0) return new Map();
+  try {
+    const rows = await getDb()
+      .select({ id: schema.mediaAsset.id, caption: schema.mediaAsset.caption })
+      .from(schema.mediaAsset)
+      .where(scoped(schema.mediaAsset.organizationId, organizationId, inArray(schema.mediaAsset.id, ids)));
+    return new Map(rows.filter((r) => r.caption).map((r) => [r.id, r.caption!]));
+  } catch (err) {
+    console.error("[agente] no se pudieron leer los pies de foto del historial:", err);
+    return new Map();
+  }
+}
+
+/** La acción validada del modelo, ejecutada. `entrega.fallo` = algún mensaje no llegó al cliente. */
+async function ejecutarAccion(
+  ctx: {
+    conversation: Conversation;
+    action: AgentActionType;
+    agenda: boolean;
+    equipoAgenda: { id: string; name: string }[];
+    adFlow: Awaited<ReturnType<typeof getAdFlowContext>> | null;
+    stages: { id: string; name: string }[];
+  },
+  entrega: EstadoEntrega
+): Promise<void> {
+  const { conversation, agenda, equipoAgenda, adFlow, stages } = ctx;
+  const organizationId = conversation.organizationId;
+  const conversationId = conversation.id;
+  let action = ctx.action;
+  const entregar = async (text: string, opts: { traspasarSiFalla?: boolean } = {}) => {
+    if ((await deliverReply(conversation, text, opts)) !== "entregado") entrega.fallo = true;
+  };
 
   // 015 — Agenda. Un fallo del motor degrada el turno (el agente responde sin
   // agendar), nunca lo tumba: quedarse callado es peor que no agendar.
@@ -417,14 +525,14 @@ export async function runAgentTurn(
                 ...bookingTargetOf(adFlow),
                 staffId,
               });
-        await deliverReply(conversation, turn.text);
+        await entregar(turn.text);
         if (turn.ok) {
           publish(organizationId, {
             type: "conversation.updated",
             data: { conversation: { id: conversationId } },
           });
         }
-        return leido;
+        return;
       } catch (err) {
         console.error(`[agente] el motor de agenda falló: ${err}`);
         action = degradeAction(action);
@@ -442,69 +550,85 @@ export async function runAgentTurn(
         type: "conversation.updated",
         data: { conversation: { id: conversationId } },
       });
-      if (action.reply) {
-        await deliverReply(conversation, action.reply);
-      }
-      return leido;
+      if (action.reply) await entregar(action.reply);
+      return;
     }
   }
 
   switch (action.action) {
     case "none":
-      return leido;
+      return;
     case "reply":
-      await deliverReply(conversation, action.text);
-      return leido;
-    case "update_lead": {
+      await entregar(action.text);
+      return;
+    case "update_lead":
       await appendLeadNote(organizationId, conversation.contactId, action.note);
-      if (action.reply) await deliverReply(conversation, action.reply);
-      return leido;
-    }
-    case "handoff": {
-      if (action.farewell) {
-        await deliverReply(conversation, action.farewell);
-      }
+      if (action.reply) await entregar(action.reply);
+      return;
+    case "handoff":
+      // El traspaso va igual: si la despedida no sale, no se traspasa dos veces por «error».
+      if (action.farewell) await entregar(action.farewell, { traspasarSiFalla: false });
       await applyHandoff(conversationId, organizationId, "modelo");
-      return leido;
-    }
+      return;
   }
-  return leido;
 }
 
-type Conversation = typeof schema.conversation.$inferSelect;
-
-/** Entrega la respuesta: envío real o persistencia sandbox (is_test). */
+/**
+ * Entrega la respuesta: envío real o persistencia sandbox (is_test). Nunca lanza.
+ *
+ * Mejora 7 — La respuesta se parte para que quepa en el canal (WhatsApp: 4096 caracteres; hasta
+ * `MAX_PARTES_RESPUESTA` mensajes). Si el envío falla por algo que no sea la ventana cerrada o el tope de
+ * mensajes del canal, se registra con su código y se traspasa por `error` (eso avisa al equipo): nadie se
+ * queda sin respuesta en silencio. `traspasarSiFalla: false` cuando quien llama traspasa igual después.
+ */
 async function deliverReply(
   conversation: Conversation,
-  text: string
-): Promise<void> {
+  text: string,
+  opts: { traspasarSiFalla?: boolean } = {}
+): Promise<"entregado" | "fallido"> {
+  const partes = partirParaCanal(text, (t) => textFits(conversation.channel, t));
   if (conversation.isTest) {
-    await persistTestOutbound(conversation, text);
-    return;
+    for (const parte of partes) await persistTestOutbound(conversation, parte);
+    return "entregado";
   }
-  try {
-    await sendText({
-      conversationId: conversation.id,
-      organizationId: conversation.organizationId,
-      text,
-      aiGenerated: true,
-    });
-  } catch (err) {
-    if (err instanceof SendError && err.code === "window_closed") {
-      await applyHandoff(conversation.id, conversation.organizationId, "ventana");
-      return;
-    }
-    // 022 — El canal ya no admite más mensajes hasta que el cliente escriba
-    // (el tope de TikTok). No se traspasa: dejaría la IA en pausa para siempre
-    // por algo que se arregla solo con el siguiente mensaje del cliente.
-    if (err instanceof SendError && err.code === "message_limit") {
-      console.warn(
-        `[agente] ${conversation.id}: ${err.message}. No se envía y la IA sigue activa.`
+  for (const [i, parte] of partes.entries()) {
+    try {
+      await sendText({
+        conversationId: conversation.id,
+        organizationId: conversation.organizationId,
+        text: parte,
+        aiGenerated: true,
+      });
+    } catch (err) {
+      if (err instanceof SendError && err.code === "window_closed") {
+        await applyHandoff(conversation.id, conversation.organizationId, "ventana").catch((e) =>
+          console.error(`[agente] no se pudo traspasar ${conversation.id} por ventana:`, e)
+        );
+        return "fallido";
+      }
+      // 022 — El canal ya no admite más mensajes hasta que el cliente escriba
+      // (el tope de TikTok). No se traspasa: dejaría la IA en pausa para siempre
+      // por algo que se arregla solo con el siguiente mensaje del cliente.
+      if (err instanceof SendError && err.code === "message_limit") {
+        console.warn(
+          `[agente] ${conversation.id}: ${err.message}. No se envía y la IA sigue activa.`
+        );
+        return "fallido";
+      }
+      const codigo = err instanceof SendError ? err.code : "inesperado";
+      console.error(
+        `[agente] no se pudo enviar la respuesta de la IA en ${conversation.id} (parte ${i + 1}/${partes.length}, ${codigo}):`,
+        err instanceof Error ? err.message : err
       );
-      return;
+      if (opts.traspasarSiFalla !== false) {
+        await applyHandoff(conversation.id, conversation.organizationId, "error").catch((e) =>
+          console.error(`[agente] tampoco se pudo traspasar ${conversation.id}:`, e)
+        );
+      }
+      return "fallido";
     }
-    throw err;
   }
+  return "entregado";
 }
 
 /**
@@ -519,12 +643,16 @@ async function deliverReply(
  * igual que tras el `farewell`.
  *
  * Lo único que cambia respecto a ese camino: si el envío falla, el traspaso
- * se aplica IGUAL. Quien pidió una persona tiene que llegar a una aunque el
- * aviso no haya salido; dejarlo con la IA encendida sería peor que el silencio.
+ * se aplica IGUAL (y una sola vez, por `cliente`). Quien pidió una persona tiene
+ * que llegar a una aunque el aviso no haya salido; dejarlo con la IA encendida
+ * sería peor que el silencio.
  */
 async function acknowledgeHandoff(conversation: Conversation): Promise<void> {
   try {
-    await deliverReply(conversation, HANDOFF_BACKUP_ACK);
+    const r = await deliverReply(conversation, HANDOFF_BACKUP_ACK, { traspasarSiFalla: false });
+    if (r !== "entregado") {
+      console.error(`[agente] el acuse del traspaso no salió en ${conversation.id}; se traspasa igual.`);
+    }
   } catch (err) {
     console.error(
       `[agente] el acuse del traspaso no salió en ${conversation.id}; se traspasa igual:`,
@@ -553,7 +681,13 @@ async function persistTestOutbound(
   await db
     .update(schema.conversation)
     .set({ lastMessageAt: new Date(), updatedAt: new Date() })
-    .where(eq(schema.conversation.id, conversation.id));
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        conversation.organizationId,
+        eq(schema.conversation.id, conversation.id)
+      )
+    );
 }
 
 export async function applyHandoff(
@@ -565,7 +699,13 @@ export async function applyHandoff(
   const updated = await db
     .update(schema.conversation)
     .set({ handoffAt: new Date(), handoffReason: reason, updatedAt: new Date() })
-    .where(eq(schema.conversation.id, conversationId))
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        organizationId,
+        eq(schema.conversation.id, conversationId)
+      )
+    )
     .returning();
   if (!updated[0]) return;
   publish(organizationId, {
@@ -621,16 +761,15 @@ async function appendLeadNote(
   const rows = await db
     .select({ id: schema.contact.id, notes: schema.contact.notes })
     .from(schema.contact)
-    .where(and(eq(schema.contact.id, contactId), scoped(schema.contact.organizationId, organizationId)))
+    .where(scoped(schema.contact.organizationId, organizationId, eq(schema.contact.id, contactId)))
     .limit(1);
   const contact = rows[0];
   if (!contact) return;
-  const stamped = `[IA] ${note}`;
+  // Mejora 2 — Sin repetir la misma nota y con tope de notas `[IA]` (las de las personas no se tocan).
+  const notes = appendAiNote(contact.notes, note);
+  if (notes === null) return;
   await db
     .update(schema.contact)
-    .set({
-      notes: contact.notes ? `${contact.notes}\n${stamped}` : stamped,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(schema.contact.id, contact.id), scoped(schema.contact.organizationId, organizationId)));
+    .set({ notes, updatedAt: new Date() })
+    .where(scoped(schema.contact.organizationId, organizationId, eq(schema.contact.id, contact.id)));
 }

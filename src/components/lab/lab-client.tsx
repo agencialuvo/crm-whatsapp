@@ -422,9 +422,11 @@ function HallazgoCard({
   const [respuesta, setRespuesta] = useState(hallazgo.sugerencia?.respuesta ?? "");
   const [applied, setApplied] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   async function apply() {
     setSaving(true);
+    setApplyError(null);
     const res = await fetch("/api/lab/suggestions/apply", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -435,7 +437,14 @@ function HallazgoCard({
       setApplied(true);
       setEditing(false);
       onApplied();
+      return;
     }
+    // Mejoras 5 y 9 — El tope del conocimiento (422) o el permiso (403) se dicen, no se callan.
+    const data = (await res?.json().catch(() => null)) as { error?: { message?: string } } | null;
+    setApplyError(
+      data?.error?.message ??
+        (res ? "No se pudo agregar al conocimiento." : "No hay conexión con el servidor. Inténtalo de nuevo.")
+    );
   }
 
   return (
@@ -486,6 +495,11 @@ function HallazgoCard({
               Cancelar
             </Button>
           </div>
+          {applyError && (
+            <p role="alert" className="text-xs text-destructive">
+              {applyError}
+            </p>
+          )}
         </div>
       )}
     </div>

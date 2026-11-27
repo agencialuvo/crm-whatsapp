@@ -2,16 +2,15 @@ import { asc } from "drizzle-orm";
 import { withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
-import { renderKb } from "@/server/ai/prompts";
+import { kbChars, KB_MAX_CHARS, KB_MAX_ENTRIES, KB_WARN_CHARS } from "@/lib/kb-budget";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Tamaño estimado del knowledge base (FR-020). v1 inyecta el KB completo al
- * prompt; umbral de aviso heurístico: ~24.000 caracteres (≈6k tokens).
+ * Tamaño del knowledge base (FR-020, Mejora 5). Entra entero en cada turno del agente: `warnAt` avisa de que ya
+ * pesa; `limit` es el tope duro al guardar (y lo que cabe en el prompt). `overLimit` = cargado antes del tope:
+ * el agente solo lee lo que cabe.
  */
-const WARN_CHARS = 24_000;
-
 export const GET = withAuth(async (session) => {
   const db = getDb();
   const entries = await db
@@ -19,10 +18,14 @@ export const GET = withAuth(async (session) => {
     .from(schema.kbEntry)
     .where(scoped(schema.kbEntry.organizationId, session.organizationId))
     .orderBy(asc(schema.kbEntry.createdAt));
-  const chars = renderKb(entries).length;
+  const chars = kbChars(entries);
   return Response.json({
     chars,
-    warnAt: WARN_CHARS,
-    warning: chars >= WARN_CHARS,
+    entries: entries.length,
+    warnAt: KB_WARN_CHARS,
+    limit: KB_MAX_CHARS,
+    maxEntries: KB_MAX_ENTRIES,
+    warning: chars >= KB_WARN_CHARS,
+    overLimit: chars > KB_MAX_CHARS,
   });
 });

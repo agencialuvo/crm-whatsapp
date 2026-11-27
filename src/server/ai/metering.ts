@@ -1,7 +1,7 @@
 import { estadoIaDe } from "@/lib/ai/provider";
 import type { ChatJsonResult, ChatUsageOpts } from "@/lib/ai";
 import { idemKey, RATE_KEYS } from "@/lib/credits";
-import { checkCredit, creditsEnabled, priceFor, spendCredits } from "@/server/credits";
+import { checkCredit, creditsEnabled, getCreditBalance, priceFor, spendCredits } from "@/server/credits";
 import { ensureCreditAccount } from "@/server/saas/credits-sync";
 import { notifyBalanceIfNeeded } from "@/server/notifications/credit-alerts";
 
@@ -47,6 +47,17 @@ export async function aiBlockedByCredit(organizationId: string): Promise<boolean
     console.error("[monedas] aiBlockedByCredit:", err instanceof Error ? err.message : err);
     return false;
   }
+}
+
+/**
+ * Mejora 8 — ¿La organización se quedó sin monedas? Para el cupo del Laboratorio (`server/lab/runner.ts`), que no
+ * habla con la puerta de monedas directo. `false` con `CREDITS` apagada, sin cuenta o con cuenta ilimitada. Lanza
+ * si la consulta falla: quien llama decide (el Laboratorio cae al cupo menor).
+ */
+export async function sinSaldoDeMonedas(organizationId: string): Promise<boolean> {
+  if (!creditsEnabled()) return false;
+  const saldo = await getCreditBalance(organizationId);
+  return !!saldo && !saldo.unlimited && saldo.total <= 0;
 }
 
 export async function beginAiTurnMeter(input: {

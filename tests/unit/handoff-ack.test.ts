@@ -68,6 +68,9 @@ vi.mock("@/server/attribution/store", () => ({
   getAttributionForConversation: async () => null,
 }));
 
+// Mejora 11 — La revalidación antes de enviar se prueba aparte (agent-turn-guard.test.ts): aquí el turno sigue vigente.
+vi.mock("@/server/ai/turn-guard", () => ({ revalidarTurno: async () => ({ ok: true }) }));
+
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
     select: () => thenableChain(selectQueue.shift() ?? []),

@@ -1,5 +1,7 @@
 import type { schema } from "@/lib/db";
 import type { AdFlowContext } from "@/lib/ad-flow";
+import { renderKbForPrompt, renderKbText } from "@/lib/kb-budget";
+import { MEDIA_GUIDELINES } from "@/lib/agent/history";
 
 type AgentProfile = typeof schema.agentProfile.$inferSelect;
 type KbEntry = typeof schema.kbEntry.$inferSelect;
@@ -7,16 +9,9 @@ type KbEntry = typeof schema.kbEntry.$inferSelect;
 /** Marcador del prompt del juez: el ai-mock lo usa para despachar veredictos. */
 export const JUDGE_MARKER = "[JUEZ]";
 
+/** El conocimiento completo, sin tope (pantalla, juez del Laboratorio y cerebro externo). */
 export function renderKb(entries: KbEntry[]): string {
-  if (entries.length === 0) return "(knowledge base vacío)";
-  return entries
-    .map((e) =>
-      e.kind === "qa"
-        ? `P: ${e.question}\nR: ${e.answer}`
-        : (e.content ?? "")
-    )
-    .filter(Boolean)
-    .join("\n\n");
+  return renderKbText(entries);
 }
 
 /**
@@ -91,8 +86,8 @@ ${rules}`
 }
 
 /**
- * System prompt del agente (v1: inyecta el KB completo — el límite se
- * documenta con el contador de tamaño en la UI).
+ * System prompt del agente. Inyecta el conocimiento completo hasta el presupuesto `KB_MAX_CHARS` (Mejora 5): lo
+ * que no quepa se recorta por entradas enteras, con una nota para que el modelo no invente lo que quedó fuera.
  */
 export function buildAgentSystemPrompt(input: {
   profile: AgentProfile;
@@ -109,6 +104,8 @@ export function buildAgentSystemPrompt(input: {
   anuncio?: { headline: string | null; body: string | null } | null;
   /** Enrutamiento por anuncio: si la conversación llegó de un anuncio con flujo activo, manda sobre las reglas genéricas. */
   adFlow?: AdFlowContext | null;
+  /** Mejora 1 — Fecha, hora y zona horaria del negocio (y su horario con agenda): `loadTemporalContext`. */
+  contextoTemporal?: string | null;
 }): string {
   const { profile } = input;
   const stageNames = input.stages.map((s) => s.name).join(" | ");
@@ -160,6 +157,7 @@ export function buildAgentSystemPrompt(input: {
 
   return [
     `Eres "${profile.name}", el asistente de WhatsApp de este negocio. Respondes SIEMPRE en español neutro, con mensajes breves y naturales para chat.`,
+    input.contextoTemporal || null,
     profile.tone ? `Tono: ${profile.tone}` : null,
     profile.instructions ? `Instrucciones del negocio:\n${profile.instructions}` : null,
     profile.escalationRules
@@ -167,7 +165,7 @@ export function buildAgentSystemPrompt(input: {
       : null,
     profile.greeting ? `Saludo sugerido para conversaciones nuevas: ${profile.greeting}` : null,
     ...anuncioLines,
-    `CONOCIMIENTO DEL NEGOCIO (tu única fuente de verdad; si algo no está aquí, NO lo inventes — di que lo confirmarás con el equipo o escala):\n${renderKb(input.kb)}`,
+    `CONOCIMIENTO DEL NEGOCIO (tu única fuente de verdad; si algo no está aquí, NO lo inventes — di que lo confirmarás con el equipo o escala):\n${renderKbForPrompt(input.kb).text}`,
     `Etapas del pipeline disponibles: ${stageNames}`,
     [
       "En cada turno respondes ÚNICAMENTE un objeto JSON con UNA acción:",
@@ -184,6 +182,8 @@ export function buildAgentSystemPrompt(input: {
       "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala.",
       "- Si detectas intención clara de compra → move_stage a la etapa abierta que mejor represente a un cliente interesado (por ejemplo «Contactado» o «Interesado», según las etapas disponibles) y confirma al cliente.",
       ...agendaRules,
+      // Mejora 10 — Notas de voz, fotos y documentos llegan como marcadores entre corchetes.
+      MEDIA_GUIDELINES,
       "- JSON puro, sin markdown ni texto adicional.",
     ].join("\n"),
   ]

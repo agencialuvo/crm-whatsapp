@@ -1,9 +1,11 @@
 import { asc } from "drizzle-orm";
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
+import { canConfigure } from "@/lib/auth/roles";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import { kbChangeError } from "@/server/ai/kb-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -31,8 +33,23 @@ const createSchema = z
   ]);
 
 export const POST = withAuth(async (session, req: Request) => {
+  // Mejora 9 — Cambiar lo que sabe o cómo se prueba el agente es de quien configura, no de quien atiende.
+  if (!canConfigure(session.role)) {
+    return apiError(403, "forbidden", "Solo el dueño o un administrador puede cambiar el conocimiento del agente");
+  }
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
+
+  // Mejora 5 — El conocimiento tiene tope: entra entero en cada turno del agente.
+  const limite = await kbChangeError(session.organizationId, {
+    add: {
+      kind: body.data.kind,
+      question: body.data.kind === "qa" ? body.data.question : null,
+      answer: body.data.kind === "qa" ? body.data.answer : null,
+      content: body.data.kind === "block" ? body.data.content : null,
+    },
+  });
+  if (limite) return apiError(422, "kb_limit", limite);
 
   const db = getDb();
   const inserted = await db

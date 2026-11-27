@@ -1,9 +1,10 @@
 import { desc } from "drizzle-orm";
 import { apiError, withAuth } from "@/lib/api";
+import { canConfigure } from "@/lib/auth/roles";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isAiConfiguredFor } from "@/lib/ai/provider";
-import { RunConflictError, startRun } from "@/server/lab/runner";
+import { RunConflictError, RunLimitError, startRun } from "@/server/lab/runner";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,10 @@ export const GET = withAuth(async (session) => {
 });
 
 export const POST = withAuth(async (session) => {
+  // Mejora 9 — Cambiar lo que sabe o cómo se prueba el agente es de quien configura, no de quien atiende.
+  if (!canConfigure(session.role)) {
+    return apiError(403, "forbidden", "Solo el dueño o un administrador puede correr el Laboratorio");
+  }
   if (!(await isAiConfiguredFor(session.organizationId))) {
     return apiError(
       409,
@@ -52,6 +57,9 @@ export const POST = withAuth(async (session) => {
     const runId = await startRun(session.organizationId);
     return Response.json({ runId }, { status: 202 });
   } catch (err) {
+    if (err instanceof RunLimitError) {
+      return apiError(429, "lab_daily_limit", err.message);
+    }
     if (err instanceof RunConflictError) {
       return apiError(
         409,

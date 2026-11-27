@@ -36,13 +36,34 @@ type KbEntry = {
   content: string | null;
 };
 
+type KbSize = {
+  chars: number;
+  warnAt: number;
+  limit: number;
+  warning: boolean;
+  overLimit: boolean;
+};
+
+/**
+ * Mejora 4 — El mensaje real del servidor (403 de permisos, 422 del tope del conocimiento…) o `null` si salió
+ * bien. Una red caída también es un error: antes se pintaba «Guardado ✓» igual.
+ */
+async function errorDeRespuesta(res: Response | null, porDefecto: string): Promise<string | null> {
+  if (res?.ok) return null;
+  if (!res) return "No hay conexión con el servidor. Inténtalo de nuevo.";
+  const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+  if (data?.error?.message) return data.error.message;
+  return res.status === 403 ? "No tienes permiso para cambiar esto." : porDefecto;
+}
+
 export function AgentClient({ canConfigure = false }: { canConfigure?: boolean } = {}) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [aiMensaje, setAiMensaje] = useState<string | null>(null);
   const [entries, setEntries] = useState<KbEntry[]>([]);
-  const [kbSize, setKbSize] = useState<{ chars: number; warnAt: number; warning: boolean } | null>(null);
+  const [kbSize, setKbSize] = useState<KbSize | null>(null);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   // «Quién responde»: se refresca solo, porque la última llamada del cerebro
   // externo y su /health cambian sin que nadie toque esta pantalla.
   const [brain, setBrain] = useState<BrainStatusDto | null>(null);
@@ -87,15 +108,26 @@ export function AgentClient({ canConfigure = false }: { canConfigure?: boolean }
     );
   }
 
-  async function saveProfile(patch: Partial<Profile>) {
-    await fetch("/api/agent/profile", {
+  /** Devuelve si se guardó: el formulario no se reinicia ante un error. */
+  async function saveProfile(patch: Partial<Profile>): Promise<boolean> {
+    setSaveError(null);
+    setSaved(false);
+    const res = await fetch("/api/agent/profile", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     }).catch(() => null);
+    const error = await errorDeRespuesta(res, "No se pudo guardar. Inténtalo de nuevo.");
+    if (error) {
+      setSaveError(error);
+      // Lo que muestra la pantalla vuelve a ser lo guardado (p. ej. el interruptor).
+      void refetch();
+      return false;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     void refetch();
+    return true;
   }
 
   // Sin token de IA, este aviso pedía configurarlo aunque contestara un
@@ -115,6 +147,11 @@ export function AgentClient({ canConfigure = false }: { canConfigure?: boolean }
         <h2 className="text-[17px] font-bold tracking-tight">Agente de IA</h2>
         <div className="flex items-center gap-3">
           {saved && <span className="text-xs text-primary">Guardado ✓</span>}
+          {saveError && (
+            <span role="alert" className="max-w-xs text-xs text-destructive">
+              {saveError}
+            </span>
+          )}
           <span className="text-sm text-muted-foreground">
             {profile.enabled ? "Encendido" : "Apagado"}
           </span>
@@ -126,7 +163,7 @@ export function AgentClient({ canConfigure = false }: { canConfigure?: boolean }
               interruptor bloqueado dejaría al dueño sin forma de callarlo. */}
           <Switch
             checked={profile.enabled}
-            disabled={!aiConfigured && !profile.enabled}
+            disabled={!canConfigure || (!aiConfigured && !profile.enabled)}
             label="Agente encendido"
             onCheckedChange={(enabled) => void saveProfile({ enabled })}
           />
@@ -172,8 +209,13 @@ export function AgentClient({ canConfigure = false }: { canConfigure?: boolean }
       )}
 
       <div className="grid gap-4 p-4 sm:gap-6 sm:p-6 lg:grid-cols-2">
-        <ProfileSection profile={profile} onSave={saveProfile} />
-        <KbSection entries={entries} kbSize={kbSize} onChanged={() => void refetch()} />
+        <ProfileSection profile={profile} onSave={saveProfile} canEdit={canConfigure} />
+        <KbSection
+          entries={entries}
+          kbSize={kbSize}
+          canEdit={canConfigure}
+          onChanged={() => void refetch()}
+        />
       </div>
 
       {/* Una excepción, no el trabajo de todos los días: plegada, al final. */}
@@ -187,10 +229,14 @@ export function AgentClient({ canConfigure = false }: { canConfigure?: boolean }
 function ProfileSection({
   profile,
   onSave,
+  canEdit,
 }: {
   profile: Profile;
-  onSave: (patch: Partial<Profile>) => Promise<void>;
+  onSave: (patch: Partial<Profile>) => Promise<boolean>;
+  /** Mejora 9 — Solo dueño o administrador cambian el comportamiento (el servidor lo exige). */
+  canEdit: boolean;
 }) {
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(profile);
   useEffect(() => setForm(profile), [profile]);
 
@@ -249,7 +295,22 @@ function ProfileSection({
             onChange={(e) => setForm({ ...form, greeting: e.target.value })}
           />
         </div>
-        <Button onClick={() => void onSave(form)}>Guardar comportamiento</Button>
+        {canEdit ? (
+          <Button
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true);
+              await onSave(form);
+              setSaving(false);
+            }}
+          >
+            {saving ? "Guardando…" : "Guardar comportamiento"}
+          </Button>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Solo el dueño o un administrador puede cambiar el comportamiento del agente.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -258,42 +319,69 @@ function ProfileSection({
 function KbSection({
   entries,
   kbSize,
+  canEdit,
   onChanged,
 }: {
   entries: KbEntry[];
-  kbSize: { chars: number; warnAt: number; warning: boolean } | null;
+  kbSize: KbSize | null;
+  /** Mejora 9 — Solo dueño o administrador editan el conocimiento (el servidor lo exige). */
+  canEdit: boolean;
   onChanged: () => void;
 }) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [block, setBlock] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /** Mejora 4 — Lo escrito se conserva si el servidor lo rechaza, y se dice por qué. */
+  async function enviar(req: () => Promise<Response>, porDefecto: string): Promise<boolean> {
+    setBusy(true);
+    setError(null);
+    const res = await req().catch(() => null);
+    const fallo = await errorDeRespuesta(res, porDefecto);
+    setBusy(false);
+    if (fallo) {
+      setError(fallo);
+      return false;
+    }
+    onChanged();
+    return true;
+  }
 
   async function addQa() {
     if (!question.trim() || !answer.trim()) return;
-    await fetch("/api/kb", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: "qa", question, answer }),
-    }).catch(() => null);
-    setQuestion("");
-    setAnswer("");
-    onChanged();
+    const ok = await enviar(
+      () =>
+        fetch("/api/kb", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ kind: "qa", question, answer }),
+        }),
+      "No se pudo agregar la pregunta."
+    );
+    if (ok) {
+      setQuestion("");
+      setAnswer("");
+    }
   }
 
   async function addBlock() {
     if (!block.trim()) return;
-    await fetch("/api/kb", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: "block", content: block }),
-    }).catch(() => null);
-    setBlock("");
-    onChanged();
+    const ok = await enviar(
+      () =>
+        fetch("/api/kb", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ kind: "block", content: block }),
+        }),
+      "No se pudo agregar el bloque."
+    );
+    if (ok) setBlock("");
   }
 
   async function remove(id: string) {
-    await fetch(`/api/kb/${id}`, { method: "DELETE" }).catch(() => null);
-    onChanged();
+    await enviar(() => fetch(`/api/kb/${id}`, { method: "DELETE" }), "No se pudo eliminar la entrada.");
   }
 
   return (
@@ -308,19 +396,38 @@ function KbSection({
             </CardDescription>
           </div>
           {kbSize && (
-            <Badge variant={kbSize.warning ? "warning" : "secondary"}>
-              {kbSize.chars.toLocaleString("es-MX")} caracteres
+            <Badge variant={kbSize.overLimit ? "destructive" : kbSize.warning ? "warning" : "secondary"}>
+              {kbSize.chars.toLocaleString("es-MX")} / {kbSize.limit.toLocaleString("es-MX")} caracteres
             </Badge>
           )}
         </div>
-        {kbSize?.warning && (
-          <p className="text-xs text-warning-text">
-            El conocimiento se acerca al límite del contexto del modelo (v1 lo
-            inyecta completo en cada turno). Considera depurar entradas.
+        {kbSize?.overLimit ? (
+          <p className="text-xs text-destructive">
+            El conocimiento pasa del máximo: el agente solo lee las primeras entradas que caben y no puedes
+            agregar más. Acorta o borra entradas.
           </p>
+        ) : (
+          kbSize?.warning && (
+            <p className="text-xs text-warning-text">
+              El agente lee todo el conocimiento en cada mensaje: mientras más largo, más cuesta cada respuesta.
+              Considera depurar entradas.
+            </p>
+          )
         )}
       </CardHeader>
       <CardContent className="space-y-4">
+        {error && (
+          <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
+        {!canEdit && (
+          <p className="text-xs text-muted-foreground">
+            Solo el dueño o un administrador puede cambiar el conocimiento del agente.
+          </p>
+        )}
+        {canEdit && (
+        <>
         <div className="space-y-2 rounded-md border p-3">
           <p className="text-sm font-medium">Nueva pregunta / respuesta</p>
           <Input
@@ -337,7 +444,7 @@ function KbSection({
           <Button
             size="sm"
             onClick={() => void addQa()}
-            disabled={!question.trim() || !answer.trim()}
+            disabled={busy || !question.trim() || !answer.trim()}
           >
             <Plus className="h-4 w-4" /> Agregar P/R
           </Button>
@@ -351,10 +458,12 @@ function KbSection({
             value={block}
             onChange={(e) => setBlock(e.target.value)}
           />
-          <Button size="sm" onClick={() => void addBlock()} disabled={!block.trim()}>
+          <Button size="sm" onClick={() => void addBlock()} disabled={busy || !block.trim()}>
             <Plus className="h-4 w-4" /> Agregar bloque
           </Button>
         </div>
+        </>
+        )}
 
         <ul className="space-y-2">
           {entries.map((e) => (
@@ -369,14 +478,17 @@ function KbSection({
                   <p className="whitespace-pre-wrap text-muted-foreground">{e.content}</p>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Eliminar entrada"
-                onClick={() => void remove(e.id)}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              {canEdit && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Eliminar entrada"
+                  disabled={busy}
+                  onClick={() => void remove(e.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
             </li>
           ))}
           {entries.length === 0 && (

@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, gte } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
@@ -6,6 +6,16 @@ import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
 import { computeScore, judgeCase } from "@/server/lab/judge";
 import { PERSONAS, type Persona } from "@/server/lab/personas";
+import { scoped } from "@/lib/db/tenant";
+import {
+  LAB_MAX_CASES,
+  LAB_MAX_TURNS_PER_CASE,
+  LAB_WINDOW_MS,
+  labDailyLimit,
+  labLimitMessage,
+} from "@/lib/lab-limits";
+import { getSubscriptionAccess } from "@/server/saas/enforcement";
+import { sinSaldoDeMonedas } from "@/server/ai/metering";
 
 /**
  * Runner del Laboratorio (FR-030/FR-034): corrida en segundo plano DENTRO del
@@ -22,8 +32,54 @@ const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class RunConflictError extends Error {}
 
+/** Mejora 8 — La organización ya usó su cupo de corridas de las últimas 24 horas. */
+export class RunLimitError extends Error {
+  constructor(readonly limit: number) {
+    super(labLimitMessage(limit));
+    this.name = "RunLimitError";
+  }
+}
+
+/**
+ * Mejora 8 — Cuántas corridas por 24 horas le tocan a esta organización: pocas en Demo, sin saldo o con la
+ * suscripción no activa; más con la suscripción activa (o sin módulo de suscripciones). Ante un fallo al leer
+ * el plan o el saldo, el cupo menor: el Laboratorio es lo que se puede esperar, el costo no.
+ */
+export async function labRunLimitFor(organizationId: string): Promise<number> {
+  try {
+    const [access, sinSaldo] = await Promise.all([
+      getSubscriptionAccess(organizationId),
+      sinSaldoDeMonedas(organizationId),
+    ]);
+    return labDailyLimit({ subscriptionStatus: access.status, sinSaldo });
+  } catch (err) {
+    console.error("[lab] no se pudo leer el plan para el cupo del Laboratorio:", err);
+    return labDailyLimit({ subscriptionStatus: "unknown", sinSaldo: true });
+  }
+}
+
+/** Corridas de la organización en las últimas 24 horas (todas cuentan: también las fallidas, que gastaron). */
+async function runsInWindow(organizationId: string, now: Date): Promise<number> {
+  const [row] = await getDb()
+    .select({ n: count() })
+    .from(schema.agentTestRun)
+    .where(
+      scoped(
+        schema.agentTestRun.organizationId,
+        organizationId,
+        gte(schema.agentTestRun.startedAt, new Date(now.getTime() - LAB_WINDOW_MS))
+      )
+    );
+  return row?.n ?? 0;
+}
+
 export async function startRun(organizationId: string): Promise<string> {
   const db = getDb();
+  // Mejora 8 — Cupo diario. La corrida en curso ya está limitada a una por el índice parcial UNIQUE.
+  const limite = await labRunLimitFor(organizationId);
+  if ((await runsInWindow(organizationId, new Date())) >= limite) {
+    throw new RunLimitError(limite);
+  }
   let runId: string;
   try {
     const inserted = await db
@@ -39,8 +95,9 @@ export async function startRun(organizationId: string): Promise<string> {
     throw err;
   }
 
+  // Mejora 8 — Tope de casos por corrida.
   await db.insert(schema.agentTestCase).values(
-    PERSONAS.map((p) => ({
+    PERSONAS.slice(0, LAB_MAX_CASES).map((p) => ({
       id: newId("testCase"),
       organizationId,
       runId,
@@ -188,7 +245,8 @@ async function runConversation(
     aiEnabled: true,
   });
 
-  for (const line of persona.script) {
+  // Mejora 8 — Tope de turnos por caso.
+  for (const line of persona.script.slice(0, LAB_MAX_TURNS_PER_CASE)) {
     const now = new Date();
     await db.insert(schema.message).values({
       id: newId("message"),

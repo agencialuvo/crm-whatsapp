@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * FR-031/FR-082: el turno del agente sobre una conversación is_test persiste
@@ -49,6 +49,9 @@ vi.mock("@/server/attribution/store", () => ({
   getAttributionForConversation: async () => null,
 }));
 
+// Mejora 11 — La revalidación antes de enviar se prueba aparte (agent-turn-guard.test.ts): aquí el turno sigue vigente.
+vi.mock("@/server/ai/turn-guard", () => ({ revalidarTurno: async () => ({ ok: true }) }));
+
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
     select: () => thenableChain(selectQueue.shift() ?? []),
@@ -90,6 +93,11 @@ vi.mock("@/lib/db", () => ({
 }));
 
 describe("sandbox del Laboratorio en el pipeline del agente", () => {
+  // El pipeline arrastra muchos módulos: se importa una vez, fuera del límite de 5 s de cada caso.
+  beforeAll(async () => {
+    await import("@/server/ai/pipeline");
+  }, 60_000);
+
   beforeEach(() => {
     graphRequest.mockReset();
     selectQueue.length = 0;
