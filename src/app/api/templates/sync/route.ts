@@ -14,8 +14,8 @@ export const dynamic = "force-dynamic";
  */
 export const POST = withAuth(async (session) => {
   try {
-    const updated = await syncTemplates(session.organizationId);
-    return Response.json({ ok: true, updated });
+    const { updated, removed } = await syncTemplates(session.organizationId);
+    return Response.json({ ok: true, updated, removed });
   } catch (err) {
     if (err instanceof TemplateError) {
       return apiError(templateErrorStatus(err), err.code, err.message);

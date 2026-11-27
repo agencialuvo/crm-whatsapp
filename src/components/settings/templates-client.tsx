@@ -9,10 +9,12 @@ import {
   Clock3,
   FileText,
   Inbox,
+  Pencil,
   Plus,
   RefreshCw,
   Send,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import type { TemplateDto } from "@/lib/types";
 import {
@@ -36,6 +38,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SearchSelect } from "@/components/ui/search-select";
+import { ConfirmDialog } from "@/components/negocio/modal";
 
 type Category = "UTILITY" | "MARKETING";
 
@@ -46,7 +49,7 @@ const STATUS_BADGE: Record<
   draft: { label: "Borrador", variant: "secondary", hint: "Guardada, todavía sin enviar a Meta." },
   pending: { label: "En revisión", variant: "warning", hint: "Meta la está revisando. Suele tardar de unos minutos a 24 horas." },
   approved: { label: "Aprobada", variant: "success", hint: "Lista para usar desde la Bandeja o desde Contactos." },
-  rejected: { label: "Rechazada", variant: "destructive", hint: "Corrígela y créala de nuevo con otro nombre." },
+  rejected: { label: "Rechazada", variant: "destructive", hint: "Edítala para corregirla y vuelve a enviarla a revisión." },
 };
 
 const CATEGORY: Record<Category, { label: string; description: string }> = {
@@ -101,8 +104,10 @@ function normalizeName(value: string): string {
     .replace(/[^a-z0-9_]/g, "");
 }
 
-export function TemplatesClient() {
+export function TemplatesClient({ canDelete = false }: { canDelete?: boolean }) {
   const [templates, setTemplates] = useState<TemplateDto[] | null>(null);
+  const [toDelete, setToDelete] = useState<TemplateDto | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -134,15 +139,16 @@ export function TemplatesClient() {
       );
       if (!silent) setSyncing(false);
       if (res?.ok) {
-        const data = (await res.json()) as { updated: number };
+        const data = (await res.json()) as { updated: number; removed?: number };
+        const removed = data.removed ?? 0;
         if (!silent) {
-          setSyncMsg(
-            data.updated > 0
-              ? `${data.updated} plantilla(s) actualizada(s)`
-              : "Todo al día"
-          );
+          const parts = [
+            data.updated > 0 ? `${data.updated} plantilla(s) actualizada(s)` : null,
+            removed > 0 ? `${removed} ya no existía(n) en Meta y se quitaron` : null,
+          ].filter(Boolean);
+          setSyncMsg(parts.length > 0 ? parts.join(" · ") : "Todo al día");
         }
-        if (!silent || data.updated > 0) void refetch();
+        if (!silent || data.updated > 0 || removed > 0) void refetch();
       } else if (!silent) {
         // El auto-sync falla en silencio: la lista local ya se pintó.
         const data = (await res?.json().catch(() => null)) as {
@@ -159,6 +165,17 @@ export function TemplatesClient() {
   }, [refetch, sync]);
 
   const empty = templates !== null && templates.length === 0;
+
+  /** Lanza con el mensaje del servidor: el diálogo lo muestra y queda abierto (p. ej. 409 `in_use`). */
+  async function removeTemplate(t: TemplateDto) {
+    const res = await fetch(`/api/templates/${encodeURIComponent(t.id)}`, { method: "DELETE" }).catch(() => null);
+    if (!res?.ok) {
+      const data = (await res?.json().catch(() => null)) as { error?: { message?: string } } | null;
+      throw new Error(data?.error?.message ?? "No se pudo borrar la plantilla");
+    }
+    setTemplates((current) => current?.filter((x) => x.id !== t.id) ?? current);
+    setSyncMsg(`Plantilla «${t.name}» borrada`);
+  }
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -219,7 +236,20 @@ export function TemplatesClient() {
           )
         ) : (
           <ul className="space-y-2">
-            {templates.map((t) => (
+            {templates.map((t) =>
+              editingId === t.id ? (
+                <li key={t.id}>
+                  <CreateForm
+                    editing={t}
+                    onCancel={() => setEditingId(null)}
+                    onCreated={() => {
+                      setEditingId(null);
+                      setSyncMsg(`Plantilla «${t.name}» editada y enviada otra vez a revisión`);
+                      void refetch();
+                    }}
+                  />
+                </li>
+              ) : (
               <li key={t.id} className="rounded-lg border bg-card p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -229,9 +259,35 @@ export function TemplatesClient() {
                       {CATEGORY[t.category as Category]?.label ?? t.category}
                     </p>
                   </div>
-                  <Badge variant={STATUS_BADGE[t.status].variant}>
-                    {STATUS_BADGE[t.status].label}
-                  </Badge>
+                  <div className="flex items-center gap-1">
+                    <Badge variant={STATUS_BADGE[t.status].variant}>
+                      {STATUS_BADGE[t.status].label}
+                    </Badge>
+                    {(t.status === "approved" || t.status === "rejected") && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => setEditingId(t.id)}
+                        aria-label={`Editar la plantilla ${t.name}`}
+                        title="Editar plantilla"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => setToDelete(t)}
+                        aria-label={`Borrar la plantilla ${t.name}`}
+                        title="Borrar plantilla"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 <p className="mt-3 whitespace-pre-wrap text-sm">{t.body}</p>
                 <p
@@ -245,10 +301,36 @@ export function TemplatesClient() {
                     : STATUS_BADGE[t.status].hint}
                 </p>
               </li>
-            ))}
+              )
+            )}
           </ul>
         )}
       </section>
+
+      {toDelete && (
+        <ConfirmDialog
+          title="¿Borrar esta plantilla?"
+          confirmLabel="Borrar plantilla"
+          onConfirm={() => removeTemplate(toDelete)}
+          onClose={() => setToDelete(null)}
+          message={
+            <div className="space-y-2">
+              <p>
+                Se borra <span className="font-mono font-medium">{toDelete.name}</span> (
+                {templateLanguageName(toDelete.language)}) aquí y en tu cuenta de WhatsApp en Meta. No se puede deshacer.
+              </p>
+              {toDelete.status === "approved" && (
+                <p className="text-xs text-muted-foreground">
+                  Meta no te deja crear otra plantilla con este mismo nombre durante 30 días.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Los mensajes que ya enviaste con ella no cambian.
+              </p>
+            </div>
+          }
+        />
+      )}
     </div>
   );
 }
@@ -344,14 +426,19 @@ function HowItWorks({ defaultOpen }: { defaultOpen: boolean }) {
 function CreateForm({
   onCreated,
   onCancel,
+  editing,
 }: {
   onCreated: () => void;
   onCancel: () => void;
+  /** Con una plantilla: edita su texto (nombre e idioma no cambian en Meta). */
+  editing?: TemplateDto;
 }) {
-  const [name, setName] = useState("");
-  const [language, setLanguage] = useState(DEFAULT_TEMPLATE_LANGUAGE);
-  const [category, setCategory] = useState<Category>("UTILITY");
-  const [body, setBody] = useState("");
+  const [name, setName] = useState(editing?.name ?? "");
+  const [language, setLanguage] = useState(editing?.language ?? DEFAULT_TEMPLATE_LANGUAGE);
+  const [category, setCategory] = useState<Category>((editing?.category as Category) ?? "UTILITY");
+  const [body, setBody] = useState(editing?.body ?? "");
+  // Meta no deja cambiar la categoría de una plantilla aprobada.
+  const categoryLocked = editing?.status === "approved";
   const [examples, setExamples] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -390,12 +477,11 @@ function CreateForm({
   async function create() {
     setSaving(true);
     setError(null);
-    const res = await fetch("/api/templates", {
-      method: "POST",
+    const res = await fetch(editing ? `/api/templates/${encodeURIComponent(editing.id)}` : "/api/templates", {
+      method: editing ? "PATCH" : "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name,
-        language,
+        ...(editing ? {} : { name, language }),
         category,
         body,
         examples: examples.slice(0, variableCount),
@@ -406,7 +492,7 @@ function CreateForm({
       const data = (await res?.json().catch(() => null)) as {
         error?: { message?: string };
       } | null;
-      setError(data?.error?.message ?? "No se pudo crear la plantilla");
+      setError(data?.error?.message ?? (editing ? "No se pudo guardar la plantilla" : "No se pudo crear la plantilla"));
       return;
     }
     onCreated();
@@ -415,13 +501,21 @@ function CreateForm({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Nueva plantilla</CardTitle>
+        <CardTitle>{editing ? "Editar plantilla" : "Nueva plantilla"}</CardTitle>
         <CardDescription>
-          Se envía a revisión de Meta al crearla. Mientras la revisan puedes
-          seguir usando el CRM.
+          {editing
+            ? "Al guardar vuelve a revisión de Meta y no se puede enviar hasta que la aprueben otra vez. El nombre y el idioma no se pueden cambiar."
+            : "Se envía a revisión de Meta al crearla. Mientras la revisan puedes seguir usando el CRM."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
+        {editing?.status === "approved" && (
+          <p className="flex items-start gap-1.5 rounded-md bg-subtle p-3 text-xs text-muted-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Meta permite editar una plantilla aprobada una vez cada 24 horas y hasta 10 veces al mes.
+          </p>
+        )}
+        {!editing && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">Empieza con un ejemplo (opcional)</p>
           <div className="flex flex-wrap gap-2">
@@ -432,6 +526,7 @@ function CreateForm({
             ))}
           </div>
         </div>
+        )}
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
@@ -442,6 +537,7 @@ function CreateForm({
               value={name}
               onChange={(e) => setName(normalizeName(e.target.value))}
               maxLength={60}
+              disabled={!!editing}
             />
             <p className="text-xs text-muted-foreground">
               Solo minúsculas, números y guion bajo. Tus clientes no lo ven.
@@ -449,6 +545,9 @@ function CreateForm({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="tpl-lang" required>Idioma del mensaje</Label>
+            {editing ? (
+              <Input id="tpl-lang" value={templateLanguageName(language)} disabled />
+            ) : (
             <SearchSelect
               id="tpl-lang"
               value={language}
@@ -463,6 +562,7 @@ function CreateForm({
               searchPlaceholder="Buscar idioma…"
               triggerClassName="bg-card"
             />
+            )}
           </div>
         </div>
 
@@ -473,8 +573,9 @@ function CreateForm({
               <label
                 key={c}
                 className={cn(
-                  "cursor-pointer rounded-md border p-3 text-sm transition-colors",
-                  category === c ? "border-primary bg-brand-tint" : "hover:bg-accent"
+                  "rounded-md border p-3 text-sm transition-colors",
+                  category === c ? "border-primary bg-brand-tint" : "hover:bg-accent",
+                  categoryLocked ? "cursor-not-allowed opacity-60" : "cursor-pointer"
                 )}
               >
                 <input
@@ -482,6 +583,7 @@ function CreateForm({
                   name="tpl-category"
                   value={c}
                   checked={category === c}
+                  disabled={categoryLocked}
                   onChange={() => setCategory(c)}
                   className="sr-only"
                 />
@@ -567,10 +669,16 @@ function CreateForm({
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex flex-wrap gap-2">
           <Button
-            disabled={saving || !name.trim() || !body.trim() || bodyError !== null}
+            disabled={
+              saving ||
+              !name.trim() ||
+              !body.trim() ||
+              bodyError !== null ||
+              (!!editing && body.trim() === editing.body && category === editing.category)
+            }
             onClick={() => void create()}
           >
-            {saving ? "Enviando a Meta…" : "Crear y enviar a revisión"}
+            {saving ? "Enviando a Meta…" : editing ? "Guardar y enviar a revisión" : "Crear y enviar a revisión"}
           </Button>
           <Button variant="outline" disabled={saving} onClick={onCancel}>
             Cancelar

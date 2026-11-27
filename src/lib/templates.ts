@@ -75,3 +75,23 @@ export function renderBody(body: string, variables: string[] = []): string {
     return variables[Number(index) - 1] ?? "";
   });
 }
+
+/** Una plantilla recién creada o editada puede tardar en aparecer en el listado de Meta: no se da por borrada antes. */
+export const TEMPLATE_GONE_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Qué plantillas locales ya no existen en Meta tras leer su listado. Solo se afirma con la lista COMPLETA
+ * (todas las páginas); nunca un borrador (no se mandó a Meta) ni una tocada hace menos de la gracia.
+ */
+export function templatesGoneFromMeta(
+  local: { id: string; status: string; updatedAt: Date }[],
+  seenIds: ReadonlySet<string>,
+  complete: boolean,
+  now: number
+): string[] {
+  if (!complete) return [];
+  const cutoff = now - TEMPLATE_GONE_GRACE_MS;
+  return local
+    .filter((t) => !seenIds.has(t.id) && t.status !== "draft" && t.updatedAt.getTime() <= cutoff)
+    .map((t) => t.id);
+}

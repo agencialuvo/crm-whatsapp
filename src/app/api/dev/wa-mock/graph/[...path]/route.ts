@@ -469,10 +469,20 @@ export async function GET(req: Request, ctx: Params) {
   if (marketing) return marketing;
 
   // GET {wabaId}/message_templates → lista para el sync
+  // Paginado como Meta: 25 por defecto (`limit`), cursor `after` = índice, y `paging.next` solo si quedan más.
   if (path.length === 2 && path[1] === "message_templates") {
     const state = getWaMockState();
+    const url = new URL(req.url);
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 25, 1), 100);
+    const from = Number(url.searchParams.get("after") ?? 0) || 0;
+    const page = state.templates.slice(from, from + limit);
+    const more = from + limit < state.templates.length;
     return Response.json({
-      data: state.templates.map((t) => ({
+      paging: {
+        cursors: { before: String(from), after: String(from + page.length) },
+        ...(more ? { next: `${url.origin}${url.pathname}?limit=${limit}&after=${from + page.length}` } : {}),
+      },
+      data: page.map((t) => ({
         id: t.id,
         name: t.name,
         language: t.language,
@@ -805,6 +815,26 @@ export async function POST(req: Request, ctx: Params) {
     return Response.json({ id: tpl.id, status: "PENDING", category: tpl.category });
   }
 
+  // POST {templateId} → edita la plantilla. Como Meta: una en revisión no se edita, una aprobada no cambia de
+  // categoría, y tras editar vuelve a PENDING.
+  if (path.length === 1 && path[0]!.startsWith("tplmock_")) {
+    const tpl = getWaMockState().templates.find((t) => t.id === path[0]);
+    const metaError = (message: string, status = 400) =>
+      Response.json({ error: { message, type: "OAuthException", code: 100, fbtrace_id: "mock" } }, { status });
+    if (!tpl) return metaError("Template not found", 404);
+    if (tpl.status === "PENDING") return metaError("Template is in review and cannot be edited");
+    if (tpl.status === "APPROVED" && body.category && body.category !== tpl.category) {
+      return metaError("Category of an approved template cannot be edited");
+    }
+    const components = (body.components ?? []) as { type?: string; text?: string }[];
+    const bodyComponent = components.find((c) => (c.type ?? "").toUpperCase() === "BODY");
+    if (bodyComponent?.text) tpl.body = bodyComponent.text;
+    tpl.components = components;
+    if (typeof body.category === "string") tpl.category = body.category;
+    tpl.status = "PENDING";
+    return Response.json({ success: true });
+  }
+
   // POST {wabaId}/subscribed_apps → suscribe la app. Como en Meta, el override
   // de callback se fija mandándolo en el cuerpo y un POST SIN él lo BORRA
   // ("Delete WABA alternate callback"): un CRM que re-suscribe a ciegas
@@ -851,6 +881,26 @@ export async function DELETE(req: Request, ctx: Params) {
   if (guard) return guard;
   const token = bearerToken(req);
   if (token.endsWith("-invalid")) return invalidTokenResponse();
-  await ctx.params;
+  const path = normalizePath((await ctx.params).path);
+
+  // DELETE {wabaId}/message_templates?name=…[&hsm_id=…] → con `hsm_id` solo ese idioma; sin él, todos los
+  // idiomas con ese nombre. Si no hay ninguna, 404 como Meta (el CRM la quita igual de su lado).
+  if (path.length === 2 && path[1] === "message_templates") {
+    const url = new URL(req.url);
+    const name = url.searchParams.get("name");
+    const hsmId = url.searchParams.get("hsm_id");
+    const state = getWaMockState();
+    const before = state.templates.length;
+    state.templates = state.templates.filter(
+      (t) => !(t.name === name && (!hsmId || t.id === hsmId))
+    );
+    if (state.templates.length === before) {
+      return Response.json(
+        { error: { message: "Template not found", type: "GraphMethodException", code: 100, fbtrace_id: "mock" } },
+        { status: 404 }
+      );
+    }
+    return Response.json({ success: true });
+  }
   return Response.json({ success: true });
 }

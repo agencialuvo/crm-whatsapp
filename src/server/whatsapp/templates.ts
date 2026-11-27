@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   countVariables,
   renderBody,
+  templatesGoneFromMeta,
   validateBodyVariables,
 } from "@/lib/templates";
 import { getDb, schema } from "@/lib/db";
@@ -26,6 +27,8 @@ export class TemplateError extends Error {
     | "reconnect_required"
     | "invalid"
     | "not_found"
+    | "in_use"
+    | "not_editable"
     | "meta_error"
     | "meta_unavailable";
 
@@ -41,6 +44,8 @@ const TEMPLATE_ERROR_STATUS: Record<TemplateError["code"], number> = {
   reconnect_required: 409,
   invalid: 422,
   not_found: 404,
+  in_use: 409,
+  not_editable: 409,
   meta_error: 422,
   meta_unavailable: 503,
 };
@@ -172,6 +177,220 @@ export async function createTemplate(
   return inserted[0]!;
 }
 
+/** Los flujos de automatización con un paso que envía esta plantilla (`config.templateId`). */
+export async function flowsUsingTemplate(
+  organizationId: string,
+  templateId: string
+): Promise<{ id: string; name: string }[]> {
+  const s = schema.automationStep;
+  const f = schema.automationFlow;
+  return getDb()
+    .selectDistinct({ id: f.id, name: f.name })
+    .from(s)
+    .innerJoin(f, eq(f.id, s.flowId))
+    .where(
+      scoped(
+        s.organizationId,
+        organizationId,
+        sql`${s.config}->>'templateId' = ${templateId}`
+      )
+    );
+}
+
+/** Meta ya no la tiene (la borraron desde el Administrador de WhatsApp): basta con quitarla de aquí. */
+function isAlreadyGoneInMeta(err: MetaApiError): boolean {
+  if (err.status === 404) return true;
+  return err.code === 100 && /not\s+(be\s+)?found|does not exist|no existe/i.test(err.message);
+}
+
+/**
+ * Borra la plantilla en Meta (`DELETE {waba}/message_templates?name=…&hsm_id=…`) y luego aquí. Con `hsm_id`
+ * solo se borra ESE idioma; sin él Meta borraría todos los idiomas con ese nombre. Si una automatización la
+ * usa, no se borra (409 `in_use`): el paso se quedaría enviando una plantilla que ya no existe. Sin número
+ * conectado solo queda la copia local, que es lo único que se puede quitar.
+ */
+export async function deleteTemplate(
+  organizationId: string,
+  templateId: string
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(schema.template)
+    .where(
+      scoped(
+        schema.template.organizationId,
+        organizationId,
+        eq(schema.template.id, templateId)
+      )
+    )
+    .limit(1);
+  if (!row) throw new TemplateError("not_found", "Esa plantilla ya no existe");
+
+  const flows = await flowsUsingTemplate(organizationId, templateId);
+  if (flows.length > 0) {
+    const names = flows.map((f) => `«${f.name}»`).join(", ");
+    throw new TemplateError(
+      "in_use",
+      flows.length === 1
+        ? `La usa la automatización ${names}. Cámbiala o quita ese paso antes de borrarla.`
+        : `La usan las automatizaciones ${names}. Cámbialas o quita esos pasos antes de borrarla.`
+    );
+  }
+
+  const creds = await getCredentialsByOrg(organizationId);
+  if (creds && row.status !== "draft") {
+    if (creds.status === "reconnect_required") {
+      throw new TemplateError("reconnect_required", "Reconecta tu número antes de borrar plantillas");
+    }
+    const params = new URLSearchParams({ name: row.name });
+    if (row.waTemplateId) params.set("hsm_id", row.waTemplateId);
+    try {
+      await graphRequest(`${creds.wabaId}/message_templates?${params.toString()}`, {
+        method: "DELETE",
+        token: creds.token,
+      });
+    } catch (err) {
+      if (!(err instanceof MetaApiError)) throw err;
+      if (err.isAuthError) {
+        await markReconnectRequired(organizationId);
+        throw new TemplateError("reconnect_required", "El token expiró: reconecta el número");
+      }
+      if (!isAlreadyGoneInMeta(err)) {
+        if (err.status === 0 || err.status >= 500) {
+          throw new TemplateError("meta_unavailable", "Meta no está disponible ahora. Inténtalo en unos minutos.");
+        }
+        throw new TemplateError("meta_error", err.message);
+      }
+    }
+  }
+
+  await db
+    .delete(schema.template)
+    .where(
+      scoped(
+        schema.template.organizationId,
+        organizationId,
+        eq(schema.template.id, templateId)
+      )
+    );
+}
+
+/**
+ * Edita el texto (y, si Meta lo permite, la categoría) de una plantilla con `POST /{template_id}`. El nombre y
+ * el idioma no se pueden cambiar en Meta. Solo se editan plantillas aprobadas o rechazadas (una en revisión no);
+ * una aprobada no cambia de categoría y Meta limita sus ediciones (1 cada 24 h, 10 al mes). Tras editarla vuelve
+ * a revisión: mientras tanto no se puede enviar. Si una automatización la usa, no puede cambiar el número de
+ * variables (los pasos guardan un valor por variable).
+ */
+export async function editTemplate(
+  organizationId: string,
+  templateId: string,
+  input: { category: string; body: string; examples?: string[] }
+): Promise<TemplateRow> {
+  const variableError = validateBodyVariables(input.body);
+  if (variableError) throw new TemplateError("invalid", variableError);
+
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(schema.template)
+    .where(
+      scoped(schema.template.organizationId, organizationId, eq(schema.template.id, templateId))
+    )
+    .limit(1);
+  if (!row) throw new TemplateError("not_found", "Esa plantilla ya no existe");
+  if (row.status === "pending") {
+    throw new TemplateError(
+      "not_editable",
+      "Meta la está revisando: podrás editarla cuando la apruebe o la rechace"
+    );
+  }
+  if (row.status === "approved" && input.category !== row.category) {
+    throw new TemplateError(
+      "invalid",
+      "Meta no deja cambiar la categoría de una plantilla aprobada. Crea una nueva con la otra categoría."
+    );
+  }
+  if (input.body === row.body && input.category === row.category) {
+    throw new TemplateError("invalid", "No hay cambios que guardar");
+  }
+
+  const variableCount = countVariables(input.body);
+  if (variableCount !== countVariables(row.body)) {
+    const flows = await flowsUsingTemplate(organizationId, templateId);
+    if (flows.length > 0) {
+      const names = flows.map((f) => `«${f.name}»`).join(", ");
+      throw new TemplateError(
+        "in_use",
+        `La usa ${flows.length === 1 ? "la automatización" : "las automatizaciones"} ${names}: no cambies cuántas variables tiene, o ajusta antes esos pasos.`
+      );
+    }
+  }
+
+  const creds = await getCredentialsByOrg(organizationId);
+  if (!creds) {
+    throw new TemplateError("not_connected", "Conecta tu número de WhatsApp primero");
+  }
+  if (creds.status === "reconnect_required") {
+    throw new TemplateError("reconnect_required", "Reconecta tu número antes de editar plantillas");
+  }
+  if (!row.waTemplateId) {
+    throw new TemplateError(
+      "not_editable",
+      "Esta plantilla no tiene su identificador de Meta. Pulsa «Actualizar estado» y vuelve a intentarlo."
+    );
+  }
+
+  const examples = Array.from(
+    { length: variableCount },
+    (_, i) => input.examples?.[i]?.trim() || `ejemplo ${i + 1}`
+  );
+  try {
+    await graphRequest(encodeURIComponent(row.waTemplateId), {
+      method: "POST",
+      token: creds.token,
+      body: {
+        ...(row.status === "approved" ? {} : { category: input.category }),
+        components: [
+          {
+            type: "BODY",
+            text: input.body,
+            ...(variableCount > 0 ? { example: { body_text: [examples] } } : {}),
+          },
+        ],
+      },
+    });
+  } catch (err) {
+    if (err instanceof MetaApiError) {
+      if (err.isAuthError) {
+        await markReconnectRequired(organizationId);
+        throw new TemplateError("reconnect_required", "El token expiró: reconecta el número");
+      }
+      if (err.status === 0 || err.status >= 500) {
+        throw new TemplateError("meta_unavailable", "Meta no está disponible ahora. Inténtalo en unos minutos.");
+      }
+      throw new TemplateError("meta_error", err.message);
+    }
+    throw err;
+  }
+
+  const [updatedRow] = await db
+    .update(schema.template)
+    .set({
+      body: input.body,
+      category: input.category,
+      status: "pending",
+      rejectionReason: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      scoped(schema.template.organizationId, organizationId, eq(schema.template.id, templateId))
+    )
+    .returning();
+  return updatedRow!;
+}
+
 function mapMetaStatus(
   status: string | undefined
 ): TemplateRow["status"] | null {
@@ -184,24 +403,67 @@ function mapMetaStatus(
   return null;
 }
 
+type RemoteTemplate = {
+  id?: string;
+  name?: string;
+  language?: string;
+  status?: string;
+  category?: string;
+  rejected_reason?: string;
+  components?: { type?: string; text?: string }[];
+};
+
+/** Tope de páginas por sincronización (100 por página): si se alcanza, la lista NO está completa. */
+const SYNC_MAX_PAGES = 50;
+const GONE_IN_META_REASON = "Ya no existe en Meta: la borraron desde el Administrador de WhatsApp";
+
 /**
- * Sincroniza estados desde Graph (`GET {waba}/message_templates`). Cubre el
- * modo agencia: los webhooks de plantillas NO siguen el override de callback,
- * así que el pull es la vía universal (DV-VC-04/DV-VC-15).
+ * Lee TODAS las plantillas de la WABA siguiendo el cursor `paging.cursors.after` (Meta da 25 por defecto: sin
+ * esto, de la plantilla 26 en adelante nunca se sincronizaban). `complete` = se leyó hasta el final.
  */
-export async function syncTemplates(organizationId: string): Promise<number> {
+async function listRemoteTemplates(
+  wabaId: string,
+  token: string
+): Promise<{ templates: RemoteTemplate[]; complete: boolean }> {
+  const templates: RemoteTemplate[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < SYNC_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      limit: "100",
+      fields: "id,name,language,status,category,rejected_reason,components",
+    });
+    if (after) params.set("after", after);
+    const res: {
+      data?: RemoteTemplate[];
+      paging?: { cursors?: { after?: string }; next?: string };
+    } = await graphRequest(`${wabaId}/message_templates?${params.toString()}`, { token });
+    const data = res.data ?? [];
+    templates.push(...data);
+    const next = res.paging?.next ? res.paging.cursors?.after : undefined;
+    if (!next || data.length === 0) return { templates, complete: true };
+    after = next;
+  }
+  return { templates, complete: false };
+}
+
+/**
+ * Sincroniza desde Graph (`GET {waba}/message_templates`, todas las páginas). Cubre el modo agencia: los
+ * webhooks de plantillas NO siguen el override de callback, así que el pull es la vía universal
+ * (DV-VC-04/DV-VC-15). Meta es la autoridad en estado, categoría y texto (pudo editarse en su panel). Una
+ * plantilla que ya no está en Meta se quita de aquí; si una automatización la usa, se conserva marcada como
+ * rechazada con el motivo (el flujo no puede enviarla y el dueño ve por qué).
+ */
+export async function syncTemplates(
+  organizationId: string
+): Promise<{ updated: number; removed: number }> {
   const creds = await getCredentialsByOrg(organizationId);
   if (!creds) {
     throw new TemplateError("not_connected", "Conecta tu número de WhatsApp primero");
   }
 
-  let data: {
-    data?: { id?: string; name?: string; language?: string; status?: string; category?: string; quality_score?: unknown; rejected_reason?: string }[];
-  };
+  let listing: { templates: RemoteTemplate[]; complete: boolean };
   try {
-    data = await graphRequest(`${creds.wabaId}/message_templates`, {
-      token: creds.token,
-    });
+    listing = await listRemoteTemplates(creds.wabaId, creds.token);
   } catch (err) {
     if (err instanceof MetaApiError) {
       if (err.isAuthError) {
@@ -219,33 +481,68 @@ export async function syncTemplates(organizationId: string): Promise<number> {
     .from(schema.template)
     .where(scoped(schema.template.organizationId, organizationId));
 
+  const seen = new Set<string>();
   let updated = 0;
-  for (const remote of data.data ?? []) {
-    const status = mapMetaStatus(remote.status);
-    if (!status) continue;
+  for (const remote of listing.templates) {
     const match = local.find(
       (t) =>
         (remote.id && t.waTemplateId === remote.id) ||
         (t.name === remote.name && t.language === remote.language)
     );
     if (!match) continue;
+    if ((remote.status ?? "").toUpperCase() === "DELETED") continue; // cuenta como ausente
+    seen.add(match.id);
+    const status = mapMetaStatus(remote.status);
+    if (!status) continue;
     // Meta reclasifica la categoría al aprobar (una UTILITY puede volverse
     // MARKETING, lo que cambia el costo por conversación): es autoridad.
     const category = remote.category ?? match.category;
-    if (match.status === status && match.category === category) continue;
+    const remoteBody = remote.components?.find((c) => (c.type ?? "").toUpperCase() === "BODY")?.text;
+    const body = remoteBody ?? match.body;
+    // Sin `rejected_reason` en el listado se conserva el que trajo el webhook.
+    const rejectionReason =
+      status === "rejected" ? (remote.rejected_reason || match.rejectionReason || null) : null;
+    if (
+      match.status === status &&
+      match.category === category &&
+      match.body === body &&
+      match.rejectionReason === rejectionReason
+    ) {
+      continue;
+    }
     await db
       .update(schema.template)
       .set({
         status,
         category,
-        rejectionReason: remote.rejected_reason ?? null,
+        body,
+        rejectionReason,
         waTemplateId: match.waTemplateId ?? remote.id ?? null,
         updatedAt: new Date(),
       })
       .where(eq(schema.template.id, match.id));
     updated += 1;
   }
-  return updated;
+
+  // Solo con la lista COMPLETA se puede afirmar que una plantilla ya no está en Meta.
+  let removed = 0;
+  const gone = new Set(templatesGoneFromMeta(local, seen, listing.complete, Date.now()));
+  for (const t of local) {
+    if (!gone.has(t.id)) continue;
+    const inUse = (await flowsUsingTemplate(organizationId, t.id)).length > 0;
+    if (inUse) {
+      if (t.status === "rejected" && t.rejectionReason === GONE_IN_META_REASON) continue;
+      await db
+        .update(schema.template)
+        .set({ status: "rejected", rejectionReason: GONE_IN_META_REASON, updatedAt: new Date() })
+        .where(eq(schema.template.id, t.id));
+      updated += 1;
+    } else {
+      await db.delete(schema.template).where(eq(schema.template.id, t.id));
+      removed += 1;
+    }
+  }
+  return { updated, removed };
 }
 
 /** Evento webhook `message_template_status_update` (modo directo, FR-050). */

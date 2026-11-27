@@ -66,3 +66,24 @@ modo agencia no es el de esta instancia: sin pull, la plantilla se queda
     132000 de Meta si el número de parámetros no cuadra.
 14. Compatibilidad: el payload viejo `{ templateId, variable }` (una variable)
     sigue enviando — lo usa el cron de recordatorios de sesión.
+
+## Borrar una plantilla
+
+1. En Ajustes → Plantillas, el dueño o un administrador pulsa la papelera de una plantilla y confirma.
+2. Desaparece de la lista y de la cuenta de WhatsApp en Meta (solo ese idioma).
+3. Si una automatización la envía, no se borra: el aviso nombra el flujo (409 `in_use`).
+4. Si ya no existía en Meta, se quita igual de aquí.
+
+Automatizado: `pnpm test:e2e:templates-gestion`.
+
+## Editar una plantilla
+
+1. En una plantilla aprobada o rechazada, pulsa el lápiz: el nombre y el idioma quedan fijos.
+2. Cambia el texto (en una rechazada, también la categoría) y guarda: vuelve a «En revisión» aquí y en Meta.
+3. Una en revisión no se edita (409 `not_editable`); una aprobada no cambia de categoría (422).
+4. Si una automatización la usa, no puede cambiar cuántas variables tiene (409 `in_use`).
+
+## Sincronizar
+
+- «Actualizar estado» lee todas las páginas del listado de Meta (no solo las primeras 25).
+- Las que ya no existen en Meta se quitan; si una automatización la usa, queda «Rechazada» con el motivo.
