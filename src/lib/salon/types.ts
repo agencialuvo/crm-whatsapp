@@ -2,6 +2,13 @@ import type { SaleLoyaltyDto } from "@/lib/loyalty";
 import type { CommissionSource } from "@/lib/salon/commission";
 import type { FunnelPointDto, FunnelTotalsDto } from "@/lib/salon/funnel";
 import type { BreakEvenDto } from "@/lib/salon/break-even";
+import type {
+  BirthdayFlowStats,
+  BirthdayKpis,
+  BirthdayRowState,
+  RescueBlock,
+  RescueSummary,
+} from "@/lib/salon/birthday-campaign";
 import type { RepurchaseDto } from "@/lib/salon/insights";
 import type { PaymentMethod, PriceMode, ScheduleDay } from "@/lib/salon/schemas";
 
@@ -278,14 +285,29 @@ export type SalonClientDetailDto = {
   history: ClientHistoryRowDto[];
 };
 
-/** Un cliente que cumple años este mes. */
-export type BirthdayClientDto = {
+/** Un cliente que cumple años este mes, con su estado en la campaña del mes (`birthday-campaign.ts`). */
+export type BirthdayClientDto = BirthdayRowState & {
   id: string;
   name: string;
   phone: string | null;
   day: number;
+  /** Visitas y gasto de SIEMPRE (no solo del mes). */
   visits: number;
   totalCents: number;
+  /** Paso 3 — se dio de baja de los mensajes automáticos. */
+  optedOut: boolean;
+  /** Paso 3 — tiene un chat real de WhatsApp al que enviar. */
+  reachable: boolean;
+  /** Paso 3 — por qué no entra al rescate del mes (`null` = entra). */
+  rescueBlock: RescueBlock | null;
+};
+
+/** Paso 3 — el rescate de fin de mes en el Panel. */
+export type BirthdayRescueDto = RescueSummary & {
+  /** ¿Se puede lanzar en esta instancia? (necesita el módulo de Automatizaciones). */
+  available: boolean;
+  /** Flujos MANUALES encendidos con que se puede enviar (el mensaje y la plantilla los define el flujo). */
+  flows: { id: string; name: string }[];
 };
 
 /** Un punto de la serie del Panel: ingresos y, con ellos, comisiones, gastos y ganancia neta. */
@@ -334,6 +356,14 @@ export type SalonDashboardDto = {
     month: number;
     /** Día de hoy en la zona del negocio, para marcar «hoy». */
     today: number;
+    /** Año del cumpleaños que se mide (el de hoy en la zona del negocio). */
+    year: number;
     clients: BirthdayClientDto[];
+    /** KPIs del mes: cumpleañeros, contactados, agendados y quiénes aprovecharon. */
+    kpis: BirthdayKpis;
+    /** Desglose por automatización de cumpleaños (activas y las apagadas que este año enviaron). */
+    flows: BirthdayFlowStats[];
+    /** Paso 3 — rescate de fin de mes («Última oportunidad»). */
+    rescue: BirthdayRescueDto;
   };
 };

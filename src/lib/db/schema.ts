@@ -1033,6 +1033,57 @@ export const loyaltyTransaction = pgTable(
   ]
 );
 
+/**
+ * Cumpleaños — saludo MANUAL registrado desde el Panel («Saludar» abre WhatsApp con el texto listo). Cuenta como
+ * «contactado» en las métricas de cumpleaños aunque el CRM no pueda confirmar la entrega (el mensaje sale desde el
+ * teléfono de quien saluda, no por la API). Uno por cliente y AÑO del cumpleaños: saludar dos veces no duplica.
+ */
+export const birthdayGreeting = pgTable(
+  "birthday_greeting",
+  {
+    id: text("id").primaryKey(), // prefix: 'bgr'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    /** Año del cumpleaños saludado (el del mes que muestra el Panel, en la zona del negocio). */
+    year: integer("year").notNull(),
+    /** Quién saludó (puede borrarse la cuenta: el registro se conserva). */
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("birthday_greeting_org_contact_year_uq").on(t.organizationId, t.contactId, t.year)]
+);
+
+/**
+ * Cumpleaños — rescate de fin de mes («Última oportunidad»): el CONTROL de a quién ya se le lanzó el rescate del
+ * mes. Se reclama la fila ANTES de encolar la ejecución (índice único org + cliente + periodo) y se suelta si el
+ * encolado falla: dos lanzamientos simultáneos, o con flujos distintos, nunca le mandan dos rescates al mismo
+ * cliente en el mes. La ejecución vive en el motor de automatizaciones con la llave `birthday_rescue:AAAA-MM`.
+ */
+export const birthdayRescue = pgTable(
+  "birthday_rescue",
+  {
+    id: text("id").primaryKey(), // prefix: 'brs'
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    /** Mes del rescate: `AAAA-MM` (el mes del cumpleaños, en la zona del negocio). */
+    period: text("period").notNull(),
+    /** El flujo MANUAL con que se envió (si se borra el flujo, el control se conserva). */
+    flowId: text("flow_id").references(() => automationFlow.id, { onDelete: "set null" }),
+    /** Quién lo lanzó. */
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("birthday_rescue_org_contact_period_uq").on(t.organizationId, t.contactId, t.period)]
+);
+
 
 
 /* ============================================================

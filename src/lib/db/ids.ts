@@ -81,6 +81,10 @@ const prefixes = {
   loyaltySettings: "lgs",
   customerLoyaltyCard: "clc",
   loyaltyTransaction: "ltr",
+  // Cumpleaños: saludo manual registrado desde el Panel (uno por cliente y año)
+  birthdayGreeting: "bgr",
+  // Cumpleaños: rescate de fin de mes («Última oportunidad»), uno por cliente y mes
+  birthdayRescue: "brs",
   // Cuadre de caja y preferencias de vista
   cashRegisterShift: "shf",
   userUiPreferences: "pref",

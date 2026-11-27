@@ -1,19 +1,18 @@
-import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import type {
-  BirthdayClientDto,
   DashboardComparisonDto,
   RetentionDto,
   RevenuePointDto,
   SalonDashboardDto,
 } from "@/lib/salon/types";
-import { sortBirthdaysByProximity } from "@/lib/salon/insights";
 import { addDaysISO } from "@/lib/time/slots";
 import { resolvePeriod, type ResolvedPeriod } from "@/server/analytics/period";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { getFunnelDaily, funnelTotals, type FunnelDay, type FunnelFilters } from "@/server/business/financial-funnel";
 import { getBreakEven } from "@/server/business/break-even";
+import { getBirthdayCampaign } from "@/server/business/birthday-campaign";
 import { getRepurchaseCycle } from "@/server/business/business-insights";
 import { getSalesReport } from "@/server/business/sales-service";
 
@@ -22,49 +21,6 @@ import { getSalesReport } from "@/server/business/sales-service";
  * Caja, sin la tabla de ventas), las citas del periodo y los clientes que
  * cumplen años este mes. Todo acotado a la organización.
  */
-
-/** Clientes del salón que cumplen años en `month` (1-12). */
-async function listBirthdaysOfMonth(
-  organizationId: string,
-  month: number
-): Promise<BirthdayClientDto[]> {
-  const sale = schema.serviceSale;
-  const rows = await getDb()
-    .select({
-      id: schema.contact.id,
-      name: schema.contact.name,
-      phone: schema.contact.phone,
-      day: schema.contact.birthdayDay,
-      visits: sql<number>`count(${sale.id})::int`,
-      totalCents: sql<number>`coalesce(sum(${sale.amountCents}), 0)::float8`,
-    })
-    .from(schema.contact)
-    .leftJoin(sale, and(eq(sale.contactId, schema.contact.id), eq(sale.organizationId, organizationId)))
-    .where(
-      scoped(
-        schema.contact.organizationId,
-        organizationId,
-        eq(schema.contact.salonClient, true),
-        eq(schema.contact.birthdayMonth, month)
-      )
-    )
-    .groupBy(schema.contact.id)
-    .orderBy(asc(schema.contact.birthdayDay), asc(schema.contact.name));
-  return rows.flatMap((r) =>
-    r.day == null
-      ? []
-      : [
-          {
-            id: r.id,
-            name: r.name,
-            phone: r.phone,
-            day: r.day,
-            visits: r.visits,
-            totalCents: r.totalCents,
-          },
-        ]
-  );
-}
 
 /** Citas del periodo (agendadas o realizadas; ni bloqueos, ni canceladas, ni de prueba). */
 async function countAppointments(
@@ -209,17 +165,15 @@ export async function getDashboard(
   filters: FunnelFilters = {}
 ): Promise<SalonDashboardDto> {
   const staffId = filters.staffId ?? null;
-  const month = Number(today.slice(5, 7));
-  const todayDay = Number(today.slice(8, 10));
   const cmp = comparisonRange(period);
   const previous = resolvePeriod({ from: cmp.from, to: cmp.to, timezone: period.timezone });
   // «Hoy» para contar los días sin venir: el de hoy, o el último del periodo si este ya pasó.
   const asOf = period.dto.to < today ? period.dto.to : today;
-  const [report, appointments, clients, retention, days, previousDays, previousRetention, repurchase, breakEven] =
+  const [report, appointments, birthdays, retention, days, previousDays, previousRetention, repurchase, breakEven] =
     await Promise.all([
     getSalesReport(organizationId, period, staffId, false),
     agendaEnabled() ? countAppointments(organizationId, period, staffId) : Promise.resolve(null),
-    listBirthdaysOfMonth(organizationId, month),
+    getBirthdayCampaign(organizationId, today, period.timezone),
     getRetention(organizationId, period, staffId),
     getFunnelDaily(organizationId, period, filters),
     getFunnelDaily(organizationId, previous, filters),
@@ -247,7 +201,7 @@ export async function getDashboard(
     series: buildSeries(period, days),
     report,
     appointments,
-    // Lo más próximo a hoy primero (no por día del mes): quien cumple hoy o mañana es a quien hay que saludar.
-    birthdays: { month, today: todayDay, clients: sortBirthdaysByProximity(clients, todayDay) },
+    // Cumpleaños del mes del negocio (no dependen del rango ni de los filtros): estado, KPIs y automatizaciones.
+    birthdays,
   };
 }

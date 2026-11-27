@@ -62,7 +62,8 @@ describe.skipIf(!live)("automatizaciones de citas contra Postgres", () => {
     await db.insert(schema.conversation).values({ id: `cv_b${tag}`, organizationId: org, contactId, lastInboundAt: new Date() });
     created.contacts.push(contactId);
     created.convs.push(`cv_b${tag}`);
-  });
+    // Importa el motor, la agenda y el worker en frío: con el equipo cargado supera los 10 s por defecto.
+  }, 60_000);
 
   afterAll(async () => {
     if (!db) return;

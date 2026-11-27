@@ -16,7 +16,7 @@ const TABLAS = [
   "src/components/negocio/client-history-dialog.tsx",
   "src/components/negocio/shift-history-client.tsx",
   "src/components/contacts/contacts-client.tsx",
-  "src/components/negocio/dashboard-client.tsx",
+  "src/components/negocio/dashboard-birthdays.tsx",
   "src/components/automatizaciones/automations-client.tsx",
   "src/components/automatizaciones/history-panel.tsx",
   "src/components/settings/ad-flows-client.tsx",

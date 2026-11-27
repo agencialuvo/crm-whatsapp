@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Cake, SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DataTablePagination, DataTableToolbar } from "@/components/ui/data-table-pagination";
-import { useDataTable } from "@/components/ui/use-data-table";
 import { apiFetch, describeError } from "@/components/negocio/api";
+import { BirthdaysSection } from "@/components/negocio/dashboard-birthdays";
 import { BreakEvenCard } from "@/components/negocio/dashboard-break-even";
 import { FunnelCards } from "@/components/negocio/dashboard-funnel";
 import { RepurchaseCard } from "@/components/negocio/dashboard-insights";
@@ -21,15 +20,12 @@ import { RangePicker, type Range } from "@/components/results/range-picker";
 import { Section } from "@/components/results/section";
 import { TimeBars } from "@/components/results/time-bars";
 import { itemFilterOptions } from "@/lib/salon/funnel";
-import { MONTH_NAMES, money } from "@/lib/salon/format";
+import { money } from "@/lib/salon/format";
 import { addDaysISO } from "@/lib/time/slots";
 import type { SaleOptionsDto, SalonDashboardDto } from "@/lib/salon/types";
 import { cn } from "@/lib/utils";
 import { SearchSelect } from "@/components/ui/search-select";
 
-/** Lista vacía estable mientras el Panel carga. */
-const NONE: never[] = [];
-const BIRTHDAY_NOUN = { one: "cumpleaños", other: "cumpleaños" };
 
 /** Último día del mes de un día AAAA-MM-DD (sin pasar por la zona del navegador). */
 function endOfMonth(day: string): string {
@@ -58,13 +54,6 @@ function dashboardPresets(today: string): { label: string; range: Range }[] {
 }
 
 const FILTERS_OPEN_KEY = "panel-filtros-abiertos";
-
-/** Enlace de WhatsApp para saludar; solo con un celular de dígitos. */
-function whatsappLink(phone: string | null, name: string): string | null {
-  if (!phone || !/^\d{7,15}$/.test(phone)) return null;
-  const text = `¡Hola ${name.split(" ")[0] ?? ""}! 🎉 Feliz cumpleaños de parte de todo el equipo.`;
-  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
-}
 
 /**
  * Módulo SALON — panel ejecutivo (solo dueño/administrador).
@@ -171,13 +160,9 @@ export function DashboardClient({
 
   const report = data?.report ?? null;
   const f = data?.funnel;
-  const birthdays = data?.birthdays;
-  // Los cumpleaños del mes pueden ser muchos: van paginados como cualquier lista.
-  const birthdayTable = useDataTable(birthdays?.clients ?? NONE, { view: "panel-cumpleanos", defaultPageSize: 10 });
   // Con un filtro de profesional o de servicio los gastos del negocio no se reparten: lo que se grafica es
   // ingresos − comisiones, y se llama «ganancia antes de gastos» (nunca «ganancia neta»).
   const netName = filtersActive ? "ganancia antes de gastos" : "ganancia neta";
-  const monthName = birthdays ? MONTH_NAMES[birthdays.month - 1] : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -408,76 +393,13 @@ export function DashboardClient({
 
           <RepurchaseCard cycle={data?.repurchase ?? null} loading={loading} />
 
-          <div>
-            <Section
-              title={monthName ? `Cumpleaños de ${monthName}` : "Cumpleaños del mes"}
-              hint="Clientes que cumplen años este mes: un saludo ayuda a que vuelvan."
-              loading={loading && !data}
-              hasData={data !== null}
-              empty={birthdays?.clients.length === 0}
-              emptyText="Ningún cliente cumple años este mes. Registra el cumpleaños al cobrar o desde Clientes."
-            >
-              {birthdays && (
-                <>
-                <DataTableToolbar {...birthdayTable.pagination} noun={BIRTHDAY_NOUN} />
-                <ul className="divide-y">
-                  {birthdayTable.rows.map((c) => {
-                    const link = whatsappLink(c.phone, c.name);
-                    const isToday = c.day === birthdays.today;
-                    const passed = c.day < birthdays.today;
-                    return (
-                      <li key={c.id} className="flex items-center gap-3 py-2">
-                        <span
-                          className={cn(
-                            "flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-md border text-sm font-bold tabular-nums",
-                            isToday
-                              ? "border-brand bg-brand-tint text-brand-text"
-                              : passed
-                                ? "text-text-3"
-                                : "bg-subtle"
-                          )}
-                        >
-                          {c.day}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">
-                            {c.name}
-                            {isToday && (
-                              <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-brand-text">
-                                <Cake className="h-3.5 w-3.5" aria-hidden />
-                                ¡Hoy!
-                              </span>
-                            )}
-                          </p>
-                          <p className="truncate text-xs text-text-3">
-                            {c.visits} visita{c.visits === 1 ? "" : "s"} ·{" "}
-                            {money(c.totalCents, currency)} invertidos
-                          </p>
-                        </div>
-                        {link && (
-                          <a
-                            href={link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="shrink-0 rounded-md border px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            aria-label={`Saludar a ${c.name} por WhatsApp`}
-                          >
-                            Saludar
-                          </a>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-                <DataTablePagination
-                  {...birthdayTable.pagination}
-                  noun={BIRTHDAY_NOUN}
-                  label="Paginación de cumpleaños"
-                />
-                </>
-              )}
-            </Section>
-          </div>
+          <BirthdaysSection
+            birthdays={data?.birthdays}
+            currency={currency}
+            loading={loading}
+            hasData={data !== null}
+            onChanged={() => void load(range, staffId, item)}
+          />
         </>
       )}
     </div>
