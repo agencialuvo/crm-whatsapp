@@ -359,6 +359,11 @@ export type SalonDashboardDto = {
   comparison: DashboardComparisonDto;
   /** De ingresos a ganancia neta del periodo, con los filtros de profesional y servicio aplicados. */
   funnel: FunnelTotalsDto;
+  /**
+   * ¿El negocio configuró algún porcentaje de comisión (servicio, profesional o profesional × servicio)?
+   * Sin reglas no hay comisión: la tarjeta lo dice en vez de enseñar un 0 % sin explicación.
+   */
+  commissionRulesConfigured: boolean;
   /** Ingresos y ganancia neta en el tiempo: por día (hasta 31 días), por semana (hasta 92) o por mes. */
   series: { granularity: "day" | "week" | "month"; points: RevenuePointDto[] };
   /** Sin la tabla de ventas (`rows` vacío): el panel solo muestra agregados. */

@@ -16,9 +16,32 @@ describe("embudo financiero — de bruto a neto", () => {
       count: 4,
       revenueCents: 46_000,
       commissionsCents: 17_400,
+      afterCommissionsCents: 28_600,
       expensesCents: 45_000,
       netCents: -16_400,
     });
+  });
+
+  it("saldo tras comisiones = ingresos − comisiones, y la ganancia neta sale de él", () => {
+    for (const input of [
+      { count: 3, revenueCents: 628_000 + 150_000, commissionsCents: 150_000, expensesCents: 200_000 },
+      { count: 0, revenueCents: 0, commissionsCents: 0, expensesCents: 0 },
+      { count: 1, revenueCents: 10_000, commissionsCents: 0, expensesCents: 30_000 },
+      { count: 1, revenueCents: 10_000, commissionsCents: 4_000, expensesCents: null },
+    ]) {
+      const f = computeFunnel(input);
+      expect(f.afterCommissionsCents).toBe(input.revenueCents - input.commissionsCents);
+      expect(f.netCents).toBe(f.afterCommissionsCents - (f.expensesCents ?? 0));
+    }
+    expect(computeFunnel({ count: 3, revenueCents: 778_000, commissionsCents: 150_000, expensesCents: 1 }).afterCommissionsCents).toBe(
+      628_000
+    );
+  });
+
+  it("sin gastos aplicables, el saldo tras comisiones y la ganancia antes de gastos coinciden", () => {
+    const f = computeFunnel({ count: 1, revenueCents: 6_000, commissionsCents: 2_400, expensesCents: null });
+    expect(f.afterCommissionsCents).toBe(3_600);
+    expect(f.netCents).toBe(f.afterCommissionsCents);
   });
 
   it("sin gastos aplicables (filtro de profesional o servicio) la ganancia es ingresos − comisiones", () => {
@@ -43,11 +66,25 @@ describe("embudo financiero — de bruto a neto", () => {
       count: 1,
       revenueCents: 10_000,
       commissionsCents: 4_000,
+      afterCommissionsCents: 6_000,
       expensesCents: 43_000,
       netCents: -37_000,
     });
     expect(funnelTotals(days, { staffId: "x" }).expensesCents).toBeNull();
-    expect(funnelTotals([], {})).toMatchObject({ count: 0, revenueCents: 0, netCents: 0 });
+    expect(funnelTotals([], {})).toMatchObject({ count: 0, revenueCents: 0, afterCommissionsCents: 0, netCents: 0 });
+  });
+
+  it("el periodo anterior se suma igual: su saldo tras comisiones sale de sus propios días", () => {
+    const previous: FunnelDay[] = [
+      { day: "2026-08-03", revenueCents: 8_000, commissionsCents: 3_000, expensesCents: 0, count: 2 },
+      { day: "2026-08-09", revenueCents: 2_000, commissionsCents: 500, expensesCents: 0, count: 1 },
+    ];
+    const prev = funnelTotals(previous, {});
+    expect(prev.afterCommissionsCents).toBe(6_500);
+    expect(prev.netCents).toBe(prev.afterCommissionsCents);
+    expect(prev.expensesCents).toBe(0);
+    // Sin gastos en el periodo anterior no hay base: la variación de Gastos es «sin base para comparar».
+    expect(percentChange(12_000, prev.expensesCents ?? 0)).toBeNull();
   });
 });
 

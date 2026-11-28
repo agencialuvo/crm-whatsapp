@@ -4,7 +4,8 @@ import { z } from "zod";
  * Panel — «Embudo financiero real»: de lo que entra (ingresos) a lo que de verdad queda
  * (ganancia neta). Todo en céntimos enteros.
  *
- *   ganancia neta = ingresos − comisiones − gastos
+ *   saldo tras comisiones = ingresos − comisiones
+ *   ganancia neta         = saldo tras comisiones − gastos
  *
  * Los GASTOS son del negocio (alquiler, luz, insumos): no pertenecen a un servicio ni a un
  * profesional. Con uno de esos filtros activos no se prorratean (sería inventar el dato):
@@ -16,6 +17,8 @@ export type FunnelTotalsDto = {
   count: number;
   revenueCents: number;
   commissionsCents: number;
+  /** Saldo tras comisiones: ingresos − comisiones. La base de la que se descuentan los gastos. */
+  afterCommissionsCents: number;
   /** `null` = no aplica (hay un filtro de profesional o de servicio). */
   expensesCents: number | null;
   netCents: number;
@@ -32,16 +35,21 @@ export type FunnelPointDto = {
   count: number;
 };
 
-/** La suma del embudo: el único lugar donde se define la ganancia neta. */
+/** La suma del embudo: el único lugar donde se definen el saldo tras comisiones y la ganancia neta. */
 export function computeFunnel(input: {
   count: number;
   revenueCents: number;
   commissionsCents: number;
   expensesCents: number | null;
 }): FunnelTotalsDto {
+  const afterCommissionsCents = input.revenueCents - input.commissionsCents;
   return {
-    ...input,
-    netCents: input.revenueCents - input.commissionsCents - (input.expensesCents ?? 0),
+    count: input.count,
+    revenueCents: input.revenueCents,
+    commissionsCents: input.commissionsCents,
+    afterCommissionsCents,
+    expensesCents: input.expensesCents,
+    netCents: afterCommissionsCents - (input.expensesCents ?? 0),
   };
 }
 

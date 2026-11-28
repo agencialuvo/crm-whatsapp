@@ -25,7 +25,15 @@ describe("ganancia neta: todas las cuentas dan lo mismo", () => {
     const panel = computeFunnel({ count: 1, revenueCents: revenue, commissionsCents: commissions, expensesCents: expenses });
     const gastos = buildExpenseSummary({ revenueCents: revenue, commissionsCents: commissions, expensesCents: expenses, byKind: NONE });
     const turno = computeShiftTotals({ initialCashCents: 0, salesCents: revenue, commissionsCents: commissions, expensesCents: expenses, cashSalesCents: 0 });
-    expect(panel.netCents).toBe(esperado);
+    expect(panel).toEqual({
+      count: 1,
+      revenueCents: revenue,
+      commissionsCents: commissions,
+      afterCommissionsCents: revenue - commissions,
+      expensesCents: expenses,
+      netCents: esperado,
+    });
+    expect(panel.netCents).toBe(panel.afterCommissionsCents - expenses);
     expect(gastos.realNetCents).toBe(esperado);
     expect(turno.netProfitCents).toBe(esperado);
   });

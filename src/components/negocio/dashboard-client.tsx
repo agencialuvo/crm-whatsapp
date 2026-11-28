@@ -271,8 +271,8 @@ export function DashboardClient({
             currency={currency}
             loading={loading}
             showCommissions={report?.teamInUse ?? true}
-          />
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
+            commissionRulesConfigured={data?.commissionRulesConfigured ?? true}
+          >
             <KpiCard
               label="Ticket promedio"
               value={f ? (f.count > 0 ? money(Math.round(f.revenueCents / f.count), currency) : "—") : "…"}
@@ -304,7 +304,7 @@ export function DashboardClient({
               trend={trend(data, "retention", currency)}
               loading={loading && !!report}
             />
-          </div>
+          </FunnelCards>
         </section>
       )}
 

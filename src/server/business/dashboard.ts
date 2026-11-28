@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import type {
@@ -48,6 +48,31 @@ async function countAppointments(
       )
     );
   return row?.n ?? 0;
+}
+
+/**
+ * ¿Hay alguna regla de comisión? Un porcentaje por defecto en un servicio, uno global en un
+ * profesional o uno pactado profesional × servicio. Una sola consulta, acotada a la organización.
+ */
+async function hasCommissionRules(organizationId: string): Promise<boolean> {
+  const db = getDb();
+  const sv = schema.service;
+  const st = schema.staff;
+  const ssc = schema.staffServiceCommission;
+  const one = sql`1`;
+  const services = db
+    .select({ one })
+    .from(sv)
+    .where(scoped(sv.organizationId, organizationId, isNotNull(sv.defaultCommissionPercentage)));
+  const staff = db
+    .select({ one })
+    .from(st)
+    .where(scoped(st.organizationId, organizationId, isNotNull(st.globalCommissionPercentage)));
+  const pairs = db.select({ one }).from(ssc).where(scoped(ssc.organizationId, organizationId));
+  const rows = await db.execute<{ configured: boolean }>(
+    sql`select (exists(${services}) or exists(${staff}) or exists(${pairs})) as configured`
+  );
+  return rows[0]?.configured === true;
 }
 
 /**
@@ -169,8 +194,18 @@ export async function getDashboard(
   const previous = resolvePeriod({ from: cmp.from, to: cmp.to, timezone: period.timezone });
   // «Hoy» para contar los días sin venir: el de hoy, o el último del periodo si este ya pasó.
   const asOf = period.dto.to < today ? period.dto.to : today;
-  const [report, appointments, birthdays, retention, days, previousDays, previousRetention, repurchase, breakEven] =
-    await Promise.all([
+  const [
+    report,
+    appointments,
+    birthdays,
+    retention,
+    days,
+    previousDays,
+    previousRetention,
+    repurchase,
+    breakEven,
+    commissionRulesConfigured,
+  ] = await Promise.all([
     getSalesReport(organizationId, period, staffId, false),
     agendaEnabled() ? countAppointments(organizationId, period, staffId) : Promise.resolve(null),
     getBirthdayCampaign(organizationId, today, period.timezone),
@@ -180,6 +215,7 @@ export async function getDashboard(
     getRetention(organizationId, previous, staffId),
     getRepurchaseCycle(organizationId, period, asOf),
     getBreakEven(organizationId, period, today),
+    hasCommissionRules(organizationId),
   ]);
   const funnel = funnelTotals(days, filters);
   const previousFunnel = funnelTotals(previousDays, filters);
@@ -198,6 +234,7 @@ export async function getDashboard(
     breakEven,
     comparison,
     funnel,
+    commissionRulesConfigured,
     series: buildSeries(period, days),
     report,
     appointments,
