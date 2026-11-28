@@ -346,6 +346,22 @@ export function birthdayAllowsItems(allowedIds: readonly string[], items: readon
 }
 
 /**
+ * Cuánto rebaja el descuento de cumpleaños sobre una base, en centavos enteros: `round(base × pct / 100)`.
+ * La base es SIEMPRE la suma de los ítems (precio de catálogo, o el monto escrito en un servicio variable u «Otro»),
+ * nunca un monto ya rebajado. Lo usan Caja (para mostrar el monto) y el servidor (para validarlo): dan lo mismo.
+ */
+export function birthdayDiscountCents(baseCents: number, percentage: number): number {
+  if (!Number.isFinite(baseCents) || baseCents <= 0) return 0;
+  const pct = Math.min(Math.max(Number.isFinite(percentage) ? percentage : 0, 0), 100);
+  return Math.round((baseCents * pct) / 100);
+}
+
+/** El monto a cobrar con el descuento de cumpleaños: base − descuento. */
+export function birthdayDiscountedCents(baseCents: number, percentage: number): number {
+  return baseCents - birthdayDiscountCents(baseCents, percentage);
+}
+
+/**
  * ¿La venta suma sello? Sin lista, siempre; con lista, si AL MENOS un ítem (servicio u oferta) da sello
  * (el resto de la venta no quita el sello).
  */

@@ -93,10 +93,6 @@ export function SaleDialog({
   });
   const [staffId, setStaffId] = useState(initial?.staffId ?? "");
   const [soldOn, setSoldOn] = useState(today);
-  const cart = useSaleCart(options, currency, (vals) =>
-    // Si quien estaba elegido no da todo lo del carrito, se cambia o se vacía.
-    setStaffId((cur) => staffAfterItemsChange(options, vals, cur)),
-  );
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [customPct, setCustomPct] = useState("");
   const [birthdayDiscount, setBirthdayDiscount] = useState(false);
@@ -111,11 +107,6 @@ export function SaleDialog({
   // A quién se le cobra (para consultar lo suyo: uso del beneficio y premios).
   const resolvedContactId = contact?.id ?? picked?.id ?? sameNumber?.id ?? null;
   const soldYear = Number(soldOn.slice(0, 4)) || new Date().getFullYear();
-  // Los ítems del carrito: un servicio o una oferta tienen id; «Otro», no.
-  const cartItems = cart.values.map((v) => ({
-    serviceId: v.startsWith("service:") ? v.slice(8) : null,
-    comboId: v.startsWith("combo:") ? v.slice(6) : null,
-  }));
   // El interruptor se ofrece con la campaña encendida, en el mes de cumpleaños del cliente y si NO lo usó ya
   // este año (es de una vez por año). Qué servicios admite se avisa al activarlo, no se esconde (Ajustes →
   // Marketing → Campaña de cumpleaños).
@@ -143,6 +134,24 @@ export function SaleDialog({
   // Un cliente de mostrador sin ficha todavía no pudo usarlo; con ficha, se espera a saberlo.
   const alreadyUsed = resolvedContactId ? usage?.key !== usageKey || usage.used : false;
   const isBirthday = monthOk && !alreadyUsed;
+  // El descuento cuenta solo si el cliente sigue siendo elegible (otro cliente u otra fecha lo apagan).
+  const birthdayActive = birthdayDiscount && isBirthday;
+  // El % es el de Ajustes → Marketing (nunca uno fijo): con el interruptor activo, el monto cobrado es la suma de
+  // los ítems menos ese porcentaje y se recalcula solo con el carrito.
+  const cart = useSaleCart(
+    options,
+    currency,
+    (vals) =>
+      // Si quien estaba elegido no da todo lo del carrito, se cambia o se vacía.
+      setStaffId((cur) => staffAfterItemsChange(options, vals, cur)),
+    undefined,
+    birthdayActive ? (campaign?.percentage ?? 0) : 0,
+  );
+  // Los ítems del carrito: un servicio o una oferta tienen id; «Otro», no.
+  const cartItems = cart.values.map((v) => ({
+    serviceId: v.startsWith("service:") ? v.slice(8) : null,
+    comboId: v.startsWith("combo:") ? v.slice(6) : null,
+  }));
   const birthdayList = campaign?.serviceIds ?? [];
   const birthdayViolates = cartItems.length > 0 && !birthdayAllowsItems(birthdayList, cartItems);
 
@@ -151,6 +160,30 @@ export function SaleDialog({
   const [alertMsg, setAlertMsg] = useState<string | null>(null);
   const birthdayAlert = () =>
     `El descuento de cumpleaños solo aplica para los siguientes servicios: ${namesOf(birthdayList).join(", ") || "los que configuró el negocio"}.`;
+
+  /**
+   * Encender o apagar el descuento de cumpleaños. Encenderlo con algo no permitido en el carrito avisa sin quitar
+   * nada (el cajero corrige). Si la campaña tiene UN solo servicio u oferta, se agrega solo (si sigue activo y no
+   * está ya en el carrito). Encender o apagar descarta un monto escrito a mano: el cobro parte siempre de la suma.
+   */
+  function toggleBirthday(on: boolean) {
+    if (on && birthdayViolates) {
+      setAlertMsg(birthdayAlert());
+      return;
+    }
+    cart.resetAmount();
+    setBirthdayDiscount(on);
+    if (!on) return;
+    setRedeemStamps("");
+    if (birthdayList.length !== 1) return;
+    const id = birthdayList[0]!;
+    const value = options?.services.some((x) => x.id === id)
+      ? `service:${id}`
+      : options?.combos.some((x) => x.id === id)
+        ? `combo:${id}`
+        : null;
+    if (value && !cart.values.includes(value)) cart.add(value);
+  }
 
   // Premios de la tarjeta que se pueden canjear en esta venta.
   const [cardInfo, setCardInfo] = useState<{ contactId: string; view: LoyaltyCardViewDto } | null>(null);
@@ -219,7 +252,7 @@ export function SaleDialog({
       return;
     }
 
-    if (birthdayDiscount && isBirthday && birthdayViolates) {
+    if (birthdayActive && birthdayViolates) {
       setAlertMsg(birthdayAlert());
       return;
     }
@@ -243,7 +276,7 @@ export function SaleDialog({
       paymentMethod: method || undefined,
       customCommissionPercentage:
         canAdjustCommission && customPct.trim() !== "" ? Number(customPct) : null,
-      ...(birthdayDiscount && isBirthday && { birthdayDiscount: true }),
+      ...(birthdayActive && { birthdayDiscount: true }),
       ...(redeeming && !birthdayDiscount && { redeemMilestoneStamps: redeeming.stamps }),
     });
     // Con equipo hay que elegir quién atendió; sin equipo la venta es del negocio (sin comisión).
@@ -488,7 +521,7 @@ export function SaleDialog({
             idPrefix="sale"
             // Con el descuento de cumpleaños activo solo se ofrece lo que él admite.
             allow={
-              birthdayDiscount && isBirthday && birthdayList.length > 0
+              birthdayActive && birthdayList.length > 0
                 ? (v) => birthdayAllowsItems(birthdayList, [{
                     serviceId: v.startsWith("service:") ? v.slice(8) : null,
                     comboId: v.startsWith("combo:") ? v.slice(6) : null,
@@ -523,15 +556,7 @@ export function SaleDialog({
               <Switch
                 size="sm"
                 checked={birthdayDiscount}
-                onCheckedChange={(on) => {
-                  // Activarlo con algo no permitido en la venta avisa, sin quitar nada: el cajero corrige.
-                  if (on && birthdayViolates) {
-                    setAlertMsg(birthdayAlert());
-                    return;
-                  }
-                  setBirthdayDiscount(on);
-                  if (on) setRedeemStamps("");
-                }}
+                onCheckedChange={toggleBirthday}
                 disabled={busy}
                 label={`Aplicar ${campaign?.percentage ?? 20}% de descuento de cumpleaños (no suma sello)`}
               />
@@ -559,7 +584,7 @@ export function SaleDialog({
                     return;
                   }
                   setRedeemStamps(v);
-                  if (v) setBirthdayDiscount(false);
+                  if (v && birthdayDiscount) toggleBirthday(false);
                 }}
                 options={rewards.map((m) => ({ value: String(m.stamps), label: `${m.title} (${m.stamps} sellos)` }))}
                 emptyLabel="Sin canje"

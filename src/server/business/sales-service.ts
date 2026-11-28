@@ -1,7 +1,7 @@
 import { asc, desc, eq, gte, inArray, isNotNull, lt, or, sql, type AnyColumn } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
-import { birthdayAllowsItems, type SaleLoyaltyDto } from "@/lib/loyalty";
+import { birthdayAllowsItems, birthdayDiscountedCents, type SaleLoyaltyDto } from "@/lib/loyalty";
 import { normalizeMx } from "@/lib/meta/client";
 import { scoped } from "@/lib/db/tenant";
 import {
@@ -25,6 +25,7 @@ import type {
   SaleRowDto,
   SalesReportDto,
 } from "@/lib/salon/types";
+import { centsToInput } from "@/lib/salon/format";
 import { NO_STAFF_LABEL } from "@/lib/salon/staff-fields";
 import { dayIsoInTz, zonedWallClockToUtc } from "@/lib/time/slots";
 import { businessTimezone, type ResolvedPeriod } from "@/server/analytics/period";
@@ -358,6 +359,18 @@ export async function registerServiceSale(
           "birthday_not_allowed",
           422,
           "El descuento de cumpleaños no aplica a esta venta (campaña apagada o servicios no incluidos)."
+        );
+      }
+      // El monto cobrado es la suma de los ítems (catálogo, o lo escrito en un variable u «Otro») menos el % VIGENTE
+      // de la campaña. La misma cuenta que hace Caja; si no coincide (otra llamada a la API, o el % cambió con el
+      // formulario abierto), no se cobra: la comisión saldría de un monto que no es el del descuento.
+      const baseCents = lines.reduce((sum, l) => sum + l.baseCents, 0);
+      const expectedCents = birthdayDiscountedCents(baseCents, campaign.percentage);
+      if (input.amountCents !== expectedCents) {
+        throw new SalonError(
+          "birthday_amount_mismatch",
+          422,
+          `Con el ${campaign.percentage}% de cumpleaños, el monto cobrado debe ser ${centsToInput(expectedCents)} (la suma de los ítems es ${centsToInput(baseCents)}). Vuelve a activar el descuento para recalcularlo.`
         );
       }
     }

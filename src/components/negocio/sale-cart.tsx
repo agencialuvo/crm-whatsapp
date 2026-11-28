@@ -7,6 +7,7 @@ import { clampPercent } from "@/lib/percent";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select";
 import { Field, MoneyInput } from "@/components/negocio/fields";
+import { birthdayDiscountedCents } from "@/lib/loyalty";
 import { parseMoneyToCents } from "@/lib/money";
 import { centsToInput, money, priceLabel } from "@/lib/salon/format";
 import { OTHER_NOTE_MAX, PAYMENT_LABELS, PAYMENT_METHODS, type PaymentMethod } from "@/lib/salon/schemas";
@@ -36,6 +37,11 @@ export function useSaleCart(
     amount: string;
     extra: { value: string; label: string; group: string; priceCents: number; variable?: boolean }[];
   },
+  /**
+   * Descuento de cumpleaños activo (%): el monto cobrado es la suma de los ítems menos ese porcentaje y no se
+   * edita a mano. 0 = sin descuento (el monto sigue a la suma o a lo que se escriba).
+   */
+  discountPct = 0,
 ) {
   const [cart, setCart] = useState<CartLine[]>(() =>
     (seed?.lines ?? []).map((l, i) => ({ key: i, ...l })),
@@ -72,7 +78,19 @@ export function useSaleCart(
       ? (parseMoneyToCents(l.price) ?? 0)
       : (priceOf.get(l.value) ?? 0);
   const total = cart.reduce((a, l) => a + lineCents(l), 0);
-  const shownAmount = amountEdited ? amount : cart.length > 0 ? centsToInput(total) : "";
+  // Con el descuento de cumpleaños la base es SIEMPRE la suma de los ítems (nunca un monto ya rebajado ni uno
+  // escrito a mano): se recalcula sola al agregar, quitar o cambiar el monto de una línea.
+  const discounted = discountPct > 0;
+  const discountedTotal = birthdayDiscountedCents(total, discountPct);
+  const shownAmount = discounted
+    ? cart.length > 0
+      ? centsToInput(discountedTotal)
+      : ""
+    : amountEdited
+      ? amount
+      : cart.length > 0
+        ? centsToInput(total)
+        : "";
 
   const choices: SearchSelectOption[] = [
     ...(options?.services ?? []).map((x) => ({
@@ -101,7 +119,10 @@ export function useSaleCart(
     values,
     total,
     shownAmount,
-    amountEdited,
+    /** Con el descuento de cumpleaños el monto lo fija la suma: no hay edición a mano. */
+    amountEdited: discounted ? false : amountEdited,
+    discountPct,
+    discountedTotal,
     choices,
     lineCents,
     isVariable,
@@ -117,6 +138,7 @@ export function useSaleCart(
       setCart((c) => c.map((x) => (x.key === key ? { ...x, ...change } : x)));
     },
     editAmount(v: string) {
+      if (discounted) return;
       setAmount(v);
       setAmountEdited(true);
     },
@@ -265,9 +287,13 @@ export function SaleAmountField({
       htmlFor={`${idPrefix}-amount`}
       error={error}
       hint={
-        cart.amountEdited
-          ? `Editado a mano; la suma de los ítems es ${money(cart.total, currency)}.`
-          : "Suma de los ítems; puedes ajustarlo si hace falta."
+        cart.discountPct > 0
+          ? cart.cart.length > 0
+            ? `Suma ${money(cart.total, currency)} − ${cart.discountPct}% de cumpleaños = ${money(cart.discountedTotal, currency)}`
+            : `Se aplica el ${cart.discountPct}% de cumpleaños sobre la suma de los ítems.`
+          : cart.amountEdited
+            ? `Editado a mano; la suma de los ítems es ${money(cart.total, currency)}.`
+            : "Suma de los ítems; puedes ajustarlo si hace falta."
       }
     >
       <div className="flex items-start gap-2">
@@ -279,6 +305,7 @@ export function SaleAmountField({
             currency={currency}
             disabled={busy}
             invalid={!!error}
+            readOnly={cart.discountPct > 0}
           />
         </div>
         {cart.amountEdited && (
